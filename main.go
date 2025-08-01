@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"sflowg/sflowg"
@@ -13,8 +13,7 @@ func main() {
 	app, err := sflowg.NewApp("flows")
 
 	if err != nil {
-		fmt.Printf("Error initializing app: %v", err)
-		return
+		log.Fatalf("Error initializing app: %v", err)
 	}
 
 	g := gin.Default()
@@ -30,6 +29,6 @@ func main() {
 	err = g.Run(":8080")
 
 	if err != nil {
-		fmt.Printf("Error running server: %v", err)
+		log.Fatalf("Error running server: %v", err)
 	}
 }

@@ -43,7 +43,7 @@ steps:
         amount: request.body.amount.total
         card_number: request.body.card.number
         card_number_var: properties.cardNumber
-        expiry: request.body.expiryDate
+        expiry: request.body.card.expiry
         cvv: request.body.card.cvv
     retry:
       maxRetries: 3
@@ -78,4 +78,4 @@ return:
   args:
     status: 200
     body:
-      status: assignedStatus
+      status: assignedStatusNew
