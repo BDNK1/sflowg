@@ -1,0 +1,87 @@
+id: test_flow
+
+entrypoint:
+  type: http
+  config:
+    method: post
+    path: /purchase/:id
+    headers:
+      - X-API-Key
+    pathVariables:
+      - id
+    queryParameters:
+      - mode
+    body:
+      type: json
+
+properties:
+  paymentServiceUrl: "http://localhost:8080/pay"
+  amount: 555
+  cardNumber: "1234 5678 1234 5678"
+  expiryDate: "12/22"
+  defaultStatus: "default"
+
+steps:
+  - id: generateTransactionId
+    type: uuidgen.generate
+    args: {}
+
+  - id: start
+    type: assign
+    args:
+      assignedStatus: properties.defaultStatus
+      receivedCard: request.body.card.number
+      transactionId: generateTransactionId.result.uuid
+
+  - id: sendPayment
+    type: http.request
+    condition: request.body.amount.total > 400
+    args:
+      url: properties.paymentServiceUrl
+      method: post
+      headers:
+        X-API-Key: request.headers.X-API-Key
+      queryParameters:
+        mode: request.queryParameters.mode
+      body:
+        var_amount: properties.amount.total
+        amount: request.body.amount.total
+        card_number: request.body.card.number
+        card_number_var: properties.cardNumber
+        expiry: request.body.card.expiry
+        cvv: request.body.card.cvv
+    retry:
+      maxRetries: 3
+      delay: 1000
+      backoff: true
+      condition: sendPayment.result.statusCode != 200
+
+  - id: processPaymentResponse
+    type: switch
+    args:
+      processSuccessfulPayment: request.body.amount.total == 200
+      processFailedPayment: request.body.amount.total == 400
+      processDefaultPayment: true == true
+
+  - id: processSuccessfulPayment
+    type: assign
+    args:
+      assignedStatusNew: '"success"'
+
+  - id: processFailedPayment
+    type: assign
+    args:
+      assignedStatusNew: '"failed"'
+
+  - id: processDefaultPayment
+    type: assign
+    args:
+      assignedStatusNew: '"default"'
+
+return:
+  type: http.response
+  args:
+    status: 200
+    body:
+      status: assignedStatusNew
+      transactionId: transactionId

@@ -1,0 +1,6 @@
+name: test-flow-app
+version: "1.0.0"
+
+plugins:
+  - source: http
+  - source: ./plugins/uuidgen
