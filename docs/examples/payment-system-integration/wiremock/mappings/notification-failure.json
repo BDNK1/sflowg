@@ -1,0 +1,26 @@
+{
+  "name": "Notification Service - Email Failed (for retry testing)",
+  "scenarioName": "notification-retry",
+  "requiredScenarioState": "Started",
+  "newScenarioState": "First-Retry",
+  "request": {
+    "method": "POST",
+    "urlPath": "/notify",
+    "headers": {
+      "X-Test-Scenario": {
+        "equalTo": "notification-failure"
+      }
+    }
+  },
+  "response": {
+    "status": 503,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "success": false,
+      "error": "Service temporarily unavailable",
+      "retry_after": 2
+    }
+  }
+}

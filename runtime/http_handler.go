@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func NewHttpHandler(flow *Flow, container *Container, executor *Executor, g *gin.Engine) {
+func NewHttpHandler(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, g *gin.Engine) {
 	config := flow.Entrypoint.Config
 	method := strings.ToLower(config["method"].(string))
 	path := config["path"].(string)
@@ -19,17 +19,17 @@ func NewHttpHandler(flow *Flow, container *Container, executor *Executor, g *gin
 
 	switch method {
 	case "get":
-		g.GET(path, handleRequest(flow, container, executor, false))
+		g.GET(path, handleRequest(flow, container, executor, globalProperties, false))
 	case "post":
-		g.POST(path, handleRequest(flow, container, executor, true))
+		g.POST(path, handleRequest(flow, container, executor, globalProperties, true))
 	default:
 		fmt.Printf("Method %s is not supported", method)
 	}
 }
 
-func handleRequest(flow *Flow, container *Container, executor *Executor, withBody bool) gin.HandlerFunc {
+func handleRequest(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, withBody bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		e := NewExecution(flow, container)
+		e := NewExecution(flow, container, globalProperties)
 
 		extractRequestData(c, flow, &e, withBody)
 
@@ -148,7 +148,16 @@ func toResponse(c *gin.Context, e *Execution) {
 			}
 		case "body":
 			// Handle response body
-			if bodyArgs, ok := valueExpr.(map[string]any); ok {
+			if bodyExpr, ok := valueExpr.(string); ok {
+				// Body is a string expression - evaluate it
+				if value, err := Eval(bodyExpr, e.Values); err == nil {
+					// The evaluated value should be a map
+					if bodyMap, ok := value.(map[string]any); ok {
+						response = bodyMap
+					}
+				}
+			} else if bodyArgs, ok := valueExpr.(map[string]any); ok {
+				// Body is a map - evaluate each field
 				for bodyKey, bodyValueExpr := range bodyArgs {
 					if expr, ok := bodyValueExpr.(string); ok {
 						if value, err := Eval(expr, e.Values); err == nil {

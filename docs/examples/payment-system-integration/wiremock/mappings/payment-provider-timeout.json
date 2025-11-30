@@ -1,0 +1,26 @@
+{
+  "name": "Payment Provider - Timeout (for retry testing)",
+  "priority": 2,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/charges",
+    "headers": {
+      "X-Test-Scenario": {
+        "equalTo": "timeout"
+      }
+    }
+  },
+  "response": {
+    "status": 504,
+    "fixedDelayMilliseconds": 5000,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "error": {
+        "type": "gateway_timeout",
+        "message": "Request timed out"
+      }
+    }
+  }
+}

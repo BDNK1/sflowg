@@ -2,14 +2,18 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // Interface type constants for plugin capabilities
 const (
-	InterfaceLifecycle = "Lifecycle"
+	InterfaceInitializer = "Initializer"
+	InterfaceShutdowner  = "Shutdowner"
 )
 
 type Container struct {
@@ -83,18 +87,21 @@ func (c *Container) RegisterPlugin(pluginName string, plugin any) error {
 
 // detectPluginInterfaces detects which interfaces a plugin implements and registers them
 func (c *Container) detectPluginInterfaces(plugin any) {
-	// Check Lifecycle interface
-	if _, ok := plugin.(Lifecycle); ok {
-		c.pluginsByInterface[InterfaceLifecycle] = append(
-			c.pluginsByInterface[InterfaceLifecycle],
+	// Check Initializer interface (plugin.Initializer is a type alias to runtime.Initializer)
+	if _, ok := plugin.(Initializer); ok {
+		c.pluginsByInterface[InterfaceInitializer] = append(
+			c.pluginsByInterface[InterfaceInitializer],
 			plugin,
 		)
 	}
 
-	// Future: Add more interface checks here
-	// if _, ok := plugin.(HealthChecker); ok {
-	//     c.pluginsByInterface[InterfaceHealthChecker] = append(...)
-	// }
+	// Check Shutdowner interface (plugin.Shutdowner is a type alias to runtime.Shutdowner)
+	if _, ok := plugin.(Shutdowner); ok {
+		c.pluginsByInterface[InterfaceShutdowner] = append(
+			c.pluginsByInterface[InterfaceShutdowner],
+			plugin,
+		)
+	}
 }
 
 // GetPlugin returns a plugin instance by name (for Phase 1 manual lookup)
@@ -102,15 +109,23 @@ func (c *Container) GetPlugin(name string) any {
 	return c.plugins[name]
 }
 
-// Initialize calls Initialize on all plugins implementing Lifecycle interface
+// Initialize calls Initialize on all plugins implementing Initializer interface
 // For Phase 1 MVP: Uses fail-fast approach (panics on any error)
 func (c *Container) Initialize(ctx context.Context) error {
-	// Get lifecycle plugins from registry (interface check already done during registration)
-	lifecyclePlugins := c.pluginsByInterface[InterfaceLifecycle]
+	// Get initializer plugins from registry (interface check already done during registration)
+	initializerPlugins := c.pluginsByInterface[InterfaceInitializer]
 
-	for i, plugin := range lifecyclePlugins {
-		lifecycle := plugin.(Lifecycle)
-		if err := lifecycle.Initialize(ctx); err != nil {
+	// Create an execution context for initialization
+	// This allows plugins to access the container and shared values during init
+	exec := &Execution{
+		ID:        "init-" + uuid.New().String(),
+		Values:    make(map[string]any),
+		Container: c,
+	}
+
+	for i, p := range initializerPlugins {
+		initializer := p.(Initializer)
+		if err := initializer.Initialize(exec); err != nil {
 			// Phase 1: Fail-fast with panic
 			panic(fmt.Sprintf("plugin #%d initialization failed: %v", i, err))
 		}
@@ -118,17 +133,25 @@ func (c *Container) Initialize(ctx context.Context) error {
 	return nil
 }
 
-// Shutdown calls Shutdown on all plugins implementing Lifecycle interface
-// Plugins are shut down in reverse order of initialization
+// Shutdown calls Shutdown on all plugins implementing Shutdowner interface
+// Plugins are shut down in reverse order of registration
 func (c *Container) Shutdown(ctx context.Context) error {
-	// Get lifecycle plugins from registry
-	lifecyclePlugins := c.pluginsByInterface[InterfaceLifecycle]
+	// Get shutdowner plugins from registry
+	shutdownerPlugins := c.pluginsByInterface[InterfaceShutdowner]
+
+	// Create an execution context for shutdown
+	// This allows plugins to access the container and shared values during shutdown
+	exec := &Execution{
+		ID:        "shutdown-" + uuid.New().String(),
+		Values:    make(map[string]any),
+		Container: c,
+	}
 
 	// Shutdown in reverse order
 	var errors []error
-	for i := len(lifecyclePlugins) - 1; i >= 0; i-- {
-		lifecycle := lifecyclePlugins[i].(Lifecycle)
-		if err := lifecycle.Shutdown(ctx); err != nil {
+	for i := len(shutdownerPlugins) - 1; i >= 0; i-- {
+		shutdowner := shutdownerPlugins[i].(Shutdowner)
+		if err := shutdowner.Shutdown(exec); err != nil {
 			errors = append(errors, fmt.Errorf("plugin #%d shutdown failed: %w", i, err))
 		}
 	}
@@ -142,42 +165,66 @@ func (c *Container) Shutdown(ctx context.Context) error {
 }
 
 // isValidTaskSignature checks if method has valid task signature
-// Valid: func(exec *Execution, args map[string]any) (map[string]any, error)
+// Valid signatures:
+//   - Map-based: func(exec *Execution, args map[string]any) (map[string]any, error)
+//   - Typed: func(exec *Execution, input TInput) (TOutput, error) where T are structs
 func isValidTaskSignature(methodType reflect.Type) bool {
-	// Must have 3 inputs: receiver, *Execution, map[string]any
+	// Must have 3 inputs: receiver, *Execution, input
 	if methodType.NumIn() != 3 {
 		return false
 	}
 
-	// Must have 2 outputs: map[string]any, error
+	// Must have 2 outputs: output, error
 	if methodType.NumOut() != 2 {
 		return false
 	}
 
-	// Check input types
+	// Check first param is *Execution
 	executionPtrType := reflect.TypeOf((*Execution)(nil))
-	mapType := reflect.TypeOf(map[string]any(nil))
-
 	if methodType.In(1) != executionPtrType {
 		return false
 	}
 
-	if methodType.In(2) != mapType {
+	// Check second param is EITHER map[string]any OR struct
+	inputType := methodType.In(2)
+	if !isMapOrStruct(inputType) {
 		return false
 	}
 
-	// Check output types
+	// Check first return is EITHER map[string]any OR struct
+	outputType := methodType.Out(0)
+	if !isMapOrStruct(outputType) {
+		return false
+	}
+
+	// Check second return is error
 	errorType := reflect.TypeOf((*error)(nil)).Elem()
-
-	if methodType.Out(0) != mapType {
-		return false
-	}
-
 	if methodType.Out(1) != errorType {
 		return false
 	}
 
 	return true
+}
+
+// isMapOrStruct checks if type is either map[string]any or a struct
+func isMapOrStruct(t reflect.Type) bool {
+	// Check if map[string]any
+	if t.Kind() == reflect.Map {
+		mapType := reflect.TypeOf(map[string]any(nil))
+		return t == mapType
+	}
+
+	// Check if struct
+	return t.Kind() == reflect.Struct
+}
+
+// isTypedSignature checks if method uses typed (struct) signature
+func isTypedSignature(methodType reflect.Type) bool {
+	inputType := methodType.In(2)
+	outputType := methodType.Out(0)
+
+	// Consider it typed if either input or output is a struct
+	return inputType.Kind() == reflect.Struct || outputType.Kind() == reflect.Struct
 }
 
 // toLowerFirst converts first character of string to lowercase
@@ -189,7 +236,19 @@ func toLowerFirst(s string) string {
 }
 
 // createTaskExecutor creates a Task wrapper for a plugin method
+// It automatically detects if the method uses typed or map-based signature
 func createTaskExecutor(pluginValue reflect.Value, method reflect.Method) Task {
+	// Check if method uses typed signature
+	if isTypedSignature(method.Type) {
+		return &typedTaskWrapper{
+			plugin:     pluginValue,
+			method:     method,
+			inputType:  method.Type.In(2),
+			outputType: method.Type.Out(0),
+		}
+	}
+
+	// Otherwise use map-based wrapper
 	return &pluginTaskWrapper{
 		plugin: pluginValue,
 		method: method,
@@ -218,5 +277,84 @@ func (w *pluginTaskWrapper) Execute(exec *Execution, args map[string]any) (map[s
 		err = results[1].Interface().(error)
 	}
 
+	// Handle TaskError - extract metadata and merge into result
+	if err != nil {
+		var taskErr *TaskError
+		if errors.As(err, &taskErr) {
+			// Merge metadata into result map (prefixed with __meta_ to avoid conflicts)
+			if resultMap == nil {
+				resultMap = make(map[string]any)
+			}
+			for k, v := range taskErr.Metadata {
+				resultMap["__meta_"+k] = v
+			}
+			// Return the underlying error
+			return resultMap, taskErr.Err
+		}
+		// Not a TaskError, return as-is
+		return resultMap, err
+	}
+
 	return resultMap, err
+}
+
+// typedTaskWrapper wraps a typed plugin method and handles conversion
+type typedTaskWrapper struct {
+	plugin     reflect.Value
+	method     reflect.Method
+	inputType  reflect.Type
+	outputType reflect.Type
+}
+
+func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[string]any, error) {
+	// Step 1: Convert map → struct
+	inputPtr := reflect.New(w.inputType)
+	if err := mapToStruct(args, inputPtr.Interface()); err != nil {
+		return nil, fmt.Errorf("invalid input for task %s: %w", w.method.Name, err)
+	}
+
+	// Step 2: Validate input struct using existing validation framework
+	if err := validateConfig(inputPtr.Interface()); err != nil {
+		return nil, fmt.Errorf("validation failed for task %s: %w", w.method.Name, err)
+	}
+
+	// Step 3: Call typed method via reflection
+	results := w.method.Func.Call([]reflect.Value{
+		w.plugin,
+		reflect.ValueOf(exec),
+		inputPtr.Elem(), // Dereference pointer to pass struct value
+	})
+
+	// Step 4: Extract output and error from method call
+	output := results[0].Interface()
+	var taskErr error
+	if !results[1].IsNil() {
+		taskErr = results[1].Interface().(error)
+	}
+
+	// Step 5: Convert struct → map
+	resultMap, convertErr := structToMap(output)
+	if convertErr != nil {
+		return nil, fmt.Errorf("failed to convert output for task %s: %w", w.method.Name, convertErr)
+	}
+
+	// Step 6: Handle TaskError - extract metadata and merge into result
+	if taskErr != nil {
+		var te *TaskError
+		if errors.As(taskErr, &te) {
+			// Merge metadata into result map (prefixed with __meta_ to avoid conflicts)
+			if resultMap == nil {
+				resultMap = make(map[string]any)
+			}
+			for k, v := range te.Metadata {
+				resultMap["__meta_"+k] = v
+			}
+			// Return the underlying error
+			return resultMap, te.Err
+		}
+		// Not a TaskError, return as-is
+		return nil, taskErr
+	}
+
+	return resultMap, nil
 }

@@ -23,11 +23,22 @@ type GoModGenerator struct {
 
 // PluginInfo contains information about a plugin for go.mod generation
 type PluginInfo struct {
-	Name       string
-	ModulePath string
-	Version    string
-	Type       config.PluginType
-	LocalPath  string // For local modules, path to module directory
+	Name         string
+	ModulePath   string
+	Version      string
+	Type         config.PluginType
+	LocalPath    string             // For local modules, path to module directory
+	TypeName     string             // Plugin struct type name (e.g., "HTTPPlugin")
+	PackageName  string             // Package name (e.g., "http")
+	Dependencies []PluginDependency // Dependencies to inject
+	HasConfig    bool               // Whether plugin has a config field
+	ConfigGen    *ConfigGenData     // Config generation data (env vars, literals)
+}
+
+// PluginDependency represents a dependency to be injected into a plugin
+type PluginDependency struct {
+	FieldName  string // Struct field name (e.g., "http", "redis")
+	PluginName string // Plugin instance name to inject (e.g., "http", "redis_cache")
 }
 
 // NewGoModGenerator creates a new go.mod generator

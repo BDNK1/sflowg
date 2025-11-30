@@ -1,0 +1,27 @@
+{
+  "name": "Payment Provider - Insufficient Funds",
+  "priority": 2,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/charges",
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.amount[?(@ > 10000)]"
+      }
+    ]
+  },
+  "response": {
+    "status": 402,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "error": {
+        "type": "card_error",
+        "code": "insufficient_funds",
+        "message": "Your card has insufficient funds",
+        "decline_code": "insufficient_funds"
+      }
+    }
+  }
+}

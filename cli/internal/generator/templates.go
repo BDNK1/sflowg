@@ -9,13 +9,9 @@ import (
 {{- end}}
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 
-	"github.com/gin-gonic/gin"
 	"{{.RuntimeModulePath}}"
 {{- range .Plugins}}
 {{- if eq .Type 3}}
@@ -35,6 +31,7 @@ var flowsFS embed.FS
 func main() {
 	// Parse command-line flags
 	flowsPath := flag.String("flows", "", "Path to flows directory (default: auto-detect)")
+	port := flag.String("port", "{{.Port}}", "Server port")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -42,82 +39,159 @@ func main() {
 	// Create container
 	container := runtime.NewContainer()
 
-	// Register plugins
-{{- range .Plugins}}
-{{- if eq .Type 3}}
-	if err := container.RegisterPlugin("{{.Name}}", vendored.New{{capitalize .Name}}Plugin()); err != nil {
-		panic(fmt.Sprintf("Failed to register plugin '{{.Name}}': %v", err))
+	// Initialize plugins in dependency order (dependencies first)
+	// Phase 2.2: Automatic dependency injection via struct fields
+	// Phase 2.3: Configuration system with env vars and validation
+{{- range $plugin := .Plugins}}
+
+	// ===== {{$plugin.Name}} Plugin =====
+{{- if $plugin.HasConfig}}
+	// Initialize config (defaults → env vars → literals → validation)
+{{- if eq $plugin.Type 3}}
+	{{$plugin.Name}}Config := vendored.Config{}
+{{- else}}
+	{{$plugin.Name}}Config := {{$plugin.Name}}plugin.Config{}
+{{- end}}
+	{{$plugin.Name}}RawValues := make(map[string]any)
+{{- if $plugin.ConfigGen}}
+{{- if $plugin.ConfigGen.EnvVars}}
+
+	// Environment variable overrides
+{{- range $plugin.ConfigGen.EnvVars}}
+	if val := os.Getenv("{{.EnvVar}}"); val != "" {
+		{{$plugin.Name}}RawValues["{{.YAMLField}}"] = val
+{{- if .Required}}
+	} else {
+		panic("Required environment variable {{.EnvVar}} not set")
+{{- end}}
+	}
+{{- end}}
+{{- end}}
+
+{{- if $plugin.ConfigGen.Literals}}
+	// Literal values from flow-config.yaml
+{{- range $plugin.ConfigGen.Literals}}
+	{{$plugin.Name}}RawValues["{{.YAMLField}}"] = {{.Value}}
+{{- end}}
+{{- end}}
+{{- end}}
+
+	// Apply defaults, merge values, and validate
+	if err := runtime.InitializeConfig(&{{$plugin.Name}}Config, {{$plugin.Name}}RawValues); err != nil {
+		panic(fmt.Sprintf("Failed to initialize {{$plugin.Name}} config: %v", err))
+	}
+{{- end}}
+
+	// Create plugin instance
+{{- if eq $plugin.Type 3}}
+	{{$plugin.Name}}Plugin := &vendored.{{$plugin.TypeName}}{
+{{- if $plugin.HasConfig}}
+		Config: {{$plugin.Name}}Config,
+{{- end}}
+{{- range $plugin.Dependencies}}
+		{{.FieldName}}: {{.PluginName}}Plugin,
+{{- end}}
 	}
 {{- else}}
-	if err := container.RegisterPlugin("{{.Name}}", {{.Name}}plugin.New{{capitalize .Name}}Plugin()); err != nil {
-		panic(fmt.Sprintf("Failed to register plugin '{{.Name}}': %v", err))
+	{{$plugin.Name}}Plugin := &{{$plugin.Name}}plugin.{{$plugin.TypeName}}{
+{{- if $plugin.HasConfig}}
+		Config: {{$plugin.Name}}Config,
+{{- end}}
+{{- range $plugin.Dependencies}}
+		{{.FieldName}}: {{.PluginName}}Plugin,
+{{- end}}
 	}
 {{- end}}
+
+	// Register plugin
+	if err := container.RegisterPlugin("{{$plugin.Name}}", {{$plugin.Name}}Plugin); err != nil {
+		panic(fmt.Sprintf("Failed to register plugin '{{$plugin.Name}}': %v", err))
+	}
 {{- end}}
 
-	// Initialize plugins
-	if err := container.Initialize(ctx); err != nil {
-		panic(fmt.Sprintf("Failed to initialize container: %v", err))
-	}
-
-	// Setup graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		fmt.Println("\nShutting down gracefully...")
-		if err := container.Shutdown(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "Shutdown error: %v\n", err)
-		}
-		os.Exit(0)
-	}()
-
-	// Load flows
-	var app *runtime.App
-	var err error
-
+	// Determine flows directory
 {{- if .EmbedFlows}}
-	// Embedded mode: always use embedded filesystem
-	app, err = runtime.NewAppFromFS(flowsFS, "flows")
+	// Embedded mode: extract to temp directory
+	flowsDir, err := extractEmbeddedFlows(flowsFS, "flows")
 	if err != nil {
-		panic(fmt.Sprintf("Failed to load embedded flows: %v", err))
+		panic(fmt.Sprintf("Failed to extract embedded flows: %v", err))
 	}
+	defer os.RemoveAll(flowsDir) // Cleanup temp directory on exit
 {{- else}}
-	// Runtime mode: detect flows location
-	detectedPath, detectErr := findFlowsPath(*flowsPath)
-	if detectErr != nil {
-		panic(fmt.Sprintf("Failed to locate flows directory: %v\nUse --flows flag to specify location explicitly", detectErr))
-	}
-
-	app, err = runtime.NewApp(detectedPath)
+	// Runtime mode: detect flows location at startup
+	flowsDir, err := findFlowsPath(*flowsPath)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to load flows from %q: %v", detectedPath, err))
+		panic(fmt.Sprintf("Failed to locate flows directory: %v\nUse --flows flag to specify location explicitly", err))
 	}
 {{- end}}
 
-	// Use our configured container
-	app.Container = container
+	// Create app and start server (runtime handles everything)
+	// Runtime will: Initialize plugins → LoadFlows → Setup Gin → Handle signals → Graceful shutdown
+	app := runtime.NewApp(container)
 
-	// Create HTTP server and register flow handlers
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	g := gin.Default()
-	executor := runtime.NewExecutor(logger)
-
-	for _, flow := range app.Flows {
-		if flow.Entrypoint.Type == "http" {
-			flowCopy := flow
-			runtime.NewHttpHandler(&flowCopy, container, executor, g)
-		}
+{{- if .GlobalProperties}}
+	// Set global properties from flow-config.yaml
+	globalProperties := map[string]any{
+{{- range $key, $value := .GlobalProperties}}
+		"{{$key}}": {{printf "%#v" $value}},
+{{- end}}
 	}
+	app.SetGlobalProperties(globalProperties)
+{{- end}}
 
-	// Start HTTP server
-	fmt.Println("Starting server on :{{.Port}}")
-	if err := g.Run(":{{.Port}}"); err != nil {
-		panic(fmt.Sprintf("Failed to start server: %v", err))
+	if err := app.Start(ctx, ":"+*port, flowsDir); err != nil {
+		panic(fmt.Sprintf("Server error: %v", err))
 	}
 }
 
-{{- if not .EmbedFlows}}
+{{- if .EmbedFlows}}
+
+// extractEmbeddedFlows extracts embedded flows to a temporary directory
+func extractEmbeddedFlows(fsys embed.FS, dir string) (string, error) {
+	// Create temp directory
+	tempDir, err := os.MkdirTemp("", "sflowg-flows-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %w", err)
+	}
+
+	// Read embedded directory
+	entries, err := fsys.ReadDir(dir)
+	if err != nil {
+		os.RemoveAll(tempDir)
+		return "", fmt.Errorf("failed to read embedded directory: %w", err)
+	}
+
+	// Extract each .yaml file
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		// Check if it's a YAML file
+		matched, err := filepath.Match("*.yaml", entry.Name())
+		if err != nil || !matched {
+			continue
+		}
+
+		// Read embedded file
+		embeddedPath := filepath.Join(dir, entry.Name())
+		data, err := fsys.ReadFile(embeddedPath)
+		if err != nil {
+			os.RemoveAll(tempDir)
+			return "", fmt.Errorf("failed to read embedded file %s: %w", embeddedPath, err)
+		}
+
+		// Write to temp directory
+		tempFilePath := filepath.Join(tempDir, entry.Name())
+		if err := os.WriteFile(tempFilePath, data, 0644); err != nil {
+			os.RemoveAll(tempDir)
+			return "", fmt.Errorf("failed to write file %s: %w", tempFilePath, err)
+		}
+	}
+
+	return tempDir, nil
+}
+{{- else}}
 
 // findFlowsPath locates the flows directory using smart detection
 func findFlowsPath(flagPath string) (string, error) {

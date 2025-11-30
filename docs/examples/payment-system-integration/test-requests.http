@@ -1,0 +1,491 @@
+### Payment System Integration - Test Requests
+### Comprehensive test scenarios for the simplified purchase flow
+### Use with REST Client extension in VS Code or similar HTTP client
+
+### Variables
+@baseUrl = http://localhost:8080
+@orderId = ORD-12345
+@customerId = CUST-67890
+@requestId = REQ-{{$timestamp}}
+
+# ========================================
+# Test 1: Successful Purchase (Standard Flow)
+# Tests: Full flow with all validations, calculations, and notifications
+# Expected: 200 OK, payment successful with standard shipping and tax
+# ========================================
+POST {{baseUrl}}/api/purchase/{{orderId}}?currency=USD&notify=true
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: {{requestId}}
+X-Customer-ID: {{customerId}}
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Premium Widget",
+    "price": 49.99,
+    "quantity": 3
+  },
+  "customer": {
+    "name": "John Doe",
+    "email": "john.doe@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "4532 1488 0343 6467",
+      "expiry": "12/25",
+      "cvv": "123"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 2: Free Shipping Order
+# Tests: Shipping threshold calculation (>= $100.00 = free shipping)
+# Expected: 200 OK, $0.00 shipping cost, includes 15% tax
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-SHIPPING-001?currency=EUR&notify=false
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-FREE-SHIP-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Standard Product",
+    "price": 25.00,
+    "quantity": 5
+  },
+  "customer": {
+    "name": "Bob Smith",
+    "email": "bob.smith@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "3782 822463 10005",
+      "expiry": "03/27",
+      "cvv": "1234"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 3: Large Order Amount
+# Tests: High amount validation, all calculations at scale
+# Expected: 200 OK, correct subtotal + shipping + tax calculation
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-LARGE-001?currency=USD&notify=true
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-PREMIUM-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Enterprise Package",
+    "price": 499.99,
+    "quantity": 1
+  },
+  "customer": {
+    "name": "Alice Johnson",
+    "email": "alice@enterprise.com"
+  },
+  "payment": {
+    "card": {
+      "number": "5500 0000 0000 0004",
+      "expiry": "06/26",
+      "cvv": "456"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 4: Invalid Card Number (Luhn Check Fails)
+# Tests: Card validation plugin, Luhn algorithm verification
+# Expected: 400 Bad Request, status: "card_invalid"
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-INVALID-CARD-001?currency=USD&notify=false
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-INVALID-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Test Product",
+    "price": 29.99,
+    "quantity": 2
+  },
+  "customer": {
+    "name": "Charlie Brown",
+    "email": "charlie@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "1234 5678 9012 3456",
+      "expiry": "12/25",
+      "cvv": "789"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 5: Expired Card
+# Tests: Expiry date validation in payment plugin
+# Expected: 400 Bad Request, status: "card_invalid"
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-EXPIRED-CARD-001?currency=USD&notify=false
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-EXPIRED-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Test Product",
+    "price": 19.99,
+    "quantity": 1
+  },
+  "customer": {
+    "name": "Diana Prince",
+    "email": "diana@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "4532 1488 0343 6467",
+      "expiry": "01/20",
+      "cvv": "123"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 6: Order Amount Too Low
+# Tests: Switch step routing, minimum amount validation ($5.00)
+# Expected: 400 Bad Request, message: "Order amount below minimum"
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-TOO-LOW-001?currency=USD&notify=false
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-LOW-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Cheap Item",
+    "price": 1.00,
+    "quantity": 1
+  },
+  "customer": {
+    "name": "Eve Anderson",
+    "email": "eve@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "4532 1488 0343 6467",
+      "expiry": "12/25",
+      "cvv": "123"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 7: Order Amount Too High
+# Tests: Switch step routing, maximum amount validation ($10,000.00)
+# Expected: 400 Bad Request, message: "Order amount exceeds maximum"
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-TOO-HIGH-001?currency=USD&notify=false
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-HIGH-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Expensive Item",
+    "price": 50000.00,
+    "quantity": 1
+  },
+  "customer": {
+    "name": "Frank Castle",
+    "email": "frank@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "4532 1488 0343 6467",
+      "expiry": "12/25",
+      "cvv": "123"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 8: Multiple Quantity with Tax
+# Tests: Arithmetic expressions, quantity multiplication, tax calculation (15%)
+# Expected: 200 OK, correct subtotal ($155.00), tax ($23.25), total
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-MULTI-QTY-001?currency=GBP&notify=true
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-MULTI-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Bulk Item",
+    "price": 15.50,
+    "quantity": 10
+  },
+  "customer": {
+    "name": "Grace Hopper",
+    "email": "grace@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "5500 0000 0000 0004",
+      "expiry": "09/26",
+      "cvv": "321"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 9: No Notification (Query Param Test)
+# Tests: Query parameter handling, conditional notification step
+# Expected: 200 OK, metadata.notificationSent: false
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-NO-NOTIFY-001?currency=USD
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-NO-NOTIFY-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Silent Order",
+    "price": 75.00,
+    "quantity": 1
+  },
+  "customer": {
+    "name": "Henry Ford",
+    "email": "henry@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "4532 1488 0343 6467",
+      "expiry": "12/25",
+      "cvv": "123"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 10: Explicit Notification Request
+# Tests: Query parameter true value, notification on success
+# Expected: 200 OK, metadata.notificationSent: true
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-NOTIFY-001?currency=USD&notify=true
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-NOTIFY-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Notification Test",
+    "price": 89.99,
+    "quantity": 2
+  },
+  "customer": {
+    "name": "Irene Adler",
+    "email": "irene@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "3782 822463 10005",
+      "expiry": "08/27",
+      "cvv": "9876"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 11: Card Type Detection - Visa
+# Tests: Payment plugin card type identification
+# Expected: 200 OK, payment.cardType: "visa"
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-VISA-001?currency=USD&notify=false
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-VISA-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Test Product",
+    "price": 50.00,
+    "quantity": 1
+  },
+  "customer": {
+    "name": "Visa Customer",
+    "email": "visa@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "4532 1488 0343 6467",
+      "expiry": "12/25",
+      "cvv": "123"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 12: Card Type Detection - MasterCard
+# Tests: Payment plugin card type identification
+# Expected: 200 OK, payment.cardType: "mastercard"
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-MC-001?currency=USD&notify=false
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-MC-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Test Product",
+    "price": 50.00,
+    "quantity": 1
+  },
+  "customer": {
+    "name": "MasterCard Customer",
+    "email": "mc@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "5500 0000 0000 0004",
+      "expiry": "06/26",
+      "cvv": "456"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 13: Card Type Detection - American Express
+# Tests: Payment plugin card type identification, 4-digit CVV
+# Expected: 200 OK, payment.cardType: "amex"
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-AMEX-001?currency=USD&notify=false
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-AMEX-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Test Product",
+    "price": 50.00,
+    "quantity": 1
+  },
+  "customer": {
+    "name": "Amex Customer",
+    "email": "amex@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "3782 822463 10005",
+      "expiry": "03/27",
+      "cvv": "1234"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 14: Ternary Expression Testing
+# Tests: Complex ternary in calculateTotals step
+# Expected: 200 OK, correct shipping based on threshold
+# Subtotal: $95.00 (< $100.00) → Standard shipping: $9.99
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-TERNARY-001?currency=USD&notify=false
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-TERNARY-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Almost Free Shipping",
+    "price": 95.00,
+    "quantity": 1
+  },
+  "customer": {
+    "name": "Test Customer",
+    "email": "test@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "4532 1488 0343 6467",
+      "expiry": "12/25",
+      "cvv": "123"
+    }
+  }
+}
+
+###
+
+# ========================================
+# Test 15: Retry Logic Test
+# Tests: HTTP plugin retry with backoff, payment plugin retry
+# Note: Requires WireMock configured to return 500 on first attempt
+# Expected: 200 OK after retries succeed
+# ========================================
+POST {{baseUrl}}/api/purchase/ORD-RETRY-001?currency=USD&notify=false
+Authorization: Bearer sk_test_token_12345
+X-Request-ID: REQ-{{$timestamp}}
+X-Customer-ID: CUST-RETRY-001
+Content-Type: application/json
+
+{
+  "item": {
+    "name": "Retry Test Product",
+    "price": 100.00,
+    "quantity": 1
+  },
+  "customer": {
+    "name": "Retry Customer",
+    "email": "retry@example.com"
+  },
+  "payment": {
+    "card": {
+      "number": "4532 1488 0343 6467",
+      "expiry": "12/25",
+      "cvv": "123"
+    }
+  }
+}
+
+###

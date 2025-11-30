@@ -1,0 +1,28 @@
+{
+  "name": "Payment Provider - Rate Limited (for retry testing)",
+  "scenarioName": "rate-limit-retry",
+  "requiredScenarioState": "Started",
+  "newScenarioState": "First-Retry",
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/charges",
+    "headers": {
+      "X-Test-Scenario": {
+        "equalTo": "rate-limit"
+      }
+    }
+  },
+  "response": {
+    "status": 429,
+    "headers": {
+      "Content-Type": "application/json",
+      "Retry-After": "1"
+    },
+    "jsonBody": {
+      "error": {
+        "type": "rate_limit_error",
+        "message": "Too many requests. Please try again later."
+      }
+    }
+  }
+}

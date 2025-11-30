@@ -11,9 +11,16 @@ import (
 
 // FlowConfig represents the flow-config.yaml structure
 type FlowConfig struct {
-	Name    string         `yaml:"name"`    // Optional: defaults to directory name
-	Version string         `yaml:"version"` // Optional: defaults to "latest"
-	Plugins []PluginConfig `yaml:"plugins"`
+	Name       string                 `yaml:"name"`       // Optional: defaults to directory name
+	Version    string                 `yaml:"version"`    // Optional: defaults to "latest"
+	Runtime    RuntimeConfig          `yaml:"runtime"`    // Optional: runtime configuration
+	Properties map[string]interface{} `yaml:"properties"` // Optional: global properties for all flows
+	Plugins    []PluginConfig         `yaml:"plugins"`
+}
+
+// RuntimeConfig represents runtime configuration
+type RuntimeConfig struct {
+	Port string `yaml:"port"` // Optional: HTTP server port, defaults to "8080"
 }
 
 // PluginConfig represents a single plugin configuration
@@ -103,6 +110,11 @@ func (c *FlowConfig) ApplyDefaults(projectDir string) {
 	// Default version
 	if c.Version == "" {
 		c.Version = "latest"
+	}
+
+	// Default runtime configuration
+	if c.Runtime.Port == "" {
+		c.Runtime.Port = "8080"
 	}
 
 	// Apply defaults to each plugin

@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/sflowg/sflowg/cli/internal/analyzer"
 	"github.com/sflowg/sflowg/cli/internal/builder"
 	"github.com/sflowg/sflowg/cli/internal/config"
-	"github.com/sflowg/sflowg/cli/internal/constants"
 	"github.com/sflowg/sflowg/cli/internal/detector"
 	"github.com/sflowg/sflowg/cli/internal/generator"
 	"github.com/sflowg/sflowg/cli/internal/workspace"
@@ -15,10 +15,9 @@ import (
 )
 
 var (
-	runtimePath string
-	pluginsPath string
-	port        string
-	embedFlows  bool
+	runtimePath     string
+	corePluginsPath string
+	embedFlows      bool
 )
 
 var buildCmd = &cobra.Command{
@@ -30,7 +29,7 @@ a single executable binary with all dependencies compiled in.
 Example:
   sflowg build .
   sflowg build ./my-project
-  sflowg build . --runtime-path ../runtime --plugins-path ../plugins
+  sflowg build . --runtime-path ../runtime --core-plugins-path ../plugins
 `,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runBuild,
@@ -38,8 +37,7 @@ Example:
 
 func init() {
 	buildCmd.Flags().StringVar(&runtimePath, "runtime-path", "", "Path to local runtime module (for development)")
-	buildCmd.Flags().StringVar(&pluginsPath, "plugins-path", "", "Path to local plugins directory (for development)")
-	buildCmd.Flags().StringVar(&port, "port", constants.DefaultPort, "HTTP server port for the generated application")
+	buildCmd.Flags().StringVar(&corePluginsPath, "core-plugins-path", "", "Path to local core plugins directory (for development)")
 	buildCmd.Flags().BoolVar(&embedFlows, "embed-flows", false, "Embed flow files into the binary (production mode)")
 }
 
@@ -61,19 +59,19 @@ func validateRuntimePath(runtimePath string) error {
 	return nil
 }
 
-// validatePluginsPath ensures the plugins path exists and is accessible
+// validateCorePluginsPath ensures the core plugins path exists and is accessible
 // Just a helpful UX check - doesn't enforce structure
-func validatePluginsPath(pluginsPath string) error {
-	info, err := os.Stat(pluginsPath)
+func validateCorePluginsPath(corePluginsPath string) error {
+	info, err := os.Stat(corePluginsPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("directory does not exist: %s", pluginsPath)
+			return fmt.Errorf("directory does not exist: %s", corePluginsPath)
 		}
 		return fmt.Errorf("cannot access directory: %w", err)
 	}
 
 	if !info.IsDir() {
-		return fmt.Errorf("path is not a directory: %s", pluginsPath)
+		return fmt.Errorf("path is not a directory: %s", corePluginsPath)
 	}
 
 	return nil
@@ -170,17 +168,95 @@ func runBuild(_ *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 
-	// 4. Copy flows to workspace (only if embedding)
+	// 4. Analyze plugin packages to extract metadata (config, dependencies, tasks)
+	fmt.Println("\nAnalyzing plugin packages...")
+
+	type analyzedPlugin struct {
+		detectedPlugin
+		Metadata  *analyzer.PluginMetadata
+		ConfigGen *generator.ConfigGenData
+	}
+
+	var analyzedPlugins []analyzedPlugin
+
+	for _, plugin := range plugins {
+		// Determine source path for analysis
+		var sourcePath string
+
+		if plugin.Type == config.TypeLocalModule {
+			// Local module: use source path directly
+			sourcePath = plugin.Source
+			if !filepath.IsAbs(sourcePath) {
+				sourcePath = filepath.Join(projectDir, plugin.Source)
+			}
+		} else if plugin.Type == config.TypeCorePlugin && corePluginsPath != "" {
+			// Core plugin in development mode
+			absPluginsPath, _ := filepath.Abs(corePluginsPath)
+			sourcePath = filepath.Join(absPluginsPath, plugin.Name)
+		} else {
+			// Remote plugin or core plugin without local path - skip analysis for now
+			// Will be analyzed after go mod download
+			analyzedPlugins = append(analyzedPlugins, analyzedPlugin{
+				detectedPlugin: plugin,
+				Metadata:       nil,
+				ConfigGen:      nil,
+			})
+			fmt.Printf("  [%s] %s - skipping analysis (will download first)\n", plugin.Type, plugin.Name)
+			continue
+		}
+
+		// Analyze the plugin package
+		metadata, err := analyzer.AnalyzePlugin(plugin.ModulePath, plugin.Name, sourcePath)
+		if err != nil {
+			fmt.Printf("  [%s] %s - analysis failed: %v\n", plugin.Type, plugin.Name, err)
+			// Continue with nil metadata - plugin may not follow conventions
+			analyzedPlugins = append(analyzedPlugins, analyzedPlugin{
+				detectedPlugin: plugin,
+				Metadata:       nil,
+				ConfigGen:      nil,
+			})
+			continue
+		}
+
+		// Generate config initialization data if plugin has config
+		var configGen *generator.ConfigGenData
+		if metadata.HasConfig && metadata.ConfigType != nil {
+			configGen, err = generator.GenerateConfigInit(metadata.ConfigType, plugin.Config)
+			if err != nil {
+				return fmt.Errorf("failed to generate config for plugin '%s': %w", plugin.Name, err)
+			}
+		}
+
+		analyzedPlugins = append(analyzedPlugins, analyzedPlugin{
+			detectedPlugin: plugin,
+			Metadata:       metadata,
+			ConfigGen:      configGen,
+		})
+
+		fmt.Printf("  ✓ %s", plugin.Name)
+		if metadata.HasConfig {
+			fmt.Printf(" (config: %d fields)", len(metadata.ConfigType.Fields))
+		}
+		if len(metadata.Dependencies) > 0 {
+			fmt.Printf(" (deps: %d)", len(metadata.Dependencies))
+		}
+		if len(metadata.Tasks) > 0 {
+			fmt.Printf(" (tasks: %d)", len(metadata.Tasks))
+		}
+		fmt.Println()
+	}
+
+	// 5. Copy flows to workspace (only if embedding)
 	if embedFlows {
-		fmt.Println("Copying flows to workspace for embedding...")
+		fmt.Println("\nCopying flows to workspace for embedding...")
 		if err := ws.CopyFlows(); err != nil {
 			return fmt.Errorf("failed to copy flows: %w", err)
 		}
 	} else {
-		fmt.Println("Skipping flow copy (development mode - flows loaded at runtime)")
+		fmt.Println("\nSkipping flow copy (development mode - flows loaded at runtime)")
 	}
 
-	// 5. Prepare runtime path for development mode
+	// 6. Prepare runtime path for development mode
 	var absRuntimePath string
 	if runtimePath != "" {
 		// Development mode: use local runtime
@@ -202,25 +278,25 @@ func runBuild(_ *cobra.Command, args []string) error {
 		fmt.Println("  Runtime will be downloaded from GitHub")
 	}
 
-	// 5.5 Validate plugins path if provided
-	if pluginsPath != "" {
-		absPluginsPath, err := filepath.Abs(pluginsPath)
+	// 6.5 Validate core plugins path if provided
+	if corePluginsPath != "" {
+		absPluginsPath, err := filepath.Abs(corePluginsPath)
 		if err != nil {
-			return fmt.Errorf("failed to resolve plugins path: %w", err)
+			return fmt.Errorf("failed to resolve core plugins path: %w", err)
 		}
 
-		if err := validatePluginsPath(absPluginsPath); err != nil {
-			return fmt.Errorf("invalid plugins path: %w", err)
+		if err := validateCorePluginsPath(absPluginsPath); err != nil {
+			return fmt.Errorf("invalid core plugins path: %w", err)
 		}
 
-		fmt.Printf("  Plugins: %s\n", absPluginsPath)
+		fmt.Printf("  Core Plugins: %s\n", absPluginsPath)
 	}
 
-	// 6. Generate go.mod
+	// 7. Generate go.mod
 	fmt.Println("\nGenerating go.mod...")
 	goModGen := generator.NewGoModGenerator(ws.UUID, "latest", absRuntimePath)
 
-	for _, plugin := range plugins {
+	for _, plugin := range analyzedPlugins {
 		pluginInfo := generator.PluginInfo{
 			Name:       plugin.Name,
 			ModulePath: plugin.ModulePath,
@@ -236,14 +312,21 @@ func runBuild(_ *cobra.Command, args []string) error {
 				absPath = filepath.Join(projectDir, plugin.Source)
 			}
 			pluginInfo.LocalPath = absPath
-		} else if plugin.Type == config.TypeCorePlugin && pluginsPath != "" {
+		} else if plugin.Type == config.TypeCorePlugin && corePluginsPath != "" {
 			// Core plugins point to local plugins directory during development
-			// Only set local path if --plugins-path flag is provided
-			absPluginsPath, err := filepath.Abs(pluginsPath)
+			// Only set local path if --core-plugins-path flag is provided
+			absPluginsPath, err := filepath.Abs(corePluginsPath)
 			if err != nil {
-				return fmt.Errorf("failed to resolve plugins path: %w", err)
+				return fmt.Errorf("failed to resolve core plugins path: %w", err)
 			}
 			pluginInfo.LocalPath = filepath.Join(absPluginsPath, plugin.Name)
+		}
+
+		// Add metadata from analysis
+		if plugin.Metadata != nil {
+			pluginInfo.TypeName = plugin.Metadata.TypeName
+			pluginInfo.PackageName = plugin.Metadata.PackageName
+			pluginInfo.HasConfig = plugin.Metadata.HasConfig
 		}
 
 		goModGen.AddPlugin(pluginInfo)
@@ -255,16 +338,38 @@ func runBuild(_ *cobra.Command, args []string) error {
 
 	fmt.Printf("  ✓ go.mod created\n")
 
-	// 6. Generate main.go
+	// 8. Generate main.go
 	fmt.Println("\nGenerating main.go...")
-	mainGoGen := generator.NewMainGoGenerator(goModGen.ModuleName, port, embedFlows)
+	mainGoGen := generator.NewMainGoGenerator(goModGen.ModuleName, cfg.Runtime.Port, embedFlows, cfg.Properties)
 
-	for _, plugin := range plugins {
-		mainGoGen.AddPlugin(generator.PluginInfo{
+	for _, plugin := range analyzedPlugins {
+		pluginInfo := generator.PluginInfo{
 			Name:       plugin.Name,
 			ModulePath: plugin.ModulePath,
 			Type:       plugin.Type,
-		})
+		}
+
+		// Add metadata from analysis
+		if plugin.Metadata != nil {
+			pluginInfo.TypeName = plugin.Metadata.TypeName
+			pluginInfo.PackageName = plugin.Metadata.PackageName
+			pluginInfo.HasConfig = plugin.Metadata.HasConfig
+
+			// Add dependencies for Phase 2.2
+			for _, dep := range plugin.Metadata.Dependencies {
+				pluginInfo.Dependencies = append(pluginInfo.Dependencies, generator.PluginDependency{
+					FieldName:  dep.FieldName,
+					PluginName: dep.PluginName,
+				})
+			}
+		}
+
+		// Add config generation data for Phase 2.3
+		if plugin.ConfigGen != nil {
+			pluginInfo.ConfigGen = plugin.ConfigGen
+		}
+
+		mainGoGen.AddPlugin(pluginInfo)
 	}
 
 	if err := mainGoGen.WriteToFile(ws.Path); err != nil {
@@ -273,7 +378,7 @@ func runBuild(_ *cobra.Command, args []string) error {
 
 	fmt.Printf("  ✓ main.go created\n")
 
-	// 8. Build binary
+	// 9. Build binary
 	fmt.Println("\nBuilding binary...")
 
 	// Binary will be output to project root

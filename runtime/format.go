@@ -28,9 +28,7 @@ func FormatExpression(e string) string {
 		case ')':
 			openParentheses--
 		case '.':
-			if openParentheses == 0 {
-				result[i] = '_'
-			}
+			result[i] = '_'
 		case '-':
 			if openParentheses == 0 {
 				temp := string(result[i-1 : i+2])

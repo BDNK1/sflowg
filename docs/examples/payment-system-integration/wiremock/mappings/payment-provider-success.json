@@ -1,0 +1,50 @@
+{
+  "name": "Payment Provider - Successful Charge",
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/charges",
+    "headers": {
+      "Authorization": {
+        "matches": "Bearer .*"
+      },
+      "Content-Type": {
+        "equalTo": "application/json"
+      },
+      "X-Transaction-ID": {
+        "matches": ".*"
+      }
+    },
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.transaction_id"
+      },
+      {
+        "matchesJsonPath": "$.amount"
+      },
+      {
+        "matchesJsonPath": "$.currency"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "X-Request-Id": "{{randomValue type='UUID'}}"
+    },
+    "jsonBody": {
+      "object": "charge",
+      "amount": "{{jsonPath request.body '$.amount'}}",
+      "currency": "{{jsonPath request.body '$.currency'}}",
+      "status": "succeeded",
+      "captured": true,
+      "paid": true,
+      "authorization_code": "{{jsonPath request.body '$.authorization_code'}}",
+      "transaction_id": "{{jsonPath request.body '$.transaction_id'}}",
+      "created": "{{now format='unix'}}",
+      "processing_time_ms": 234,
+      "risk_score": 12,
+      "risk_level": "normal"
+    }
+  }
+}

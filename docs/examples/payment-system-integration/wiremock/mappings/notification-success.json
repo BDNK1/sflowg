@@ -1,0 +1,40 @@
+{
+  "name": "Notification Service - Email Sent Successfully",
+  "request": {
+    "method": "POST",
+    "urlPath": "/notify",
+    "headers": {
+      "Content-Type": {
+        "equalTo": "application/json"
+      }
+    },
+    "bodyPatterns": [
+      {
+        "matchesJsonPath": "$.customer_email"
+      },
+      {
+        "matchesJsonPath": "$.order_id"
+      },
+      {
+        "matchesJsonPath": "$.transaction_id"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "X-Message-Id": "msg_{{randomValue type='ALPHANUMERIC' length=16}}"
+    },
+    "jsonBody": {
+      "success": true,
+      "message_id": "msg_{{randomValue type='UUID'}}",
+      "recipient": "{{jsonPath request.body '$.customer_email'}}",
+      "subject": "Order Confirmation - {{jsonPath request.body '$.order_id'}}",
+      "status": "sent",
+      "sent_at": "{{now format='yyyy-MM-dd HH:mm:ss'}}",
+      "delivery_status": "delivered",
+      "provider": "SendGrid"
+    }
+  }
+}

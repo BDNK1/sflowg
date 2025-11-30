@@ -1,0 +1,25 @@
+{
+  "name": "Payment Provider - Retry Success After Rate Limit",
+  "scenarioName": "rate-limit-retry",
+  "requiredScenarioState": "First-Retry",
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/charges",
+    "headers": {
+      "X-Test-Scenario": {
+        "equalTo": "rate-limit"
+      }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "object": "charge",
+      "status": "succeeded",
+      "message": "Charge succeeded after retry"
+    }
+  }
+}

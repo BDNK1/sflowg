@@ -52,6 +52,10 @@ func (e *Executor) evaluateCondition(execution *Execution, step Step) error {
 
 	result, err := Eval(step.Condition, execution.Values)
 	if err != nil {
+		e.l.ErrorContext(execution, fmt.Sprintf("Error evaluating condition for step %s", step.ID),
+			"condition", step.Condition,
+			"error", err,
+			"values", execution.Values)
 		return fmt.Errorf("error evaluating condition %s: %w", step.Condition, err)
 	}
 
@@ -79,18 +83,58 @@ func (e *Executor) executeStepType(execution *Execution, step Step, nextStep *st
 
 func (e *Executor) handleAssign(execution *Execution, step Step) error {
 	for k, v := range step.Args {
-		if valueStr, ok := v.(string); ok {
-			result, err := Eval(valueStr, execution.Values)
-			if err != nil {
-				return fmt.Errorf("error evaluating expression %s: %w", valueStr, err)
-			}
-			execution.AddValue(k, result)
-		} else {
-			// If it's not a string expression, use the raw value
-			execution.AddValue(k, v)
+		evaluated, err := e.evaluateValue(execution, step.ID, k, v)
+		if err != nil {
+			return err
 		}
+		// Store with step ID prefix so it can be accessed as {stepID}.{key}
+		execution.AddValue(fmt.Sprintf("%s.%s", step.ID, k), evaluated)
 	}
 	return nil
+}
+
+// evaluateValue recursively evaluates expressions in nested structures
+func (e *Executor) evaluateValue(execution *Execution, stepID string, path string, value any) (any, error) {
+	switch v := value.(type) {
+	case string:
+		// Try to evaluate as expression
+		result, err := Eval(v, execution.Values)
+		if err != nil {
+			e.l.ErrorContext(execution, fmt.Sprintf("Error evaluating expression for step %s, path %s", stepID, path),
+				"expression", v,
+				"error", err,
+				"values", execution.Values)
+			return nil, fmt.Errorf("error evaluating expression %s: %w", v, err)
+		}
+		return result, nil
+	case map[string]any:
+		// Recursively evaluate all values in the map
+		evaluated := make(map[string]any)
+		for key, val := range v {
+			nestedPath := fmt.Sprintf("%s.%s", path, key)
+			evaluatedVal, err := e.evaluateValue(execution, stepID, nestedPath, val)
+			if err != nil {
+				return nil, err
+			}
+			evaluated[key] = evaluatedVal
+		}
+		return evaluated, nil
+	case []any:
+		// Recursively evaluate all elements in the array
+		evaluated := make([]any, len(v))
+		for i, val := range v {
+			nestedPath := fmt.Sprintf("%s[%d]", path, i)
+			evaluatedVal, err := e.evaluateValue(execution, stepID, nestedPath, val)
+			if err != nil {
+				return nil, err
+			}
+			evaluated[i] = evaluatedVal
+		}
+		return evaluated, nil
+	default:
+		// Return literal values as-is (int, bool, float64, etc.)
+		return value, nil
+	}
 }
 
 func (e *Executor) handleSwitch(execution *Execution, step Step, nextStep *string) error {
@@ -102,6 +146,10 @@ func (e *Executor) handleSwitch(execution *Execution, step Step, nextStep *strin
 
 		result, err := Eval(condition, execution.Values)
 		if err != nil {
+			e.l.ErrorContext(execution, fmt.Sprintf("Error evaluating switch condition for step %s, branch %s", step.ID, n),
+				"condition", condition,
+				"error", err,
+				"values", execution.Values)
 			return fmt.Errorf("error evaluating switch condition %s: %w", condition, err)
 		}
 
@@ -145,6 +193,10 @@ func (e *Executor) handleRetry(execution *Execution, step Step) error {
 		e.l.InfoContext(execution, fmt.Sprintf("[%s/%s] Retrying step: %s, condition: %v", strconv.Itoa(i+1), strconv.Itoa(step.Retry.MaxRetries), step.ID, condition))
 
 		if err != nil {
+			e.l.ErrorContext(execution, fmt.Sprintf("Error evaluating retry condition for step %s", step.ID),
+				"condition", step.Retry.Condition,
+				"error", err,
+				"values", execution.Values)
 			return fmt.Errorf("error evaluating retry condition %s: %w", step.Retry.Condition, err)
 		}
 
