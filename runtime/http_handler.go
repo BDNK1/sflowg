@@ -1,12 +1,13 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 
-	"github.com/Jeffail/gabs/v2"
 	"github.com/gin-gonic/gin"
 )
 
@@ -36,6 +37,11 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 		err := executor.ExecuteSteps(&e)
 
 		if err != nil {
+			slog.Error("Flow execution failed",
+				"flow", flow.ID,
+				"path", c.Request.URL.Path,
+				"method", c.Request.Method,
+				"error", err.Error())
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"message": "Error in task execution: " + err.Error(),
 			})
@@ -55,6 +61,7 @@ const (
 	QueryParametersPrefix = "request.queryParameters"
 	HeadersPrefix         = "request.headers"
 	RequestBodyPrefix     = "request.body"
+	RequestRawBodyKey     = "request.rawBody"
 )
 
 func extractRequestData(c *gin.Context, f *Flow, e *Execution, withBody bool) {
@@ -103,21 +110,39 @@ func extractJsonBody(c *gin.Context, e *Execution) {
 		return
 	}
 
-	bodyParsed, err := gabs.ParseJSON(body)
-	if err != nil {
+	// Store raw body for webhook signature verification and similar use cases
+	e.AddValue(RequestRawBodyKey, string(body))
+
+	var parsed any
+	if err := json.Unmarshal(body, &parsed); err != nil {
 		c.JSON(http.StatusBadRequest, wrongBodyFormatRes)
 		return
 	}
 
-	values, err := bodyParsed.Flatten()
+	// Store values at all levels (intermediate objects + leaf values)
+	// This allows both: request.body.metadata.order_id AND request.body.metadata != null
+	storeWithIntermediates(e, RequestBodyPrefix, parsed)
+}
 
-	if err != nil {
-		c.JSON(http.StatusBadRequest, wrongBodyFormatRes)
-		return
+// storeWithIntermediates recursively stores values at every level of the JSON structure.
+// This allows both leaf value access (request.body.metadata.order_id) and
+// intermediate object checks (request.body.metadata != null).
+func storeWithIntermediates(e *Execution, prefix string, value any) {
+	// Always store current value (whether object, array, or leaf)
+	e.AddValue(prefix, value)
+
+	// If it's a map, recurse into children
+	if m, ok := value.(map[string]any); ok {
+		for k, v := range m {
+			storeWithIntermediates(e, prefix+"."+k, v)
+		}
 	}
 
-	for k, v := range values {
-		e.AddValue(fmt.Sprintf("%s.%s", RequestBodyPrefix, k), v)
+	// If it's an array, recurse with indices
+	if arr, ok := value.([]any); ok {
+		for i, v := range arr {
+			storeWithIntermediates(e, fmt.Sprintf("%s.%d", prefix, i), v)
+		}
 	}
 }
 

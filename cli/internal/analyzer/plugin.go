@@ -188,8 +188,8 @@ func checkConfigField(structType *ast.StructType, metadata *PluginMetadata, conf
 
 		fieldName := field.Names[0].Name
 
-		// Look for "config" field (lowercase - private)
-		if fieldName == "config" {
+		// Look for "Config" field (both uppercase and lowercase)
+		if fieldName == "Config" || fieldName == "config" {
 			// Check if type is "Config"
 			if ident, ok := field.Type.(*ast.Ident); ok && ident.Name == "Config" {
 				metadata.HasConfig = true

@@ -244,6 +244,20 @@ func runBuild(_ *cobra.Command, args []string) error {
 			fmt.Printf(" (tasks: %d)", len(metadata.Tasks))
 		}
 		fmt.Println()
+
+		// DEBUG: Print config generation data
+		if configGen != nil {
+			fmt.Printf("    DEBUG ConfigGen: %d env vars, %d literals\n", len(configGen.EnvVars), len(configGen.Literals))
+			for _, ev := range configGen.EnvVars {
+				fmt.Printf("      EnvVar: %s -> %s (required: %v, default: %q)\n", ev.EnvVar, ev.YAMLField, ev.Required, ev.DefaultValue)
+			}
+			for _, lit := range configGen.Literals {
+				fmt.Printf("      Literal: %s = %s\n", lit.YAMLField, lit.Value)
+			}
+		} else {
+			fmt.Printf("    DEBUG ConfigGen: nil\n")
+		}
+		fmt.Printf("    DEBUG plugin.Config from yaml: %+v\n", plugin.Config)
 	}
 
 	// 5. Copy flows to workspace (only if embedding)

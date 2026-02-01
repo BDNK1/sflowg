@@ -185,32 +185,6 @@ plugins:
       debug_mode: ${PAYMENT_DEBUG:false}
 ```
 
-## Build Commands
-
-### Development Mode
-
-Use local runtime and plugins during development:
-
-```bash
-sflowg build . \
-  --runtime-path ../runtime \
-  --core-plugins-path ../plugins
-```
-
-### Production Mode
-
-Build with published runtime and plugins:
-
-```bash
-sflowg build .
-```
-
-Add `--embed-flows` to embed flow files into the binary:
-
-```bash
-sflowg build . --embed-flows
-```
-
 ## Property Precedence
 
 Properties are merged with the following precedence (highest wins):
@@ -232,3 +206,9 @@ properties:
 # Runtime
 $ export TAXRATE=0.20  # Would override if using ${TAXRATE:...} syntax
 ```
+
+## Related Documentation
+
+- [CLI.md](./CLI.md) - Build commands and CLI usage
+- [FLOW_SYNTAX.md](./FLOW_SYNTAX.md) - Flow YAML syntax reference
+- [PLUGIN_DEVELOPMENT.md](./PLUGIN_DEVELOPMENT.md) - Creating custom plugins

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"reflect"
@@ -25,38 +26,28 @@ func init() {
 // InitializeConfig is the CLI API for config preparation
 // This is the ONLY function CLI-generated code should call for config handling.
 // It combines: defaults → value merging → validation in one call.
-//
-// Usage in generated code:
-//
-//	httpConfig := http.Config{}
-//	rawValues := map[string]any{
-//	    "timeout":     os.Getenv("HTTP_TIMEOUT"),
-//	    "max_retries": 3,
-//	}
-//	if err := runtime.InitializeConfig(&httpConfig, rawValues); err != nil {
-//	    panic(err)
-//	}
-//
-// The function:
-// 1. Applies defaults from struct tags (`default:"..."`)
-// 2. Merges rawValues (from env vars + flow-config.yaml)
-// 3. Validates using validation tags (`validate:"..."`)
-//
-// Returns error if any step fails.
 func InitializeConfig(config any, rawValues map[string]any) error {
 	// Step 1: Apply defaults from struct tags
-	if err := prepareConfig(config); err != nil {
+	if err := ApplyDefaults(config); err != nil {
+		slog.Error("Plugin config: failed to apply defaults",
+			"config_type", reflect.TypeOf(config).String(),
+			"error", err)
 		return fmt.Errorf("failed to apply defaults: %w", err)
 	}
 
 	// Step 2: Merge raw values (env vars + literals from flow-config.yaml)
+	// Use YAML tags because Config structs use yaml tags for field mapping
 	if len(rawValues) > 0 {
-		if err := mapToStruct(rawValues, config); err != nil {
+		if err := mapToStructFromYAML(rawValues, config); err != nil {
+			slog.Error("Plugin config: failed to apply config values",
+				"config_type", reflect.TypeOf(config).String(),
+				"raw_values", rawValues,
+				"error", err)
 			return fmt.Errorf("failed to apply config values: %w", err)
 		}
 	}
 
-	// Step 3: Validate final config
+	// Step 3: Validate final config (AFTER rawValues are merged)
 	// Extract the actual value if config is a pointer
 	configValue := reflect.ValueOf(config)
 	if configValue.Kind() == reflect.Ptr {
@@ -64,6 +55,10 @@ func InitializeConfig(config any, rawValues map[string]any) error {
 	}
 
 	if err := validateConfig(configValue.Interface()); err != nil {
+		slog.Error("Plugin config validation failed",
+			"config_type", reflect.TypeOf(config).String(),
+			"config_value", configValue.Interface(),
+			"error", err)
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
@@ -105,36 +100,6 @@ func registerCustomValidators() {
 	})
 }
 
-// ApplyDefaults applies default values from struct tags to the config.
-//
-// This function reads `default:"..."` tags on struct fields and sets the field
-// values if they are currently zero/empty.
-//
-// Supported default value formats:
-//   - Strings: default:"localhost"
-//   - Numbers: default:"8080"
-//   - Booleans: default:"true" or default:"false"
-//   - Durations: default:"30s", default:"5m", default:"1h"
-//   - Lists: default:"[1,2,3]"
-//
-// Example:
-//
-//	type Config struct {
-//	    Addr     string        `default:"localhost:6379"`
-//	    Port     int           `default:"6379"`
-//	    Timeout  time.Duration `default:"30s"`
-//	    Enabled  bool          `default:"true"`
-//	}
-//
-//	config := Config{}
-//	err := ApplyDefaults(&config)
-//	// config.Addr = "localhost:6379"
-//	// config.Port = 6379
-//	// config.Timeout = 30 * time.Second
-//	// config.Enabled = true
-//
-// Note: This function is framework-internal. Plugin developers never call it directly.
-// The framework automatically applies defaults before plugin initialization.
 func ApplyDefaults(config any) error {
 	if config == nil {
 		return fmt.Errorf("config cannot be nil")
@@ -147,38 +112,6 @@ func ApplyDefaults(config any) error {
 	return nil
 }
 
-// ValidateConfig validates the config struct using validation tags.
-//
-// This function reads `validate:"..."` tags on struct fields and validates
-// the field values according to the specified rules.
-//
-// Common validation rules:
-//   - required: Field must not be empty/zero
-//   - gte=N, lte=N: Numeric greater/less than or equal
-//   - min=N, max=N: String/slice length constraints
-//   - email: Email format validation
-//   - url: URL format validation
-//   - oneof=a b c: Value must be one of the listed options
-//
-// Custom validators provided by framework:
-//   - hostname_port: Validates "host:port" format
-//   - url_format: Validates URL structure with scheme and host
-//   - dsn: Validates database connection string format
-//
-// Example:
-//
-//	type Config struct {
-//	    Port    int    `validate:"gte=1,lte=65535"`
-//	    Email   string `validate:"required,email"`
-//	    Addr    string `validate:"required,hostname_port"`
-//	    Level   string `validate:"oneof=debug info warn error"`
-//	}
-//
-//	config := Config{Port: 70000, Email: "invalid", Addr: "localhost"}
-//	err := ValidateConfig(config)
-//	// Returns validation errors with details about which fields failed
-//
-// validateConfig validates a config struct using validation tags (internal function)
 func validateConfig(config any) error {
 	if config == nil {
 		return fmt.Errorf("config cannot be nil")
@@ -204,30 +137,6 @@ func validateConfig(config any) error {
 	return nil
 }
 
-// PrepareConfig is a convenience function that applies defaults and then validates the config.
-//
-// This combines ApplyDefaults and ValidateConfig in the correct order:
-//  1. Apply default values from tags
-//  2. Validate the config with all rules
-//
-// This is the recommended way to prepare plugin configs as it ensures defaults
-// are applied before validation, which is the expected order.
-//
-// Example:
-//
-//	type Config struct {
-//	    Addr     string        `default:"localhost:6379" validate:"required,hostname_port"`
-//	    Port     int           `default:"6379" validate:"gte=1,lte=65535"`
-//	    Timeout  time.Duration `default:"30s" validate:"gte=1s"`
-//	}
-//
-//	config := Config{}
-//	if err := PrepareConfig(&config); err != nil {
-//	    log.Fatal("Config preparation failed:", err)
-//	}
-//	// config is now ready with defaults applied and validation passed
-//
-// prepareConfig applies defaults and validates config (internal function)
 func prepareConfig(config any) error {
 	if config == nil {
 		return fmt.Errorf("config cannot be nil")
@@ -246,40 +155,9 @@ func prepareConfig(config any) error {
 	return nil
 }
 
-// RegisterCustomValidator allows registering additional custom validation functions.
-//
-// This can be used by plugins or the framework to add domain-specific validators
-// beyond the standard ones provided by go-playground/validator.
-//
-// Example:
-//
-//	// Register a custom validator for specific format
-//	RegisterCustomValidator("custom_format", func(fl validator.FieldLevel) bool {
-//	    value := fl.Field().String()
-//	    // Custom validation logic
-//	    return isValidCustomFormat(value)
-//	})
-//
-//	// Use in config struct
-//	type Config struct {
-//	    Code string `validate:"required,custom_format"`
-//	}
-//
-// Note: This function is provided for extensibility but is rarely needed.
-// Most common validation rules are already available.
 func RegisterCustomValidator(tag string, fn validator.Func) error {
 	if err := validate.RegisterValidation(tag, fn); err != nil {
 		return fmt.Errorf("failed to register custom validator '%s': %w", tag, err)
 	}
 	return nil
-}
-
-// GetValidator returns the package-level validator instance.
-//
-// This is provided for advanced use cases where direct access to the validator
-// is needed (e.g., for programmatic validation or inspection).
-//
-// Most users should use ValidateConfig or PrepareConfig instead.
-func GetValidator() *validator.Validate {
-	return validate
 }

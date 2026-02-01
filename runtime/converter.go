@@ -30,11 +30,23 @@ func ToStringValueMap(m map[string]any) map[string]string {
 }
 
 // mapToStruct converts a map[string]any to a struct using mapstructure.
-// It uses json tags for field mapping and supports time.Duration and time.Time conversions.
+// It uses json tags for field mapping (for task input/output structs).
 func mapToStruct(m map[string]any, target any) error {
+	return mapToStructWithTag(m, target, "json")
+}
+
+// mapToStructFromYAML converts a map[string]any to a struct using yaml tags.
+// Used for config initialization from flow-config.yaml.
+func mapToStructFromYAML(m map[string]any, target any) error {
+	return mapToStructWithTag(m, target, "yaml")
+}
+
+// mapToStructWithTag converts a map[string]any to a struct using the specified tag.
+// Supports time.Duration and time.Time conversions.
+func mapToStructWithTag(m map[string]any, target any, tagName string) error {
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		Result:  target,
-		TagName: "json", // Use json tags for field mapping
+		TagName: tagName,
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.StringToTimeHookFunc(time.RFC3339),

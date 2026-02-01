@@ -2,8 +2,8 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 
@@ -277,24 +277,6 @@ func (w *pluginTaskWrapper) Execute(exec *Execution, args map[string]any) (map[s
 		err = results[1].Interface().(error)
 	}
 
-	// Handle TaskError - extract metadata and merge into result
-	if err != nil {
-		var taskErr *TaskError
-		if errors.As(err, &taskErr) {
-			// Merge metadata into result map (prefixed with __meta_ to avoid conflicts)
-			if resultMap == nil {
-				resultMap = make(map[string]any)
-			}
-			for k, v := range taskErr.Metadata {
-				resultMap["__meta_"+k] = v
-			}
-			// Return the underlying error
-			return resultMap, taskErr.Err
-		}
-		// Not a TaskError, return as-is
-		return resultMap, err
-	}
-
 	return resultMap, err
 }
 
@@ -310,11 +292,19 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 	// Step 1: Convert map → struct
 	inputPtr := reflect.New(w.inputType)
 	if err := mapToStruct(args, inputPtr.Interface()); err != nil {
+		slog.Error("Task input conversion failed",
+			"task", w.method.Name,
+			"args", args,
+			"error", err)
 		return nil, fmt.Errorf("invalid input for task %s: %w", w.method.Name, err)
 	}
 
 	// Step 2: Validate input struct using existing validation framework
 	if err := validateConfig(inputPtr.Interface()); err != nil {
+		slog.Error("Task input validation failed",
+			"task", w.method.Name,
+			"args", args,
+			"error", err)
 		return nil, fmt.Errorf("validation failed for task %s: %w", w.method.Name, err)
 	}
 
@@ -327,34 +317,19 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 
 	// Step 4: Extract output and error from method call
 	output := results[0].Interface()
-	var taskErr error
+	var err error
 	if !results[1].IsNil() {
-		taskErr = results[1].Interface().(error)
+		err = results[1].Interface().(error)
 	}
 
 	// Step 5: Convert struct → map
 	resultMap, convertErr := structToMap(output)
 	if convertErr != nil {
+		slog.Error("Task output conversion failed",
+			"task", w.method.Name,
+			"error", convertErr)
 		return nil, fmt.Errorf("failed to convert output for task %s: %w", w.method.Name, convertErr)
 	}
 
-	// Step 6: Handle TaskError - extract metadata and merge into result
-	if taskErr != nil {
-		var te *TaskError
-		if errors.As(taskErr, &te) {
-			// Merge metadata into result map (prefixed with __meta_ to avoid conflicts)
-			if resultMap == nil {
-				resultMap = make(map[string]any)
-			}
-			for k, v := range te.Metadata {
-				resultMap["__meta_"+k] = v
-			}
-			// Return the underlying error
-			return resultMap, te.Err
-		}
-		// Not a TaskError, return as-is
-		return nil, taskErr
-	}
-
-	return resultMap, nil
+	return resultMap, err
 }

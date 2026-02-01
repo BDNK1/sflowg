@@ -23,14 +23,16 @@ type RequestInput struct {
 	Headers     map[string]string `json:"headers"`
 	QueryParams map[string]string `json:"query_parameters"`
 	Body        map[string]any    `json:"body"`
+	ContentType string            `json:"content_type" validate:"omitempty,oneof=json form"` // "json" (default) or "form"
 }
 
 // RequestOutput defines the typed output for HTTP requests
 type RequestOutput struct {
-	Status     string         `json:"status"`
-	StatusCode int            `json:"status_code"`
-	IsError    bool           `json:"is_error"`
-	Body       map[string]any `json:"body"`
+	Status     string            `json:"status"`
+	StatusCode int               `json:"status_code"`
+	IsError    bool              `json:"is_error"`
+	Headers    map[string]string `json:"headers"`
+	Body       map[string]any    `json:"body"`
 }
 
 // HTTPPlugin implements HTTP request functionality as a plugin
@@ -59,17 +61,32 @@ func (h *HTTPPlugin) Request(exec *plugin.Execution, input RequestInput) (Reques
 	response := map[string]any{}
 	errorResponse := map[string]any{}
 
-	// Execute request with resty
-	resp, err := h.client.R().
+	req := h.client.R().
 		SetHeaders(input.Headers).
 		SetQueryParams(input.QueryParams).
-		SetBody(input.Body).
 		SetResult(&response).
-		SetError(&errorResponse).
-		Execute(input.Method, input.URL)
+		SetError(&errorResponse)
 
+	// Set body based on content type
+	if input.ContentType == "form" {
+		formData := flattenToFormData(input.Body, "")
+		req.SetFormData(formData)
+	} else {
+		// Default to JSON
+		req.SetBody(input.Body)
+	}
+
+	resp, err := req.Execute(input.Method, input.URL)
 	if err != nil {
 		return RequestOutput{}, fmt.Errorf("HTTP request failed: %w", err)
+	}
+
+	// Extract response headers (first value for each header)
+	headers := make(map[string]string)
+	for key, values := range resp.Header() {
+		if len(values) > 0 {
+			headers[key] = values[0]
+		}
 	}
 
 	// Build typed output
@@ -77,6 +94,7 @@ func (h *HTTPPlugin) Request(exec *plugin.Execution, input RequestInput) (Reques
 		Status:     resp.Status(),
 		StatusCode: resp.StatusCode(),
 		IsError:    resp.IsError(),
+		Headers:    headers,
 	}
 
 	// Use appropriate response based on error status
@@ -87,6 +105,43 @@ func (h *HTTPPlugin) Request(exec *plugin.Execution, input RequestInput) (Reques
 	}
 
 	return output, nil
+}
+
+// flattenToFormData converts a nested map to form-encoded format with bracket notation
+// Example: {"metadata": {"key": "value"}} -> {"metadata[key]": "value"}
+func flattenToFormData(data map[string]any, prefix string) map[string]string {
+	result := make(map[string]string)
+
+	for key, value := range data {
+		fullKey := key
+		if prefix != "" {
+			fullKey = prefix + "[" + key + "]"
+		}
+
+		switch v := value.(type) {
+		case map[string]any:
+			// Recursively flatten nested maps
+			for k, val := range flattenToFormData(v, fullKey) {
+				result[k] = val
+			}
+		case []any:
+			// Handle arrays: key[0], key[1], etc.
+			for i, item := range v {
+				arrayKey := fmt.Sprintf("%s[%d]", fullKey, i)
+				if nested, ok := item.(map[string]any); ok {
+					for k, val := range flattenToFormData(nested, arrayKey) {
+						result[k] = val
+					}
+				} else {
+					result[arrayKey] = fmt.Sprintf("%v", item)
+				}
+			}
+		default:
+			result[fullKey] = fmt.Sprintf("%v", v)
+		}
+	}
+
+	return result
 }
 
 // Shutdown implements the plugin.Shutdowner interface

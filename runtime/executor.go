@@ -97,14 +97,14 @@ func (e *Executor) handleAssign(execution *Execution, step Step) error {
 func (e *Executor) evaluateValue(execution *Execution, stepID string, path string, value any) (any, error) {
 	switch v := value.(type) {
 	case string:
-		// Try to evaluate as expression
+		// Evaluate as expression - no fallback to literal
+		// Use '"literal"' syntax for string literals in expressions
 		result, err := Eval(v, execution.Values)
 		if err != nil {
 			e.l.ErrorContext(execution, fmt.Sprintf("Error evaluating expression for step %s, path %s", stepID, path),
 				"expression", v,
-				"error", err,
-				"values", execution.Values)
-			return nil, fmt.Errorf("error evaluating expression %s: %w", v, err)
+				"error", err)
+			return nil, fmt.Errorf("error evaluating expression '%s': %w", v, err)
 		}
 		return result, nil
 	case map[string]any:
@@ -169,13 +169,48 @@ func (e *Executor) handleSwitch(execution *Execution, step Step, nextStep *strin
 }
 
 func (e *Executor) handleTask(execution *Execution, step Step) error {
+	e.l.InfoContext(execution, fmt.Sprintf("DEBUG: Looking for task type: %s", step.Type))
+
 	task, ok := execution.Container.Tasks[step.Type]
 	if !ok {
+		e.l.InfoContext(execution, fmt.Sprintf("DEBUG: Available tasks: %v", getTaskNames(execution.Container.Tasks)))
 		return fmt.Errorf("task type: %s not found", step.Type)
 	}
-	e.executeTask(execution, task, step)
+
+	e.l.InfoContext(execution, fmt.Sprintf("DEBUG: Found task, type=%T", task))
+
+	// Evaluate all args before passing to task
+	evaluatedArgs, err := e.evaluateArgs(execution, step)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate args for task %s: %w", step.Type, err)
+	}
+
+	e.l.InfoContext(execution, fmt.Sprintf("DEBUG: Calling task.Execute with args: %+v", evaluatedArgs))
+
+	e.executeTaskWithArgs(execution, task, step, evaluatedArgs)
 	e.l.InfoContext(execution, fmt.Sprintf("Executed task: %s", step.Type))
 	return nil
+}
+
+func getTaskNames(tasks map[string]Task) []string {
+	names := make([]string, 0, len(tasks))
+	for name := range tasks {
+		names = append(names, name)
+	}
+	return names
+}
+
+// evaluateArgs evaluates all expressions in task args
+func (e *Executor) evaluateArgs(execution *Execution, step Step) (map[string]any, error) {
+	evaluated := make(map[string]any)
+	for k, v := range step.Args {
+		result, err := e.evaluateValue(execution, step.ID, k, v)
+		if err != nil {
+			return nil, err
+		}
+		evaluated[k] = result
+	}
+	return evaluated, nil
 }
 
 func (e *Executor) handleRetry(execution *Execution, step Step) error {
@@ -213,19 +248,56 @@ func (e *Executor) handleRetry(execution *Execution, step Step) error {
 			delay = time.Duration(i*step.Retry.Delay) * time.Millisecond
 		}
 		time.Sleep(delay)
-		e.executeTask(execution, task, step)
+
+		// Re-evaluate args for retry (values may have changed)
+		evaluatedArgs, err := e.evaluateArgs(execution, step)
+		if err != nil {
+			e.l.ErrorContext(execution, fmt.Sprintf("Error evaluating args for retry step %s", step.ID),
+				"error", err)
+			continue
+		}
+		e.executeTaskWithArgs(execution, task, step, evaluatedArgs)
 	}
 	return nil
 }
 
-func (e *Executor) executeTask(execution *Execution, task Task, s Step) {
-	output, err := task.Execute(execution, s.Args)
+// executeTaskWithArgs executes a task with pre-evaluated args
+func (e *Executor) executeTaskWithArgs(execution *Execution, task Task, s Step, args map[string]any) {
+	e.l.InfoContext(execution, fmt.Sprintf("DEBUG: executeTaskWithArgs START for step %s", s.ID))
+
+	output, err := task.Execute(execution, args)
+
+	e.l.InfoContext(execution, fmt.Sprintf("DEBUG: executeTaskWithArgs DONE - output=%+v, err=%v", output, err))
 
 	if err != nil {
+		e.l.ErrorContext(execution, fmt.Sprintf("Task execution failed: %s", s.ID),
+			"task_type", s.Type,
+			"error", err.Error(),
+			"args", args)
 		execution.AddValue(fmt.Sprintf("%s.error", s.ID), err.Error())
 	}
 
+	// Store results recursively to support nested access like step.result.row.id
 	for k, v := range output {
-		execution.AddValue(fmt.Sprintf("%s.result.%s", s.ID, k), v)
+		e.l.InfoContext(execution, fmt.Sprintf("DEBUG: Storing %s.result.%s = %v (type: %T)", s.ID, k, v, v))
+		storeResultWithIntermediates(execution, fmt.Sprintf("%s.result.%s", s.ID, k), v)
+	}
+}
+
+// storeResultWithIntermediates recursively stores task output values at every level.
+// This enables accessing nested results like step.result.row.id
+func storeResultWithIntermediates(e *Execution, prefix string, value any) {
+	e.AddValue(prefix, value)
+
+	if m, ok := value.(map[string]any); ok {
+		for k, v := range m {
+			storeResultWithIntermediates(e, prefix+"."+k, v)
+		}
+	}
+
+	if arr, ok := value.([]any); ok {
+		for i, v := range arr {
+			storeResultWithIntermediates(e, fmt.Sprintf("%s.%d", prefix, i), v)
+		}
 	}
 }

@@ -1,0 +1,189 @@
+id: process_webhook
+
+# Process Stripe webhook events:
+# 1. Verify webhook signature
+# 2. Route based on event type:
+#    - payment_intent.succeeded -> update payment status to 'succeeded'
+#    - payment_intent.payment_failed -> update payment status to 'failed'
+#    - payment_intent.canceled -> update payment status to 'canceled'
+
+entrypoint:
+  type: http
+  config:
+    method: post
+    path: /api/webhooks/stripe
+    headers:
+      - Stripe-Signature
+    body:
+      type: json
+
+steps:
+  # ========================================
+  # STEP 1: Verify webhook signature
+  # ========================================
+  - id: verify_signature
+    type: signature-verifier.verifySignature
+    args:
+      signature: request.headers.Stripe-Signature
+      payload: request.rawBody
+
+  - id: check_signature
+    type: switch
+    args:
+      signature_invalid: verify_signature.result.valid == false
+      signature_valid: verify_signature.result.valid == true
+
+  # ========================================
+  # STEP 1a: Handle invalid signature
+  # ========================================
+  - id: signature_invalid
+    type: assign
+    args:
+      error_response:
+        error: '"invalid_signature"'
+        message: verify_signature.result.error
+
+  # ========================================
+  # STEP 2: Extract webhook event data
+  # ========================================
+  - id: signature_valid
+    type: assign
+    args:
+      event_id: request.body.id
+      event_type: request.body.type
+      # Payment intent data is in data.object
+      payment_intent_id: request.body.data.object.id
+      payment_intent_status: request.body.data.object.status
+      # Get our payment_id from metadata
+      payment_id: 'request.body.data.object.metadata != null ? request.body.data.object.metadata.payment_id : null'
+      # Additional data for logging/debugging
+      amount: request.body.data.object.amount
+      currency: request.body.data.object.currency
+
+  # ========================================
+  # STEP 3: Route based on event type
+  # ========================================
+  - id: route_event
+    type: switch
+    condition: signature_valid.event_type != null
+    args:
+      handle_succeeded: signature_valid.event_type == "payment_intent.succeeded"
+      handle_failed: signature_valid.event_type == "payment_intent.payment_failed"
+      handle_canceled: signature_valid.event_type == "payment_intent.canceled"
+      handle_other: signature_valid.event_type != "payment_intent.succeeded" && signature_valid.event_type != "payment_intent.payment_failed" && signature_valid.event_type != "payment_intent.canceled"
+
+  # ========================================
+  # STEP 4a: Handle payment_intent.succeeded
+  # ========================================
+  - id: handle_succeeded
+    type: postgres.exec
+    args:
+      query: '"UPDATE payments SET status = $1, stripe_status = $2, updated_at = NOW() WHERE stripe_payment_intent_id = $3"'
+      params:
+        - '"succeeded"'
+        - signature_valid.payment_intent_status
+        - signature_valid.payment_intent_id
+
+  - id: succeeded_response
+    type: assign
+    condition: handle_succeeded.result != null
+    args:
+      success_response:
+        received: true
+        event_id: signature_valid.event_id
+        event_type: signature_valid.event_type
+        payment_intent_id: signature_valid.payment_intent_id
+        status: '"succeeded"'
+        rows_updated: handle_succeeded.result.affected_rows
+
+  # ========================================
+  # STEP 4b: Handle payment_intent.payment_failed
+  # ========================================
+  - id: handle_failed
+    type: assign
+    args:
+      failure_message: 'request.body.data.object.last_payment_error != null ? request.body.data.object.last_payment_error.message : "Payment failed"'
+      failure_code: 'request.body.data.object.last_payment_error != null ? request.body.data.object.last_payment_error.code : "unknown"'
+
+  - id: update_failed
+    type: postgres.exec
+    condition: handle_failed.failure_message != null
+    args:
+      query: '"UPDATE payments SET status = $1, stripe_status = $2, error_message = $3, error_code = $4, updated_at = NOW() WHERE stripe_payment_intent_id = $5"'
+      params:
+        - '"failed"'
+        - signature_valid.payment_intent_status
+        - handle_failed.failure_message
+        - handle_failed.failure_code
+        - signature_valid.payment_intent_id
+
+  - id: failed_response
+    type: assign
+    condition: update_failed.result != null
+    args:
+      success_response:
+        received: true
+        event_id: signature_valid.event_id
+        event_type: signature_valid.event_type
+        payment_intent_id: signature_valid.payment_intent_id
+        status: '"failed"'
+        rows_updated: update_failed.result.affected_rows
+
+  # ========================================
+  # STEP 4c: Handle payment_intent.canceled
+  # ========================================
+  - id: handle_canceled
+    type: postgres.exec
+    args:
+      query: '"UPDATE payments SET status = $1, stripe_status = $2, updated_at = NOW() WHERE stripe_payment_intent_id = $3"'
+      params:
+        - '"canceled"'
+        - signature_valid.payment_intent_status
+        - signature_valid.payment_intent_id
+
+  - id: canceled_response
+    type: assign
+    condition: handle_canceled.result != null
+    args:
+      success_response:
+        received: true
+        event_id: signature_valid.event_id
+        event_type: signature_valid.event_type
+        payment_intent_id: signature_valid.payment_intent_id
+        status: '"canceled"'
+        rows_updated: handle_canceled.result.affected_rows
+
+  # ========================================
+  # STEP 4d: Handle other events (acknowledge but ignore)
+  # ========================================
+  - id: handle_other
+    type: assign
+    args:
+      success_response:
+        received: true
+        event_id: signature_valid.event_id
+        event_type: signature_valid.event_type
+        message: '"Event type not handled"'
+
+  # ========================================
+  # STEP 5: Build final response
+  # ========================================
+  - id: final_response
+    type: assign
+    args:
+      response: >
+        signature_invalid.error_response != null ? signature_invalid.error_response :
+        succeeded_response.success_response != null ? succeeded_response.success_response :
+        failed_response.success_response != null ? failed_response.success_response :
+        canceled_response.success_response != null ? canceled_response.success_response :
+        handle_other.success_response
+
+      status_code: 'signature_invalid.error_response != null ? 400 : 200'
+
+# Return 400 for invalid signature, 200 for valid
+# Stripe will retry if we return non-2xx
+return:
+  type: http.response
+  args:
+    status: final_response.status_code
+    body: final_response.response

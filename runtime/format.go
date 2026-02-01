@@ -28,6 +28,12 @@ func FormatExpression(e string) string {
 		case ')':
 			openParentheses--
 		case '.':
+			// Don't replace dot if it's part of:
+			// - ?. (optional chaining operator)
+			// - #. (lambda element accessor in expr-lang, e.g., {#.Age > 18})
+			if i > 0 && (result[i-1] == '?' || result[i-1] == '#') {
+				continue
+			}
 			result[i] = '_'
 		case '-':
 			if openParentheses == 0 {

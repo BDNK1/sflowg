@@ -1,0 +1,109 @@
+id: checkout
+
+# Serve Stripe checkout page:
+# 1. Get payment_id from URL path
+# 2. Fetch payment record from database
+# 3. Render checkout HTML with Stripe Elements
+# 4. Return HTML page
+
+entrypoint:
+  type: http
+  config:
+    method: get
+    path: /checkout/:payment_id
+    pathVariables:
+      - payment_id
+
+steps:
+  # ========================================
+  # STEP 1: Extract payment_id from path
+  # ========================================
+  - id: extract_params
+    type: assign
+    args:
+      payment_id: request.pathVariables.payment_id
+
+  # ========================================
+  # STEP 2: Fetch payment from database
+  # ========================================
+  - id: get_payment
+    type: postgres.get
+    args:
+      query: '"SELECT id, amount, currency, stripe_client_secret, stripe_payment_intent_id, status FROM payments WHERE id = $1"'
+      params:
+        - extract_params.payment_id
+
+  # ========================================
+  # STEP 3: Check if payment exists
+  # ========================================
+  - id: check_payment
+    type: switch
+    args:
+      payment_not_found: get_payment.result.found == false
+      payment_found: get_payment.result.found == true
+
+  # ========================================
+  # STEP 3a: Handle payment not found
+  # ========================================
+  - id: payment_not_found
+    type: assign
+    args:
+      error_html: '"<html><body><h1>Payment Not Found</h1><p>Payment ID: " + string(extract_params.payment_id) + " does not exist.</p></body></html>"'
+
+  # ========================================
+  # STEP 3b: Check payment status
+  # ========================================
+  - id: payment_found
+    type: assign
+    args:
+      payment_id: get_payment.result.row.id
+      amount: get_payment.result.row.amount
+      currency: get_payment.result.row.currency
+      client_secret: get_payment.result.row.stripe_client_secret
+      status: get_payment.result.row.status
+
+  - id: check_status
+    type: switch
+    condition: payment_found.status != null
+    args:
+      already_paid: payment_found.status == "succeeded"
+      needs_payment: payment_found.status != "succeeded"
+
+  # ========================================
+  # STEP 4a: Handle already paid
+  # ========================================
+  - id: already_paid
+    type: assign
+    args:
+      success_html: '"<html><body><h1>Payment Complete</h1><p>This payment has already been processed.</p><p>Payment ID: " + string(payment_found.payment_id) + "</p></body></html>"'
+
+  # ========================================
+  # STEP 4b: Render checkout page
+  # ========================================
+  - id: needs_payment
+    type: checkout.render
+    args:
+      client_secret: payment_found.client_secret
+      payment_id: payment_found.payment_id
+      amount: payment_found.amount
+      currency: payment_found.currency
+
+  # ========================================
+  # STEP 5: Build final response
+  # ========================================
+  - id: final_response
+    type: assign
+    args:
+      html: >
+        payment_not_found.error_html != null ? payment_not_found.error_html :
+        already_paid.success_html != null ? already_paid.success_html :
+        needs_payment.result.html
+      status_code: 'payment_not_found.error_html != null ? 404 : 200'
+
+return:
+  type: http.response
+  args:
+    status: final_response.status_code
+    headers:
+      Content-Type: '"text/html; charset=utf-8"'
+    body: final_response.html

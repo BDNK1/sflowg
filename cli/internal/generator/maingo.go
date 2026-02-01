@@ -45,6 +45,7 @@ func (g *MainGoGenerator) AddPlugin(info PluginInfo) {
 func (g *MainGoGenerator) Generate() (string, error) {
 	tmpl, err := template.New("main").Funcs(template.FuncMap{
 		"capitalize": capitalize,
+		"sanitize":   sanitizeGoIdentifier,
 	}).Parse(mainGoTemplate)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse main.go template: %w", err)
@@ -82,4 +83,10 @@ func capitalize(s string) string {
 		return ""
 	}
 	return strings.ToUpper(s)
+}
+
+// sanitizeGoIdentifier converts a string to a valid Go identifier
+// Replaces hyphens and other invalid characters with underscores
+func sanitizeGoIdentifier(s string) string {
+	return strings.ReplaceAll(s, "-", "_")
 }

@@ -1,0 +1,41 @@
+name: stripe-integration
+version: "1.0.0"
+description: "Stripe payment integration example with PostgreSQL storage"
+
+runtime:
+  port: 8080
+
+properties:
+  # Stripe API configuration
+  stripe_api_url: "https://api.stripe.com/v1"
+  stripe_secret_key: ${STRIPE_SECRET_KEY}
+  stripe_webhook_secret: ${STRIPE_WEBHOOK_SECRET}
+
+  # Default currency
+  default_currency: "usd"
+
+plugins:
+  - source: http
+    config:
+      timeout: ${HTTP_TIMEOUT:30s}
+      max_retries: 0
+      debug: ${HTTP_DEBUG:false}
+
+  - source: postgres
+    config:
+      connection_string: ${DATABASE_URL:postgres://postgres:postgres@localhost:5432/stripe_payments}
+      max_open_conns: 10
+      max_idle_conns: 5
+      conn_max_lifetime_ms: 300000
+
+  - source: ./plugins/stripe-signature-verification
+    name: signature-verifier
+    config:
+      webhook_secret: ${STRIPE_WEBHOOK_SECRET}
+      tolerance_seconds: 300
+
+  - source: ./plugins/stripe-checkout
+    name: checkout
+    config:
+      stripe_publishable_key: ${STRIPE_PUBLISHABLE_KEY}
+      return_url: ${CHECKOUT_RETURN_URL:http://localhost:8080/payment-success}

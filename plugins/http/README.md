@@ -8,7 +8,7 @@ A powerful HTTP client plugin for SFlowG that provides reliable HTTP request exe
 - ✅ **Automatic Retries** - Configurable retry logic with exponential backoff
 - ✅ **Timeout Management** - Per-request timeout configuration
 - ✅ **Headers & Query Parameters** - Full support with expression evaluation
-- ✅ **Request/Response Body** - JSON body handling
+- ✅ **JSON & Form-Encoded Bodies** - JSON (default) or `application/x-www-form-urlencoded`
 - ✅ **Debug Mode** - Detailed request/response logging
 - ✅ **Tag-Based Configuration** - Zero-boilerplate setup
 
@@ -88,17 +88,19 @@ Executes an HTTP request with full control over method, headers, query parameter
 | `url` | string | ✅ | Target URL for the request |
 | `method` | string | ✅ | HTTP method (GET, POST, PUT, PATCH, DELETE, etc.) |
 | `headers` | map | ❌ | Request headers (supports expressions) |
-| `queryParameters` | map | ❌ | URL query parameters (supports expressions) |
-| `body` | map | ❌ | Request body as JSON object (supports expressions) |
+| `query_parameters` | map | ❌ | URL query parameters (supports expressions) |
+| `body` | map | ❌ | Request body (supports expressions) |
+| `content_type` | string | ❌ | Body encoding: `json` (default) or `form` |
 
 #### Returns
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | HTTP status text (e.g., "200 OK") |
-| `statusCode` | int | HTTP status code (e.g., 200) |
-| `isError` | bool | Whether the request resulted in an error |
-| `body.*` | any | Flattened response body fields |
+| `status_code` | int | HTTP status code (e.g., 200) |
+| `is_error` | bool | Whether the request resulted in an error |
+| `headers` | map | Response headers (e.g., `headers.Content-Type`) |
+| `body` | map | Response body fields |
 
 ## Usage Examples
 
@@ -106,109 +108,135 @@ Executes an HTTP request with full control over method, headers, query parameter
 
 ```yaml
 steps:
-  - id: fetch-user
+  - id: fetch_user
     type: http.request
     args:
-      url: "https://api.example.com/users/123"
-      method: "GET"
+      url: '"https://api.example.com/users/123"'
+      method: GET
 ```
 
 ### POST with JSON Body
 
 ```yaml
 steps:
-  - id: create-user
+  - id: create_user
     type: http.request
     args:
-      url: "https://api.example.com/users"
-      method: "POST"
-      headers:
-        Content-Type: "application/json"
+      url: '"https://api.example.com/users"'
+      method: POST
       body:
-        name: "John Doe"
-        email: "john@example.com"
+        name: '"John Doe"'
+        email: '"john@example.com"'
         age: 30
 ```
+
+### POST with Form-Encoded Body
+
+For APIs that require `application/x-www-form-urlencoded` (like Stripe):
+
+```yaml
+steps:
+  - id: create_payment_intent
+    type: http.request
+    args:
+      url: '"https://api.stripe.com/v1/payment_intents"'
+      method: POST
+      content_type: form
+      headers:
+        Authorization: '"Bearer " + properties.stripe_secret_key'
+      body:
+        amount: 1099
+        currency: '"usd"'
+        payment_method_types:
+          - card
+        metadata:
+          order_id: extract_data.order_id
+```
+
+Nested objects use bracket notation: `metadata[order_id]=value`
 
 ### Using Expressions
 
 ```yaml
 steps:
-  - id: api-call
+  - id: api_call
     type: http.request
     args:
-      url: "https://api.example.com/users/${request.body.userId}"
-      method: "GET"
+      url: '"https://api.example.com/users/" + request.body.user_id'
+      method: GET
       headers:
-        Authorization: "Bearer ${properties.apiToken}"
-        X-Request-ID: "${execution.id}"
+        Authorization: '"Bearer " + properties.api_token'
+        X-Request-ID: execution.id
 ```
 
 ### With Query Parameters
 
 ```yaml
 steps:
-  - id: search-users
+  - id: search_users
     type: http.request
     args:
-      url: "https://api.example.com/users"
-      method: "GET"
-      queryParameters:
-        page: "1"
-        limit: "10"
-        search: "${request.query.q}"
-        sort: "created_at"
+      url: '"https://api.example.com/users"'
+      method: GET
+      query_parameters:
+        page: '"1"'
+        limit: '"10"'
+        search: request.query.q
+        sort: '"created_at"'
 ```
 
 ### Complete Example with All Features
 
 ```yaml
 steps:
-  - id: complex-request
+  - id: create_order
     type: http.request
     args:
-      url: "https://api.example.com/orders"
-      method: "POST"
+      url: '"https://api.example.com/orders"'
+      method: POST
       headers:
-        Content-Type: "application/json"
-        Authorization: "Bearer ${properties.apiKey}"
-        X-Idempotency-Key: "${execution.id}"
-      queryParameters:
-        notify: "true"
-        async: "false"
+        Content-Type: '"application/json"'
+        Authorization: '"Bearer " + properties.api_key'
+        X-Idempotency-Key: execution.id
+      query_parameters:
+        notify: '"true"'
+        async: '"false"'
       body:
-        customer_id: "${fetch_user_result.body.id}"
+        customer_id: fetch_user.result.body.id
         items:
-          - product_id: "123"
+          - product_id: '"123"'
             quantity: 2
-          - product_id: "456"
+          - product_id: '"456"'
             quantity: 1
-        total: "${calculate_total_result.amount}"
+        total: calculate_total.result.amount
 ```
 
 ### Accessing Response Data
 
 ```yaml
 steps:
-  - id: get-user
+  - id: get_user
     type: http.request
     args:
-      url: "https://api.example.com/users/123"
-      method: "GET"
+      url: '"https://api.example.com/users/123"'
+      method: GET
 
-  - id: use-response
-    type: some.task
+  - id: use_response
+    type: assign
     args:
       # Access status code
-      statusCode: "${get_user_result.statusCode}"
+      status_code: get_user.result.status_code
 
-      # Access response body fields (flattened with body. prefix)
-      userId: "${get_user_result.body.id}"
-      userName: "${get_user_result.body.name}"
-      userEmail: "${get_user_result.body.email}"
+      # Access response headers
+      content_type: get_user.result.headers.Content-Type
+      request_id: get_user.result.headers.X-Request-Id
+
+      # Access response body fields
+      user_id: get_user.result.body.id
+      user_name: get_user.result.body.name
 
       # Check if request was successful
-      wasSuccessful: "${!get_user_result.isError}"
+      was_successful: get_user.result.is_error == false
 ```
 
 ## Error Handling
@@ -217,48 +245,25 @@ The HTTP plugin handles errors at multiple levels:
 
 ### Request Failures
 
-If a request fails (network error, timeout, etc.), the task returns an error:
-
-```yaml
-steps:
-  - id: api-call
-    type: http.request
-    args:
-      url: "https://api.example.com/users"
-      method: "GET"
-    onError:
-      - id: handle-error
-        type: logging.error
-        args:
-          message: "API call failed: ${error.message}"
-```
+If a request fails (network error, timeout, etc.), the task returns an error that can be handled with retry configuration.
 
 ### HTTP Error Status Codes
 
-HTTP error responses (4xx, 5xx) are returned as regular responses with `isError: true`:
+HTTP error responses (4xx, 5xx) are returned as regular responses with `is_error: true`:
 
 ```yaml
 steps:
-  - id: api-call
+  - id: api_call
     type: http.request
     args:
-      url: "https://api.example.com/users/999"
-      method: "GET"
+      url: '"https://api.example.com/users/999"'
+      method: GET
 
-  - id: check-status
+  - id: check_status
     type: switch
-    condition: "${api_call_result.isError}"
-    cases:
-      true:
-        - id: handle-404
-          type: logging.warn
-          args:
-            message: "User not found: ${api_call_result.statusCode}"
-      false:
-        - id: process-user
-          type: users.process
-          args:
-            user: "${api_call_result.body}"
+    args:
+      handle_error: api_call.result.is_error == true
+      process_user: api_call.result.is_error == false
 ```
 
 ### Automatic Retries
@@ -275,46 +280,46 @@ The plugin automatically retries failed requests based on configuration:
 
 ```yaml
 properties:
-  baseUrl: "https://api.example.com"
+  base_url: "https://api.example.com"
 
 steps:
-  - id: dynamic-request
+  - id: dynamic_request
     type: http.request
     args:
-      url: "${properties.baseUrl}/users/${request.params.id}"
-      method: "GET"
+      url: properties.base_url + "/users/" + request.params.id
+      method: GET
 ```
 
 ### Conditional Headers
 
 ```yaml
 steps:
-  - id: authenticated-request
+  - id: authenticated_request
     type: http.request
     args:
-      url: "https://api.example.com/protected"
-      method: "GET"
+      url: '"https://api.example.com/protected"'
+      method: GET
       headers:
-        Authorization: "${auth_result.token ? 'Bearer ' + auth_result.token : ''}"
+        Authorization: 'auth.result.token != "" ? "Bearer " + auth.result.token : ""'
 ```
 
 ### Response Transformation
 
 ```yaml
 steps:
-  - id: fetch-data
+  - id: fetch_data
     type: http.request
     args:
-      url: "https://api.example.com/data"
-      method: "GET"
+      url: '"https://api.example.com/data"'
+      method: GET
 
-  - id: transform-response
+  - id: transform_response
     type: assign
     args:
-      formattedData:
-        id: "${fetch_data_result.body.id}"
-        name: "${fetch_data_result.body.attributes.name}"
-        status: "${fetch_data_result.statusCode}"
+      formatted_data:
+        id: fetch_data.result.body.id
+        name: fetch_data.result.body.attributes.name
+        status_code: fetch_data.result.status_code
 ```
 
 ## Debugging
@@ -347,8 +352,8 @@ Debug output includes:
    - Adjust retry wait time based on expected recovery time
 
 3. **Handle Errors Explicitly**
-   - Always check `isError` in response
-   - Use `onError` handlers for request failures
+   - Always check `is_error` in response
+   - Use switch or condition to handle error cases
    - Log error responses for debugging
 
 4. **Use Expressions Wisely**

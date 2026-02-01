@@ -1,56 +1,5 @@
 package plugin
 
-import "github.com/sflowg/sflowg/runtime"
-
-// TaskError is a type alias to runtime.TaskError.
-// This allows plugins to import only the plugin package while the type is defined in runtime.
-//
-// TaskError wraps task execution errors with metadata for retry hints, error categorization,
-// execution metrics, and warnings.
-//
-// # Basic Usage
-//
-//	func (p *MyPlugin) Charge(exec *Execution, args Input) (Output, error) {
-//	    resp, err := p.http.Request(...)
-//	    if err != nil {
-//	        // Network error - retryable
-//	        return nil, plugin.NewTaskError(err).
-//	            WithRetryHint(true, "5s").
-//	            WithType("transient")
-//	    }
-//
-//	    if resp.StatusCode == 402 {
-//	        // Insufficient funds - not retryable
-//	        return nil, plugin.NewTaskError(
-//	            errors.New("insufficient funds"),
-//	        ).WithMetadata("retryable", false)
-//	    }
-//
-//	    return output, nil
-//	}
-//
-// # Metadata Keys
-//
-//	Metadata["retryable"] = bool      // Whether error can be retried
-//	Metadata["retry_after"] = string  // Duration to wait before retry (e.g., "5s")
-//	Metadata["type"] = string         // Error category: "transient", "permanent", "user_error"
-//	Metadata[custom_key] = any        // Custom metadata for logging/monitoring
-//
-// # Helper Methods
-//
-//	.WithRetryHint(retryable, retryAfter) - Set retry metadata
-//	.WithType(errorType)                   - Set error category
-//	.WithMetadata(key, value)              - Add single metadata entry
-//	.WithMetadataMap(map)                  - Add multiple metadata entries
-//	.IsRetryable()                         - Check if error can be retried
-//	.GetRetryAfter()                       - Get retry delay
-//	.GetType()                             - Get error category
-type TaskError = runtime.TaskError
-
-// NewTaskError creates a new TaskError with the given underlying error.
-// This is a convenience function that delegates to runtime.NewTaskError.
-var NewTaskError = runtime.NewTaskError
-
 // Input is the type alias for map-based task input arguments.
 //
 // Plugin developers can use either the explicit type `plugin.Input`
