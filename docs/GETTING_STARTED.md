@@ -10,7 +10,7 @@ Build your first SFlowG service in 5 minutes.
 ## Step 1: Install the CLI
 
 ```bash
-go install github.com/sflowg/sflowg/cli@latest
+go install github.com/BDNK1/sflowg/cli@latest
 ```
 
 Verify installation:

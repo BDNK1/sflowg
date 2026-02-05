@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"html/template"
 
-	"github.com/sflowg/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/runtime/plugin"
 )
 
 // Config holds checkout plugin configuration
@@ -23,6 +23,20 @@ type RenderInput struct {
 
 // RenderOutput defines output for checkout.render task
 type RenderOutput struct {
+	HTML string `json:"html"`
+}
+
+// RenderSuccessInput defines input for checkout.renderSuccess task
+type RenderSuccessInput struct {
+	PaymentID      int64  `json:"payment_id" validate:"required"`
+	Amount         int64  `json:"amount" validate:"required"`
+	Currency       string `json:"currency" validate:"required"`
+	RedirectStatus string `json:"redirect_status"`
+	PaymentIntent  string `json:"payment_intent"`
+}
+
+// RenderSuccessOutput defines output for checkout.renderSuccess task
+type RenderSuccessOutput struct {
 	HTML string `json:"html"`
 }
 
@@ -71,6 +85,33 @@ func (p *CheckoutPlugin) Render(exec *plugin.Execution, input RenderInput) (Rend
 	}
 
 	return RenderOutput{HTML: string(writer.buf)}, nil
+}
+
+// RenderSuccess generates an HTML success page after payment completion
+func (p *CheckoutPlugin) RenderSuccess(exec *plugin.Execution, input RenderSuccessInput) (RenderSuccessOutput, error) {
+	tmpl := template.Must(template.New("success").Parse(successTemplate))
+
+	data := struct {
+		PaymentID      int64
+		Amount         float64
+		Currency       string
+		RedirectStatus string
+		PaymentIntent  string
+	}{
+		PaymentID:      input.PaymentID,
+		Amount:         float64(input.Amount) / 100.0, // Convert cents to dollars
+		Currency:       input.Currency,
+		RedirectStatus: input.RedirectStatus,
+		PaymentIntent:  input.PaymentIntent,
+	}
+
+	var buf []byte
+	writer := &bytesWriter{buf: buf}
+	if err := tmpl.Execute(writer, data); err != nil {
+		return RenderSuccessOutput{}, fmt.Errorf("checkout: failed to render success template: %w", err)
+	}
+
+	return RenderSuccessOutput{HTML: string(writer.buf)}, nil
 }
 
 // bytesWriter implements io.Writer for []byte
@@ -199,8 +240,8 @@ const checkoutTemplate = `<!DOCTYPE html>
 
         <form id="payment-form">
             <div id="payment-element"></div>
-            <button type="submit" id="submit-button">
-                <span>Pay Now</span>
+            <button id="submit-button" type="submit">
+                <span>Pay ${{printf "%.2f" .Amount}}</span>
                 <div class="spinner"></div>
             </button>
             <div id="error-message"></div>
@@ -240,7 +281,7 @@ const checkoutTemplate = `<!DOCTYPE html>
             const {error} = await stripe.confirmPayment({
                 elements,
                 confirmParams: {
-                    return_url: '{{.ReturnURL}}?payment_id={{.PaymentID}}',
+                    return_url: '{{.ReturnURL}}{{.PaymentID}}',
                 },
             });
 
@@ -253,5 +294,129 @@ const checkoutTemplate = `<!DOCTYPE html>
             }
         });
     </script>
+</body>
+</html>`
+
+const successTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Successful</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 500px;
+            width: 100%;
+            padding: 40px;
+            text-align: center;
+        }
+        .success-icon {
+            width: 80px;
+            height: 80px;
+            background: #48bb78;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+            font-size: 48px;
+            color: white;
+        }
+        h1 {
+            color: #1a202c;
+            font-size: 28px;
+            margin-bottom: 12px;
+        }
+        .subtitle {
+            color: #4a5568;
+            font-size: 16px;
+            margin-bottom: 32px;
+        }
+        .details {
+            background: #f7fafc;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 32px;
+            text-align: left;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        .label {
+            font-weight: 600;
+            color: #4a5568;
+        }
+        .value {
+            color: #1a202c;
+            font-weight: 500;
+        }
+        .amount {
+            color: #667eea;
+            font-size: 20px;
+            font-weight: bold;
+        }
+        .btn {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            padding: 14px 32px;
+            border-radius: 6px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        .btn:hover {
+            background: #5568d3;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="success-icon">✓</div>
+        <h1>Payment Successful!</h1>
+        <p class="subtitle">Thank you for your payment. Your transaction has been completed.</p>
+
+        <div class="details">
+            <div class="detail-row">
+                <span class="label">Payment ID</span>
+                <span class="value">#{{.PaymentID}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">Amount</span>
+                <span class="value amount">{{.Currency}} ${{printf "%.2f" .Amount}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">Status</span>
+                <span class="value">{{.RedirectStatus}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="label">Payment Intent</span>
+                <span class="value">{{.PaymentIntent}}</span>
+            </div>
+        </div>
+
+        <a href="/" class="btn">Return to Home</a>
+    </div>
 </body>
 </html>`

@@ -7,7 +7,7 @@ PostgreSQL database plugin for SFlowG.
 ```yaml
 # flow-config.yaml
 plugins:
-  - source: github.com/sflowg/sflowg/plugins/postgres
+  - source: github.com/BDNK1/sflowg/plugins/postgres
     config:
       connection_string: ${DATABASE_URL}
       max_open_conns: 10

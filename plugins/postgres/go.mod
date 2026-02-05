@@ -1,10 +1,10 @@
-module github.com/sflowg/sflowg/plugins/postgres
+module github.com/BDNK1/sflowg/plugins/postgres
 
 go 1.24.1
 
 require (
 	github.com/lib/pq v1.10.9
-	github.com/sflowg/sflowg/runtime v0.0.0
+	github.com/BDNK1/sflowg/runtime v0.1.3
 )
 
 require (
@@ -41,5 +41,3 @@ require (
 	google.golang.org/protobuf v1.34.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/sflowg/sflowg/runtime => ../../runtime

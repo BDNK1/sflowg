@@ -8,11 +8,11 @@
 //
 // Plugin developers should ONLY import:
 //
-//	import "github.com/sflowg/sflowg/runtime/plugin"
+//	import "github.com/BDNK1/sflowg/runtime/plugin"
 //
 // NEVER import:
 //
-//	import "github.com/sflowg/sflowg/runtime"  // ❌ Too much access to internals
+//	import "github.com/BDNK1/sflowg/runtime"  // ❌ Too much access to internals
 //
 // # Plugin Structure
 //
@@ -92,7 +92,7 @@
 //	import (
 //	    "context"
 //	    "net/smtp"
-//	    "github.com/sflowg/sflowg/runtime/plugin"
+//	    "github.com/BDNK1/sflowg/runtime/plugin"
 //	)
 //
 //	type Config struct {

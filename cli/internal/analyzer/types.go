@@ -6,7 +6,7 @@ type PluginMetadata struct {
 	// Name is the instance name of the plugin (from flow-config.yaml)
 	Name string
 
-	// ImportPath is the Go import path (e.g., "github.com/sflowg/sflowg/plugins/http")
+	// ImportPath is the Go import path (e.g., "github.com/BDNK1/sflowg/plugins/http")
 	ImportPath string
 
 	// TypeName is the plugin struct type name (e.g., "HTTPPlugin")

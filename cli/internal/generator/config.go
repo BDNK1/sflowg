@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sflowg/sflowg/cli/internal/analyzer"
-	"github.com/sflowg/sflowg/cli/internal/config"
+	"github.com/BDNK1/sflowg/cli/internal/analyzer"
+	"github.com/BDNK1/sflowg/cli/internal/config"
 )
 
 // ConfigGenData contains all data needed to generate config initialization code

@@ -1,6 +1,6 @@
 package plugin
 
-import "github.com/sflowg/sflowg/runtime"
+import "github.com/BDNK1/sflowg/runtime"
 
 // Execution is the runtime context passed to every plugin task method.
 // It implements context.Context and provides access to flow state and the container.

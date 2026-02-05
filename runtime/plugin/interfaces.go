@@ -1,7 +1,7 @@
 package plugin
 
 import (
-	"github.com/sflowg/sflowg/runtime"
+	"github.com/BDNK1/sflowg/runtime"
 )
 
 // Initializer is a type alias to runtime.Initializer.

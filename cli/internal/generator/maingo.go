@@ -8,7 +8,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/sflowg/sflowg/cli/internal/constants"
+	"github.com/BDNK1/sflowg/cli/internal/constants"
 )
 
 // MainGoGenerator generates main.go files for builds

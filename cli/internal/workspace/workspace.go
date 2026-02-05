@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/google/uuid"
-	"github.com/sflowg/sflowg/cli/internal/security"
+	"github.com/BDNK1/sflowg/cli/internal/security"
 )
 
 // Workspace represents a temporary build workspace

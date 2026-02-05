@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/sflowg/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/runtime/plugin"
 )
 
 // Config holds the HTTP plugin configuration with declarative tags

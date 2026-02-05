@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sflowg/sflowg/cli/internal/security"
+	"github.com/BDNK1/sflowg/cli/internal/security"
 	"gopkg.in/yaml.v3"
 )
 
@@ -20,7 +20,8 @@ type FlowConfig struct {
 
 // RuntimeConfig represents runtime configuration
 type RuntimeConfig struct {
-	Port string `yaml:"port"` // Optional: HTTP server port, defaults to "8080"
+	Port    string `yaml:"port"`              // Optional: HTTP server port, defaults to "8080"
+	Version string `yaml:"version,omitempty"` // Optional: runtime module version, defaults to "latest"
 }
 
 // PluginConfig represents a single plugin configuration
@@ -115,6 +116,9 @@ func (c *FlowConfig) ApplyDefaults(projectDir string) {
 	// Default runtime configuration
 	if c.Runtime.Port == "" {
 		c.Runtime.Port = "8080"
+	}
+	if c.Runtime.Version == "" {
+		c.Runtime.Version = "latest"
 	}
 
 	// Apply defaults to each plugin

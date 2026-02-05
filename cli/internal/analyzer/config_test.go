@@ -11,7 +11,7 @@ func TestConfigAnalysis_SimpleFields(t *testing.T) {
 
 	pluginCode := `package testplugin
 
-import "github.com/sflowg/sflowg/runtime/plugin"
+import "github.com/BDNK1/sflowg/runtime/plugin"
 
 type Config struct {
 	Host string
@@ -73,7 +73,7 @@ func TestConfigAnalysis_WithTags(t *testing.T) {
 
 import (
 	"time"
-	"github.com/sflowg/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/runtime/plugin"
 )
 
 type Config struct {
@@ -175,7 +175,7 @@ func TestConfigAnalysis_NoConfig(t *testing.T) {
 
 	pluginCode := `package math
 
-import "github.com/sflowg/sflowg/runtime/plugin"
+import "github.com/BDNK1/sflowg/runtime/plugin"
 
 type MathPlugin struct{}
 
@@ -208,7 +208,7 @@ func TestConfigAnalysis_EmptyConfig(t *testing.T) {
 
 	pluginCode := `package test
 
-import "github.com/sflowg/sflowg/runtime/plugin"
+import "github.com/BDNK1/sflowg/runtime/plugin"
 
 type Config struct{}
 
@@ -252,7 +252,7 @@ func TestConfigAnalysis_ComplexTypes(t *testing.T) {
 import (
 	"time"
 	"net/url"
-	"github.com/sflowg/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/runtime/plugin"
 )
 
 type Config struct {
@@ -320,7 +320,7 @@ func TestConfigAnalysis_YAMLTagWithOptions(t *testing.T) {
 
 	pluginCode := `package test
 
-import "github.com/sflowg/sflowg/runtime/plugin"
+import "github.com/BDNK1/sflowg/runtime/plugin"
 
 type Config struct {
 	Name     string ` + "`yaml:\"name,omitempty\"`" + `

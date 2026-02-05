@@ -17,7 +17,7 @@ A powerful HTTP client plugin for SFlowG that provides reliable HTTP request exe
 ```yaml
 # flow-config.yaml
 plugins:
-  - source: github.com/sflowg/sflowg/plugins/http
+  - source: github.com/BDNK1/sflowg/plugins/http
     config:
       timeout: 30s
       max_retries: 3
@@ -43,13 +43,13 @@ The HTTP plugin uses declarative configuration tags. All fields have sensible de
 **Minimal (use all defaults):**
 ```yaml
 plugins:
-  - source: github.com/sflowg/sflowg/plugins/http
+  - source: github.com/BDNK1/sflowg/plugins/http
 ```
 
 **Custom timeouts:**
 ```yaml
 plugins:
-  - source: github.com/sflowg/sflowg/plugins/http
+  - source: github.com/BDNK1/sflowg/plugins/http
     config:
       timeout: 60s
       max_retries: 5
@@ -59,7 +59,7 @@ plugins:
 **Debug mode:**
 ```yaml
 plugins:
-  - source: github.com/sflowg/sflowg/plugins/http
+  - source: github.com/BDNK1/sflowg/plugins/http
     config:
       debug: true
       timeout: 10s
@@ -68,7 +68,7 @@ plugins:
 **Environment variable overrides:**
 ```yaml
 plugins:
-  - source: github.com/sflowg/sflowg/plugins/http
+  - source: github.com/BDNK1/sflowg/plugins/http
     config:
       timeout: ${HTTP_TIMEOUT:-30s}
       max_retries: ${HTTP_MAX_RETRIES:-3}
@@ -328,7 +328,7 @@ Enable debug mode to see detailed request/response information:
 
 ```yaml
 plugins:
-  - source: github.com/sflowg/sflowg/plugins/http
+  - source: github.com/BDNK1/sflowg/plugins/http
     config:
       debug: true
 ```

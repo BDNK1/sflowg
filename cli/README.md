@@ -38,7 +38,7 @@ cli/
 ### Plugin Detection (`detector/`)
 
 ```
-"http"                    → Core   → github.com/sflowg/sflowg/plugins/http
+"http"                    → Core   → github.com/BDNK1/sflowg/plugins/http
 "./plugins/custom"        → Local  → synthetic import path + replace directive
 "github.com/user/plugin"  → Remote → as-is
 ```
