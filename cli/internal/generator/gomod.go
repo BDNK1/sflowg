@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sflowg/sflowg/cli/internal/config"
-	"github.com/sflowg/sflowg/cli/internal/constants"
+	"github.com/BDNK1/sflowg/cli/internal/config"
+	"github.com/BDNK1/sflowg/cli/internal/constants"
 )
 
 // GoVersion is the minimum required Go version for generated applications
@@ -72,7 +72,7 @@ func (g *GoModGenerator) Generate() string {
 	// Runtime dependency
 	runtimeVersion := g.RuntimeVersion
 	if runtimeVersion == "" || runtimeVersion == "latest" {
-		runtimeVersion = "v0.0.0" // Will be replaced by replace directive
+		runtimeVersion = "v0.1.1" // Default published baseline for generated builds
 	}
 	sb.WriteString(fmt.Sprintf("\t%s %s\n", constants.RuntimeModulePath, runtimeVersion))
 
@@ -80,7 +80,7 @@ func (g *GoModGenerator) Generate() string {
 	for _, plugin := range g.Plugins {
 		version := plugin.Version
 		if version == "" || version == "latest" {
-			version = "v0.0.0" // Will be replaced by replace directive or go mod tidy
+			version = "v0.1.1" // Default published baseline for generated builds
 		}
 		sb.WriteString(fmt.Sprintf("\t%s %s\n", plugin.ModulePath, version))
 	}

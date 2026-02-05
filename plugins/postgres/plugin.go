@@ -6,7 +6,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/sflowg/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/runtime/plugin"
 )
 
 // Config holds the Postgres plugin configuration

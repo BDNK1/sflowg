@@ -20,7 +20,7 @@ steps: # Required: processing steps
     args: { ... }
 
 return: # Required: response configuration
-  type: json
+  type: http.json
   args: { ... }
 ```
 
@@ -63,11 +63,9 @@ entrypoint:
 ```yaml
 # Path variables
 request.pathVariables.orderId
-request.params.orderId          # Alias
 
 # Query parameters
 request.queryParameters.limit
-request.query.limit             # Alias
 
 # Headers
 request.headers.Authorization
@@ -91,12 +89,17 @@ properties:
   maxRetries: 3
   taxRate: 0.15
 
-  # From global properties (flow-config.yaml)
-  apiUrl: properties.serviceUrl
+  # Environment variable (required — panics if not set)
+  apiKey: ${API_KEY}
 
-  # Can use expressions
-  timeout: 30
+  # Environment variable with default value
+  apiUrl: ${API_URL:http://localhost:3000}
+
+  # Plain string (no env var substitution)
+  region: us-east-1
 ```
+
+Properties support `${VAR}` and `${VAR:default}` syntax for environment variable substitution. Non-string values (numbers, booleans) are used as-is.
 
 Access in steps: `properties.maxRetries`
 
@@ -240,39 +243,28 @@ Retry failed steps:
 
 ## Return
 
-Defines the response sent back to the client.
+Defines the response sent back to the client. Built-in response types are `http.json`, `http.html`, and `http.redirect`. Plugins can register additional response types.
 
-### JSON Response
-
-```yaml
-return:
-  type: json
-  args:
-    field: expression
-    nested:
-      data: step.result
-```
-
-### HTTP Response (Full Control)
+### JSON Response (`http.json`)
 
 ```yaml
 return:
-  type: http.response
+  type: http.json
   args:
-    status: 200                    # HTTP status code (can be expression)
-    headers:
+    status: 200                    # Optional, defaults to 200
+    headers:                       # Optional
       X-Request-ID: requestId
-      Content-Type: '"application/json"'
     body:
-      success: true
-      data: result
+      field: expression
+      nested:
+        data: step.result
 ```
 
 **Dynamic status codes:**
 
 ```yaml
 return:
-  type: http.response
+  type: http.json
   args:
     status: 'success ? 200 : 400'
     body:
@@ -280,9 +272,49 @@ return:
       message: message
 ```
 
+### HTML Response (`http.html`)
+
+```yaml
+return:
+  type: http.html
+  args:
+    status: 200                    # Optional, defaults to 200
+    headers:                       # Optional
+      Cache-Control: '"no-cache"'
+    body: htmlContent              # Must be a string expression
+```
+
+### Redirect (`http.redirect`)
+
+```yaml
+return:
+  type: http.redirect
+  args:
+    status: 301                    # Optional, defaults to 302. Must be 3xx
+    location: redirectUrl          # Required: URL to redirect to
+```
+
 ## Expression Syntax
 
 SFlowG uses [expr-lang](https://expr-lang.org/) for expressions.
+
+### Core Rule: YAML Strings vs Literals
+
+YAML string values are evaluated as expressions. Non-string values (numbers, booleans) are treated as literals.
+
+```yaml
+args:
+  # String → evaluated as expression
+  total: price * quantity          # expression
+  name: '"Alice"'                  # string literal (quoted inside quotes)
+
+  # Non-string → literal value
+  count: 42                        # integer literal
+  enabled: true                    # boolean literal
+  rate: 0.15                       # float literal
+```
+
+Undefined variables in expressions evaluate to `nil` (not an error).
 
 ### Data Types
 
@@ -348,26 +380,54 @@ status: >
   "unknown"
 ```
 
+**Null coalescing (`??`):**
+
+```yaml
+# Returns left side if non-nil, otherwise right side
+name: 'user.name ?? "Anonymous"'
+config: 'override ?? defaults'
+```
+
+**Optional chaining (`?.`):**
+
+```yaml
+# Safely access nested properties — returns nil if any part is nil
+city: 'user?.address?.city'
+email: 'response?.data?.email ?? "unknown"'
+```
+
+**Checking if a variable is defined:**
+
+```yaml
+# defined() returns true if the variable exists (even if nil)
+condition: 'defined(user) && user.active'
+```
+
 ### Accessing Data
 
 ```yaml
-# Step results
-  stepId.fieldName
-    stepId.nested.field
-    stepId.result.data
+# Assign step results
+stepId.fieldName
+stepId.nested.field
 
-  # Request data
-    request.body.field
-    request.pathVariables.id
-    request.queryParameters.page
-    request.headers.Authorization
+# Task (plugin) results — stored under .result
+stepId.result.statusCode
+stepId.result.body.id
+stepId.result.nested.field
 
-  # Properties
-    properties.apiUrl
-    properties.maxRetries
+# Request data
+request.body.field
+request.pathVariables.id
+request.queryParameters.page
+request.headers.Authorization
 
-  # Null-safe access
-    'value != null ? value.field : "default"'
+# Properties
+properties.apiUrl
+properties.maxRetries
+
+# Null-safe access
+'user?.address?.city ?? "unknown"'
+'value != null ? value.field : "default"'
 ```
 
 ### Built-in Functions
@@ -458,7 +518,7 @@ steps:
       orderId: process_order.result.body.id
 
 return:
-  type: http.response
+  type: http.json
   args:
     status: 'build_response.success ? 201 : 400'
     body:

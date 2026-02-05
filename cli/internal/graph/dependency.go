@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sflowg/sflowg/cli/internal/analyzer"
+	"github.com/BDNK1/sflowg/cli/internal/analyzer"
 )
 
 // Graph represents a dependency graph between plugins

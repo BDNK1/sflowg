@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/sflowg/sflowg/cli/internal/security"
+	"github.com/BDNK1/sflowg/cli/internal/security"
 	"gopkg.in/yaml.v3"
 )
 

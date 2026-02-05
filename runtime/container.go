@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
@@ -18,6 +19,7 @@ const (
 
 type Container struct {
 	Tasks              map[string]Task
+	ResponseHandlers   *ResponseHandlerRegistry
 	plugins            map[string]any   // Plugin instances (name -> plugin)
 	pluginsByInterface map[string][]any // Interface name -> plugins implementing that interface
 }
@@ -25,6 +27,7 @@ type Container struct {
 func NewContainer() *Container {
 	return &Container{
 		Tasks:              make(map[string]Task),
+		ResponseHandlers:   NewResponseHandlerRegistry(),
 		plugins:            make(map[string]any),
 		pluginsByInterface: make(map[string][]any),
 	}
@@ -54,7 +57,7 @@ func (c *Container) RegisterPlugin(pluginName string, plugin any) error {
 	// Detect and register plugin interfaces (do this once during registration)
 	c.detectPluginInterfaces(plugin)
 
-	// Discover and register all tasks from plugin methods
+	// Discover and register all tasks and response handlers from plugin methods
 	pluginType := reflect.TypeOf(plugin)
 	pluginValue := reflect.ValueOf(plugin)
 
@@ -68,18 +71,30 @@ func (c *Container) RegisterPlugin(pluginName string, plugin any) error {
 
 		// Check if method has valid task signature:
 		// func (p *Plugin) TaskName(exec *Execution, args map[string]any) (map[string]any, error)
-		if !isValidTaskSignature(method.Type) {
+		if isValidTaskSignature(method.Type) {
+			// Create task name: plugin_name.method_name (lowercase)
+			taskName := fmt.Sprintf("%s.%s", pluginName, toLowerFirst(method.Name))
+
+			// Create task executor wrapper
+			taskExecutor := createTaskExecutor(pluginValue, method)
+
+			// Register task
+			c.Tasks[taskName] = taskExecutor
 			continue
 		}
 
-		// Create task name: plugin_name.method_name (lowercase)
-		taskName := fmt.Sprintf("%s.%s", pluginName, toLowerFirst(method.Name))
+		// Check if method has valid response handler signature:
+		// func (p *Plugin) HandlerName(c *gin.Context, exec *Execution, args map[string]any) error
+		if isValidResponseHandlerSignature(method.Type) {
+			// Create handler name: plugin_name.method_name (lowercase)
+			handlerName := fmt.Sprintf("%s.%s", pluginName, toLowerFirst(method.Name))
 
-		// Create task executor wrapper
-		taskExecutor := createTaskExecutor(pluginValue, method)
+			// Create response handler wrapper
+			handler := createResponseHandlerWrapper(pluginValue, method)
 
-		// Register task
-		c.Tasks[taskName] = taskExecutor
+			// Register response handler
+			c.ResponseHandlers.Register(handlerName, handler)
+		}
 	}
 
 	return nil
@@ -332,4 +347,75 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 	}
 
 	return resultMap, err
+}
+
+// isValidResponseHandlerSignature checks if method has valid response handler signature
+// Valid signature: func(c *gin.Context, exec *Execution, args map[string]any) error
+func isValidResponseHandlerSignature(methodType reflect.Type) bool {
+	// Must have 4 inputs: receiver, *gin.Context, *Execution, map[string]any
+	if methodType.NumIn() != 4 {
+		return false
+	}
+
+	// Must have 1 output: error
+	if methodType.NumOut() != 1 {
+		return false
+	}
+
+	// Check first param is *gin.Context
+	ginContextPtrType := reflect.TypeOf((*gin.Context)(nil))
+	if methodType.In(1) != ginContextPtrType {
+		return false
+	}
+
+	// Check second param is *Execution
+	executionPtrType := reflect.TypeOf((*Execution)(nil))
+	if methodType.In(2) != executionPtrType {
+		return false
+	}
+
+	// Check third param is map[string]any
+	mapType := reflect.TypeOf(map[string]any(nil))
+	if methodType.In(3) != mapType {
+		return false
+	}
+
+	// Check return is error
+	errorType := reflect.TypeOf((*error)(nil)).Elem()
+	if methodType.Out(0) != errorType {
+		return false
+	}
+
+	return true
+}
+
+// pluginResponseHandlerWrapper wraps a plugin method to implement ResponseHandler interface
+type pluginResponseHandlerWrapper struct {
+	plugin reflect.Value
+	method reflect.Method
+}
+
+func (w *pluginResponseHandlerWrapper) Handle(c *gin.Context, exec *Execution, args map[string]any) error {
+	// Call plugin method using reflection
+	results := w.method.Func.Call([]reflect.Value{
+		w.plugin,
+		reflect.ValueOf(c),
+		reflect.ValueOf(exec),
+		reflect.ValueOf(args),
+	})
+
+	// Extract error (only return value)
+	if !results[0].IsNil() {
+		return results[0].Interface().(error)
+	}
+
+	return nil
+}
+
+// createResponseHandlerWrapper creates a ResponseHandler wrapper for a plugin method
+func createResponseHandlerWrapper(pluginValue reflect.Value, method reflect.Method) ResponseHandler {
+	return &pluginResponseHandlerWrapper{
+		plugin: pluginValue,
+		method: method,
+	}
 }

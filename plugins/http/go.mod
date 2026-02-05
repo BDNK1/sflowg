@@ -1,10 +1,10 @@
-module github.com/sflowg/sflowg/plugins/http
+module github.com/BDNK1/sflowg/plugins/http
 
 go 1.24.0
 
 require (
 	github.com/go-resty/resty/v2 v2.16.5
-	github.com/sflowg/sflowg/runtime v0.0.0
+	github.com/BDNK1/sflowg/runtime v0.1.1
 )
 
 require (
@@ -41,5 +41,3 @@ require (
 	google.golang.org/protobuf v1.34.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/sflowg/sflowg/runtime => ../../runtime

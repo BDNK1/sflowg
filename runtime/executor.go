@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -138,7 +139,12 @@ func (e *Executor) evaluateValue(execution *Execution, stepID string, path strin
 }
 
 func (e *Executor) handleSwitch(execution *Execution, step Step, nextStep *string) error {
-	for n, c := range step.Args {
+	// Evaluate branches in the order their target steps appear in the flow,
+	// so that catch-all/default branches defined last are evaluated last.
+	orderedBranches := e.orderSwitchBranches(execution, step)
+
+	for _, n := range orderedBranches {
+		c := step.Args[n]
 		condition, ok := c.(string)
 		if !ok {
 			return fmt.Errorf("switch condition must be a string expression, got %T", c)
@@ -166,6 +172,33 @@ func (e *Executor) handleSwitch(execution *Execution, step Step, nextStep *strin
 		e.l.InfoContext(execution, fmt.Sprintf("Resolving switch: %s is false", condition))
 	}
 	return nil
+}
+
+// orderSwitchBranches returns switch branch names ordered by the position of
+// their target steps in the flow. Branches whose names don't match any step ID
+// are appended at the end in alphabetical order.
+func (e *Executor) orderSwitchBranches(execution *Execution, step Step) []string {
+	stepOrder := make(map[string]int, len(execution.Flow.Steps))
+	for i, s := range execution.Flow.Steps {
+		stepOrder[s.ID] = i
+	}
+
+	matched := make([]string, 0, len(step.Args))
+	unmatched := make([]string, 0)
+	for name := range step.Args {
+		if _, ok := stepOrder[name]; ok {
+			matched = append(matched, name)
+		} else {
+			unmatched = append(unmatched, name)
+		}
+	}
+
+	sort.Strings(unmatched)
+	sort.Slice(matched, func(i, j int) bool {
+		return stepOrder[matched[i]] < stepOrder[matched[j]]
+	})
+
+	return append(matched, unmatched...)
 }
 
 func (e *Executor) handleTask(execution *Execution, step Step) error {

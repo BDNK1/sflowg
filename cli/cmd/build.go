@@ -1,16 +1,19 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
-	"github.com/sflowg/sflowg/cli/internal/analyzer"
-	"github.com/sflowg/sflowg/cli/internal/builder"
-	"github.com/sflowg/sflowg/cli/internal/config"
-	"github.com/sflowg/sflowg/cli/internal/detector"
-	"github.com/sflowg/sflowg/cli/internal/generator"
-	"github.com/sflowg/sflowg/cli/internal/workspace"
+	"github.com/BDNK1/sflowg/cli/internal/analyzer"
+	"github.com/BDNK1/sflowg/cli/internal/builder"
+	"github.com/BDNK1/sflowg/cli/internal/config"
+	"github.com/BDNK1/sflowg/cli/internal/detector"
+	"github.com/BDNK1/sflowg/cli/internal/generator"
+	"github.com/BDNK1/sflowg/cli/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -168,99 +171,13 @@ func runBuild(_ *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 
-	// 4. Analyze plugin packages to extract metadata (config, dependencies, tasks)
-	fmt.Println("\nAnalyzing plugin packages...")
-
 	type analyzedPlugin struct {
 		detectedPlugin
 		Metadata  *analyzer.PluginMetadata
 		ConfigGen *generator.ConfigGenData
 	}
 
-	var analyzedPlugins []analyzedPlugin
-
-	for _, plugin := range plugins {
-		// Determine source path for analysis
-		var sourcePath string
-
-		if plugin.Type == config.TypeLocalModule {
-			// Local module: use source path directly
-			sourcePath = plugin.Source
-			if !filepath.IsAbs(sourcePath) {
-				sourcePath = filepath.Join(projectDir, plugin.Source)
-			}
-		} else if plugin.Type == config.TypeCorePlugin && corePluginsPath != "" {
-			// Core plugin in development mode
-			absPluginsPath, _ := filepath.Abs(corePluginsPath)
-			sourcePath = filepath.Join(absPluginsPath, plugin.Name)
-		} else {
-			// Remote plugin or core plugin without local path - skip analysis for now
-			// Will be analyzed after go mod download
-			analyzedPlugins = append(analyzedPlugins, analyzedPlugin{
-				detectedPlugin: plugin,
-				Metadata:       nil,
-				ConfigGen:      nil,
-			})
-			fmt.Printf("  [%s] %s - skipping analysis (will download first)\n", plugin.Type, plugin.Name)
-			continue
-		}
-
-		// Analyze the plugin package
-		metadata, err := analyzer.AnalyzePlugin(plugin.ModulePath, plugin.Name, sourcePath)
-		if err != nil {
-			fmt.Printf("  [%s] %s - analysis failed: %v\n", plugin.Type, plugin.Name, err)
-			// Continue with nil metadata - plugin may not follow conventions
-			analyzedPlugins = append(analyzedPlugins, analyzedPlugin{
-				detectedPlugin: plugin,
-				Metadata:       nil,
-				ConfigGen:      nil,
-			})
-			continue
-		}
-
-		// Generate config initialization data if plugin has config
-		var configGen *generator.ConfigGenData
-		if metadata.HasConfig && metadata.ConfigType != nil {
-			configGen, err = generator.GenerateConfigInit(metadata.ConfigType, plugin.Config)
-			if err != nil {
-				return fmt.Errorf("failed to generate config for plugin '%s': %w", plugin.Name, err)
-			}
-		}
-
-		analyzedPlugins = append(analyzedPlugins, analyzedPlugin{
-			detectedPlugin: plugin,
-			Metadata:       metadata,
-			ConfigGen:      configGen,
-		})
-
-		fmt.Printf("  ✓ %s", plugin.Name)
-		if metadata.HasConfig {
-			fmt.Printf(" (config: %d fields)", len(metadata.ConfigType.Fields))
-		}
-		if len(metadata.Dependencies) > 0 {
-			fmt.Printf(" (deps: %d)", len(metadata.Dependencies))
-		}
-		if len(metadata.Tasks) > 0 {
-			fmt.Printf(" (tasks: %d)", len(metadata.Tasks))
-		}
-		fmt.Println()
-
-		// DEBUG: Print config generation data
-		if configGen != nil {
-			fmt.Printf("    DEBUG ConfigGen: %d env vars, %d literals\n", len(configGen.EnvVars), len(configGen.Literals))
-			for _, ev := range configGen.EnvVars {
-				fmt.Printf("      EnvVar: %s -> %s (required: %v, default: %q)\n", ev.EnvVar, ev.YAMLField, ev.Required, ev.DefaultValue)
-			}
-			for _, lit := range configGen.Literals {
-				fmt.Printf("      Literal: %s = %s\n", lit.YAMLField, lit.Value)
-			}
-		} else {
-			fmt.Printf("    DEBUG ConfigGen: nil\n")
-		}
-		fmt.Printf("    DEBUG plugin.Config from yaml: %+v\n", plugin.Config)
-	}
-
-	// 5. Copy flows to workspace (only if embedding)
+	// 4. Copy flows to workspace (only if embedding)
 	if embedFlows {
 		fmt.Println("\nCopying flows to workspace for embedding...")
 		if err := ws.CopyFlows(); err != nil {
@@ -270,7 +187,7 @@ func runBuild(_ *cobra.Command, args []string) error {
 		fmt.Println("\nSkipping flow copy (development mode - flows loaded at runtime)")
 	}
 
-	// 6. Prepare runtime path for development mode
+	// 5. Prepare runtime path for development mode
 	var absRuntimePath string
 	if runtimePath != "" {
 		// Development mode: use local runtime
@@ -292,7 +209,7 @@ func runBuild(_ *cobra.Command, args []string) error {
 		fmt.Println("  Runtime will be downloaded from GitHub")
 	}
 
-	// 6.5 Validate core plugins path if provided
+	// 5.5 Validate core plugins path if provided
 	if corePluginsPath != "" {
 		absPluginsPath, err := filepath.Abs(corePluginsPath)
 		if err != nil {
@@ -306,11 +223,11 @@ func runBuild(_ *cobra.Command, args []string) error {
 		fmt.Printf("  Core Plugins: %s\n", absPluginsPath)
 	}
 
-	// 7. Generate go.mod
+	// 6. Generate go.mod (phase 1: dependency resolution)
 	fmt.Println("\nGenerating go.mod...")
 	goModGen := generator.NewGoModGenerator(ws.UUID, "latest", absRuntimePath)
 
-	for _, plugin := range analyzedPlugins {
+	for _, plugin := range plugins {
 		pluginInfo := generator.PluginInfo{
 			Name:       plugin.Name,
 			ModulePath: plugin.ModulePath,
@@ -336,13 +253,6 @@ func runBuild(_ *cobra.Command, args []string) error {
 			pluginInfo.LocalPath = filepath.Join(absPluginsPath, plugin.Name)
 		}
 
-		// Add metadata from analysis
-		if plugin.Metadata != nil {
-			pluginInfo.TypeName = plugin.Metadata.TypeName
-			pluginInfo.PackageName = plugin.Metadata.PackageName
-			pluginInfo.HasConfig = plugin.Metadata.HasConfig
-		}
-
 		goModGen.AddPlugin(pluginInfo)
 	}
 
@@ -352,7 +262,76 @@ func runBuild(_ *cobra.Command, args []string) error {
 
 	fmt.Printf("  ✓ go.mod created\n")
 
-	// 8. Generate main.go
+	// 7. Resolve/download dependencies before analysis (phase 1)
+	// This makes remote/core plugin source available in module cache so we can analyze
+	// real plugin types/config in phase 2.
+	binaryName := cfg.Name
+	bldr := builder.NewBuilder(ws.Path, projectDir, binaryName)
+
+	fmt.Println("\nResolving dependencies...")
+	fmt.Println("  → Downloading modules...")
+	if err := downloadModules(ws.Path); err != nil {
+		return fmt.Errorf("failed to download modules: %w", err)
+	}
+
+	// 8. Analyze plugin packages after deps are resolved (phase 2)
+	fmt.Println("\nAnalyzing plugin packages...")
+	var analyzedPlugins []analyzedPlugin
+	for _, plugin := range plugins {
+		var sourcePath string
+
+		switch {
+		case plugin.Type == config.TypeLocalModule:
+			sourcePath = plugin.Source
+			if !filepath.IsAbs(sourcePath) {
+				sourcePath = filepath.Join(projectDir, plugin.Source)
+			}
+		case plugin.Type == config.TypeCorePlugin && corePluginsPath != "":
+			absPluginsPath, err := filepath.Abs(corePluginsPath)
+			if err != nil {
+				return fmt.Errorf("failed to resolve core plugins path: %w", err)
+			}
+			sourcePath = filepath.Join(absPluginsPath, plugin.Name)
+		default:
+			sourcePath, err = resolveModuleDir(ws.Path, plugin.ModulePath)
+			if err != nil {
+				return fmt.Errorf("failed to resolve module directory for plugin '%s' (%s): %w", plugin.Name, plugin.ModulePath, err)
+			}
+		}
+
+		metadata, err := analyzer.AnalyzePlugin(plugin.ModulePath, plugin.Name, sourcePath)
+		if err != nil {
+			return fmt.Errorf("failed to analyze plugin '%s' at %s: %w", plugin.Name, sourcePath, err)
+		}
+
+		var configGen *generator.ConfigGenData
+		if metadata.HasConfig && metadata.ConfigType != nil {
+			configGen, err = generator.GenerateConfigInit(metadata.ConfigType, plugin.Config)
+			if err != nil {
+				return fmt.Errorf("failed to generate config for plugin '%s': %w", plugin.Name, err)
+			}
+		}
+
+		analyzedPlugins = append(analyzedPlugins, analyzedPlugin{
+			detectedPlugin: plugin,
+			Metadata:       metadata,
+			ConfigGen:      configGen,
+		})
+
+		fmt.Printf("  ✓ %s", plugin.Name)
+		if metadata.HasConfig {
+			fmt.Printf(" (config: %d fields)", len(metadata.ConfigType.Fields))
+		}
+		if len(metadata.Dependencies) > 0 {
+			fmt.Printf(" (deps: %d)", len(metadata.Dependencies))
+		}
+		if len(metadata.Tasks) > 0 {
+			fmt.Printf(" (tasks: %d)", len(metadata.Tasks))
+		}
+		fmt.Println()
+	}
+
+	// 9. Generate main.go
 	fmt.Println("\nGenerating main.go...")
 	mainGoGen := generator.NewMainGoGenerator(goModGen.ModuleName, cfg.Runtime.Port, embedFlows, cfg.Properties)
 
@@ -392,19 +371,13 @@ func runBuild(_ *cobra.Command, args []string) error {
 
 	fmt.Printf("  ✓ main.go created\n")
 
-	// 9. Build binary
+	// 10. Build binary
 	fmt.Println("\nBuilding binary...")
 
-	// Binary will be output to project root
-	outputDir := projectDir
-
-	binaryName := cfg.Name
-	bldr := builder.NewBuilder(ws.Path, outputDir, binaryName)
-
-	// Download dependencies
-	fmt.Println("  → Downloading dependencies...")
+	// Ensure go.mod/go.sum include all imports from generated main.go and plugins.
+	fmt.Println("  → Syncing dependencies...")
 	if err := bldr.DownloadDependencies(); err != nil {
-		return fmt.Errorf("failed to download dependencies: %w", err)
+		return fmt.Errorf("failed to sync dependencies: %w", err)
 	}
 
 	// Compile
@@ -419,10 +392,72 @@ func runBuild(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to copy binary: %w", err)
 	}
 
-	outputPath := filepath.Join(outputDir, binaryName)
+	outputPath := filepath.Join(projectDir, binaryName)
 	fmt.Printf("\n✅ Build successful!\n")
 	fmt.Printf("Binary: %s\n", outputPath)
 	fmt.Printf("\nRun with: %s\n", outputPath)
 
+	return nil
+}
+
+func resolveModuleDir(workspacePath, modulePath string) (string, error) {
+	type moduleInfo struct {
+		Dir   string `json:"Dir"`
+		Error *struct {
+			Err string `json:"Err"`
+		} `json:"Error"`
+		Replace *struct {
+			Dir string `json:"Dir"`
+		} `json:"Replace"`
+	}
+
+	// First try go list -m -json to read resolved module dir.
+	cmd := exec.Command("go", "list", "-m", "-json", modulePath)
+	cmd.Dir = workspacePath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("go list failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	var info moduleInfo
+	if err := json.Unmarshal(out, &info); err != nil {
+		return "", fmt.Errorf("failed to parse go list output for %s: %w", modulePath, err)
+	}
+	if info.Error != nil && info.Error.Err != "" {
+		return "", fmt.Errorf("module resolution error for %s: %s", modulePath, info.Error.Err)
+	}
+	if strings.TrimSpace(info.Dir) != "" {
+		return strings.TrimSpace(info.Dir), nil
+	}
+	if info.Replace != nil && strings.TrimSpace(info.Replace.Dir) != "" {
+		return strings.TrimSpace(info.Replace.Dir), nil
+	}
+
+	// Some module states keep Dir empty in go list; force module extraction and retry via download.
+	downloadCmd := exec.Command("go", "mod", "download", "-json", modulePath)
+	downloadCmd.Dir = workspacePath
+	downloadOut, err := downloadCmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("go mod download failed for %s: %w: %s", modulePath, err, strings.TrimSpace(string(downloadOut)))
+	}
+
+	var downloaded moduleInfo
+	if err := json.Unmarshal(downloadOut, &downloaded); err != nil {
+		return "", fmt.Errorf("failed to parse go mod download output for %s: %w", modulePath, err)
+	}
+	if strings.TrimSpace(downloaded.Dir) != "" {
+		return strings.TrimSpace(downloaded.Dir), nil
+	}
+
+	return "", fmt.Errorf("empty module dir for %s", modulePath)
+}
+
+func downloadModules(workspacePath string) error {
+	cmd := exec.Command("go", "mod", "download")
+	cmd.Dir = workspacePath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("go mod download failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
 	return nil
 }

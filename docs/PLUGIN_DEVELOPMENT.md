@@ -27,7 +27,7 @@ Create `plugin.go`:
 ```go
 package greeting
 
-import "github.com/sflowg/sflowg/runtime/plugin"
+import "github.com/BDNK1/sflowg/runtime/plugin"
 
 // Plugin struct (can be empty for simple plugins)
 type GreetingPlugin struct{}
@@ -92,7 +92,7 @@ package payment
 
 import (
     "time"
-    "github.com/sflowg/sflowg/runtime/plugin"
+    "github.com/BDNK1/sflowg/runtime/plugin"
 )
 
 // Config with struct tags
@@ -263,7 +263,7 @@ import (
     "fmt"
     "net/smtp"
 
-    "github.com/sflowg/sflowg/runtime/plugin"
+    "github.com/BDNK1/sflowg/runtime/plugin"
 )
 
 type Config struct {
@@ -361,7 +361,7 @@ import (
     "context"
     "testing"
 
-    "github.com/sflowg/sflowg/runtime/plugin"
+    "github.com/BDNK1/sflowg/runtime/plugin"
 )
 
 func TestSendEmail(t *testing.T) {

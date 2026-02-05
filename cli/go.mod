@@ -1,4 +1,4 @@
-module github.com/sflowg/sflowg/cli
+module github.com/BDNK1/sflowg/cli
 
 go 1.24.0
 

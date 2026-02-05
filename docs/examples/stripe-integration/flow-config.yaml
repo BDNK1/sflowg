@@ -38,4 +38,4 @@ plugins:
     name: checkout
     config:
       stripe_publishable_key: ${STRIPE_PUBLISHABLE_KEY}
-      return_url: ${CHECKOUT_RETURN_URL:http://localhost:8080/payment-success}
+      return_url: ${CHECKOUT_RETURN_URL:http://localhost:8080/checkout/}

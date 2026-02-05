@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sflowg/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/runtime/plugin"
 )
 
 // Config holds Stripe plugin configuration

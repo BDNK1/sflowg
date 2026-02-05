@@ -14,8 +14,8 @@ func TestAnalyzePlugin_SimpleDependency(t *testing.T) {
 
 import (
 	"context"
-	"github.com/sflowg/sflowg/runtime/plugin"
-	"github.com/sflowg/sflowg/plugins/http"
+	"github.com/BDNK1/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/plugins/http"
 )
 
 type Config struct {
@@ -107,9 +107,9 @@ func TestAnalyzePlugin_MultipleDependencies(t *testing.T) {
 	pluginCode := `package payment
 
 import (
-	"github.com/sflowg/sflowg/runtime/plugin"
-	"github.com/sflowg/sflowg/plugins/http"
-	"github.com/sflowg/sflowg/plugins/redis"
+	"github.com/BDNK1/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/plugins/http"
+	"github.com/BDNK1/sflowg/plugins/redis"
 )
 
 type PaymentPlugin struct {
@@ -167,8 +167,8 @@ func TestAnalyzePlugin_InjectTag(t *testing.T) {
 	pluginCode := `package app
 
 import (
-	"github.com/sflowg/sflowg/runtime/plugin"
-	"github.com/sflowg/sflowg/plugins/redis"
+	"github.com/BDNK1/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/plugins/redis"
 )
 
 type AppPlugin struct {
@@ -226,7 +226,7 @@ func TestAnalyzePlugin_IgnoresNonPluginFields(t *testing.T) {
 
 import (
 	"net/http"
-	"github.com/sflowg/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/runtime/plugin"
 )
 
 type TestPlugin struct {
@@ -266,7 +266,7 @@ func TestAnalyzePlugin_NoDependencies(t *testing.T) {
 
 	pluginCode := `package math
 
-import "github.com/sflowg/sflowg/runtime/plugin"
+import "github.com/BDNK1/sflowg/runtime/plugin"
 
 type MathPlugin struct{}
 
@@ -306,7 +306,7 @@ func TestAnalyzePlugin_ConfigDetection(t *testing.T) {
 
 	pluginCode := `package test
 
-import "github.com/sflowg/sflowg/runtime/plugin"
+import "github.com/BDNK1/sflowg/runtime/plugin"
 
 type Config struct {
 	Host string ` + "`yaml:\"host\" default:\"localhost\"`" + `

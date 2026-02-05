@@ -62,7 +62,7 @@ curl http://localhost:8080/user/1
 ## Installation
 
 ```bash
-go install github.com/sflowg/sflowg/cli@latest
+go install github.com/BDNK1/sflowg/cli@latest
 ```
 
 ## Documentation

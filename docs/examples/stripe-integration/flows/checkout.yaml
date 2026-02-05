@@ -1,10 +1,8 @@
 id: checkout
 
-# Serve Stripe checkout page:
-# 1. Get payment_id from URL path
-# 2. Fetch payment record from database
-# 3. Render checkout HTML with Stripe Elements
-# 4. Return HTML page
+# Unified checkout flow that handles:
+# 1. Initial checkout page: GET /checkout/:payment_id
+# 2. Success page after Stripe redirect: GET /checkout/:payment_id?redirect_status=succeeded&payment_intent=...
 
 entrypoint:
   type: http
@@ -13,46 +11,48 @@ entrypoint:
     path: /checkout/:payment_id
     pathVariables:
       - payment_id
+    queryParameters:
+      - redirect_status
+      - payment_intent
 
 steps:
-  # ========================================
-  # STEP 1: Extract payment_id from path
-  # ========================================
+  # Extract payment_id and query params
   - id: extract_params
     type: assign
     args:
       payment_id: request.pathVariables.payment_id
+      redirect_status: request.queryParameters.redirect_status
+      payment_intent: request.queryParameters.payment_intent
+      has_redirect_params: 'request.queryParameters.redirect_status != null && request.queryParameters.redirect_status != ""'
 
-  # ========================================
-  # STEP 2: Fetch payment from database
-  # ========================================
+  # Fetch payment from database
   - id: get_payment
     type: postgres.get
     args:
-      query: '"SELECT id, amount, currency, stripe_client_secret, stripe_payment_intent_id, status FROM payments WHERE id = $1"'
+      query: >
+        "SELECT id, amount, currency, stripe_client_secret,
+        stripe_payment_intent_id, status
+        FROM payments WHERE id = $1"
       params:
         - extract_params.payment_id
 
-  # ========================================
-  # STEP 3: Check if payment exists
-  # ========================================
+  # Check if payment exists
   - id: check_payment
     type: switch
     args:
       payment_not_found: get_payment.result.found == false
       payment_found: get_payment.result.found == true
 
-  # ========================================
-  # STEP 3a: Handle payment not found
-  # ========================================
+  # Handle payment not found
   - id: payment_not_found
     type: assign
     args:
-      error_html: '"<html><body><h1>Payment Not Found</h1><p>Payment ID: " + string(extract_params.payment_id) + " does not exist.</p></body></html>"'
+      error_html: >
+        "<html><body><h1>Payment Not Found</h1>
+        <p>Payment ID: " + string(extract_params.payment_id) +
+        " does not exist.</p></body></html>"
 
-  # ========================================
-  # STEP 3b: Check payment status
-  # ========================================
+  # Extract payment details and compute final-status flag
   - id: payment_found
     type: assign
     args:
@@ -61,26 +61,33 @@ steps:
       currency: get_payment.result.row.currency
       client_secret: get_payment.result.row.stripe_client_secret
       status: get_payment.result.row.status
+      is_final: >
+        get_payment.result.row.status == "succeeded" ||
+        get_payment.result.row.status == "failed" ||
+        get_payment.result.row.status == "canceled"
 
-  - id: check_status
+  # Route: final states -> result page, pending -> checkout form
+  - id: route_by_status
     type: switch
     condition: payment_found.status != null
     args:
-      already_paid: payment_found.status == "succeeded"
-      needs_payment: payment_found.status != "succeeded"
+      show_result: payment_found.is_final == true
+      show_checkout: payment_found.is_final != true
 
-  # ========================================
-  # STEP 4a: Handle already paid
-  # ========================================
-  - id: already_paid
-    type: assign
+  # Render result page (payment completed)
+  - id: show_result
+    condition: payment_found.is_final == true
+    type: checkout.renderSuccess
     args:
-      success_html: '"<html><body><h1>Payment Complete</h1><p>This payment has already been processed.</p><p>Payment ID: " + string(payment_found.payment_id) + "</p></body></html>"'
+      payment_id: payment_found.payment_id
+      amount: payment_found.amount
+      currency: payment_found.currency
+      redirect_status: extract_params.redirect_status
+      payment_intent: extract_params.payment_intent
 
-  # ========================================
-  # STEP 4b: Render checkout page
-  # ========================================
-  - id: needs_payment
+  # Render checkout form (payment still pending)
+  - id: show_checkout
+    condition: payment_found.is_final != true
     type: checkout.render
     args:
       client_secret: payment_found.client_secret
@@ -88,22 +95,18 @@ steps:
       amount: payment_found.amount
       currency: payment_found.currency
 
-  # ========================================
-  # STEP 5: Build final response
-  # ========================================
+  # Build final response
   - id: final_response
     type: assign
     args:
       html: >
-        payment_not_found.error_html != null ? payment_not_found.error_html :
-        already_paid.success_html != null ? already_paid.success_html :
-        needs_payment.result.html
+        payment_not_found.error_html ??
+        show_result.result.html ??
+        show_checkout.result.html
       status_code: 'payment_not_found.error_html != null ? 404 : 200'
 
 return:
-  type: http.response
+  type: http.html
   args:
     status: final_response.status_code
-    headers:
-      Content-Type: '"text/html; charset=utf-8"'
     body: final_response.html

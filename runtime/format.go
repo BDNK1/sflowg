@@ -10,6 +10,10 @@ var (
 	hyphenMiddleRe     = regexp.MustCompile(`([^ ])-([^ ])`)
 )
 
+func isDigit(r rune) bool {
+	return r >= '0' && r <= '9'
+}
+
 func FormatKey(key string) string {
 	key = strings.ReplaceAll(key, ".", "_")
 	key = hyphenStartOrEndRe.ReplaceAllString(key, "${1}_${2}")
@@ -20,8 +24,35 @@ func FormatKey(key string) string {
 func FormatExpression(e string) string {
 	result := []rune(e)
 	openParentheses := 0
+	inDoubleQuote := false
+	inBacktick := false
+	escapeNext := false
 
 	for i, r := range result {
+		if escapeNext {
+			escapeNext = false
+			continue
+		}
+
+		if inDoubleQuote && r == '\\' {
+			escapeNext = true
+			continue
+		}
+
+		if r == '"' && !inBacktick {
+			inDoubleQuote = !inDoubleQuote
+			continue
+		}
+		if r == '`' && !inDoubleQuote {
+			inBacktick = !inBacktick
+			continue
+		}
+
+		// Don't modify anything inside string literals
+		if inDoubleQuote || inBacktick {
+			continue
+		}
+
 		switch r {
 		case '(':
 			openParentheses++
@@ -32,6 +63,10 @@ func FormatExpression(e string) string {
 			// - ?. (optional chaining operator)
 			// - #. (lambda element accessor in expr-lang, e.g., {#.Age > 18})
 			if i > 0 && (result[i-1] == '?' || result[i-1] == '#') {
+				continue
+			}
+			// Don't replace dot in numeric literals (e.g., 3.14, 0.5)
+			if i > 0 && i < len(result)-1 && isDigit(result[i-1]) && isDigit(result[i+1]) {
 				continue
 			}
 			result[i] = '_'

@@ -153,51 +153,98 @@ func toResponse(c *gin.Context, e *Execution) {
 		return
 	}
 
-	// Default status code
-	statusCode := http.StatusOK
-	response := make(map[string]any)
-
-	// Process return arguments with expression evaluation
-	for key, valueExpr := range e.Flow.Return.Args {
-		switch key {
-		case "status":
-			// Handle status code
-			if expr, ok := valueExpr.(string); ok {
-				if value, err := Eval(expr, e.Values); err == nil {
-					if code, ok := value.(int); ok {
-						statusCode = code
-					}
-				}
-			} else if code, ok := valueExpr.(int); ok {
-				statusCode = code
-			}
-		case "body":
-			// Handle response body
-			if bodyExpr, ok := valueExpr.(string); ok {
-				// Body is a string expression - evaluate it
-				if value, err := Eval(bodyExpr, e.Values); err == nil {
-					// The evaluated value should be a map
-					if bodyMap, ok := value.(map[string]any); ok {
-						response = bodyMap
-					}
-				}
-			} else if bodyArgs, ok := valueExpr.(map[string]any); ok {
-				// Body is a map - evaluate each field
-				for bodyKey, bodyValueExpr := range bodyArgs {
-					if expr, ok := bodyValueExpr.(string); ok {
-						if value, err := Eval(expr, e.Values); err == nil {
-							response[bodyKey] = value
-						} else {
-							// If expression evaluation fails, use the raw value
-							response[bodyKey] = bodyValueExpr
-						}
-					} else {
-						response[bodyKey] = bodyValueExpr
-					}
-				}
-			}
-		}
+	// Evaluate all arguments recursively
+	evaluatedArgs, err := evaluateReturnArgs(e.Flow.Return.Args, e.Values)
+	if err != nil {
+		slog.Error("Failed to evaluate return arguments",
+			"flow", e.Flow.ID,
+			"type", e.Flow.Return.Type,
+			"error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": "Error evaluating response: " + err.Error(),
+		})
+		return
 	}
 
-	c.JSON(statusCode, response)
+	// Lookup response handler from registry
+	handler, exists := e.Container.ResponseHandlers.Get(e.Flow.Return.Type)
+	if !exists {
+		slog.Error("Response handler not found",
+			"flow", e.Flow.ID,
+			"type", e.Flow.Return.Type)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": "Unknown response type: " + e.Flow.Return.Type,
+		})
+		return
+	}
+
+	// Execute response handler
+	if err := handler.Handle(c, e, evaluatedArgs); err != nil {
+		slog.Error("Response handler execution failed",
+			"flow", e.Flow.ID,
+			"type", e.Flow.Return.Type,
+			"error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": "Error generating response: " + err.Error(),
+		})
+		return
+	}
+}
+
+// evaluateReturnArgs recursively evaluates all expressions in return arguments
+func evaluateReturnArgs(args map[string]any, values map[string]any) (map[string]any, error) {
+	result := make(map[string]any)
+
+	for key, value := range args {
+		evaluated, err := evaluateReturnArg(value, values)
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate arg '%s': %w", key, err)
+		}
+		result[key] = evaluated
+	}
+
+	return result, nil
+}
+
+// evaluateReturnArg recursively evaluates a single argument value
+func evaluateReturnArg(value any, values map[string]any) (any, error) {
+	switch v := value.(type) {
+	case string:
+		// Try to evaluate as expression
+		evaluated, err := Eval(v, values)
+		if err != nil {
+			// If evaluation fails, return the original string
+			// This allows literal strings in return args
+			return v, nil
+		}
+		return evaluated, nil
+
+	case map[string]any:
+		// Recursively evaluate map values
+		result := make(map[string]any)
+		for k, val := range v {
+			evaluated, err := evaluateReturnArg(val, values)
+			if err != nil {
+				return nil, err
+			}
+			result[k] = evaluated
+		}
+		return result, nil
+
+	case []any:
+		// Recursively evaluate array elements
+		result := make([]any, len(v))
+		for i, val := range v {
+			evaluated, err := evaluateReturnArg(val, values)
+			if err != nil {
+				return nil, err
+			}
+			result[i] = evaluated
+		}
+		return result, nil
+
+	default:
+		// For other types (int, bool, etc.), return as-is
+		return value, nil
+	}
 }

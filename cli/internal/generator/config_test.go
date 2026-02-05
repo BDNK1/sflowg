@@ -3,7 +3,7 @@ package generator
 import (
 	"testing"
 
-	"github.com/sflowg/sflowg/cli/internal/analyzer"
+	"github.com/BDNK1/sflowg/cli/internal/analyzer"
 )
 
 func TestGenerateConfigInit_NoConfig(t *testing.T) {

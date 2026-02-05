@@ -1,4 +1,4 @@
-module github.com/sflowg/sflowg/runtime
+module github.com/BDNK1/sflowg/runtime
 
 go 1.24.0
 

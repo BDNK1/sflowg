@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sflowg/sflowg/cli/cmd"
+	"github.com/BDNK1/sflowg/cli/cmd"
 )
 
 func main() {

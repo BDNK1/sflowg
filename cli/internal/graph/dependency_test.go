@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sflowg/sflowg/cli/internal/analyzer"
+	"github.com/BDNK1/sflowg/cli/internal/analyzer"
 )
 
 func TestBuildGraph_NoDependencies(t *testing.T) {

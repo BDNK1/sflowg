@@ -6,7 +6,7 @@ The SFlowG CLI (`sflowg`) compiles YAML-based workflow definitions into standalo
 
 ```bash
 # Install from source
-go install github.com/sflowg/sflowg/cli@latest
+go install github.com/BDNK1/sflowg/cli@latest
 
 # Or build locally
 cd cli
@@ -211,7 +211,7 @@ API_BASE_URL=https://api.example.com ./my-app
 set -e
 
 # Install CLI
-go install github.com/sflowg/sflowg/cli@latest
+go install github.com/BDNK1/sflowg/cli@latest
 
 # Build production binary
 sflowg build . --embed-flows

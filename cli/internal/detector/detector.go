@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sflowg/sflowg/cli/internal/config"
-	"github.com/sflowg/sflowg/cli/internal/constants"
+	"github.com/BDNK1/sflowg/cli/internal/config"
+	"github.com/BDNK1/sflowg/cli/internal/constants"
 )
 
 // DetectPluginType determines the type of plugin based on its source

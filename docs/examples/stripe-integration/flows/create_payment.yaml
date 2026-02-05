@@ -17,9 +17,7 @@ entrypoint:
       type: json
 
 steps:
-  # ========================================
-  # STEP 1: Extract and validate request data
-  # ========================================
+  # Extract request data
   - id: extract_request
     type: assign
     args:
@@ -28,35 +26,20 @@ steps:
       currency: 'request.body.currency ?? properties.default_currency'
       description: 'request.body.description ?? "Payment"'
       customer_email: request.body.customer_email
-      customer_name: 'request.body.customer_name ?? ""'
-      metadata_order_id: 'request.body.metadata?.order_id ?? ""'
-      request_id: 'request.headers.X-Request-ID ?? ""'
+      customer_name: request.body.customer_name
+      metadata_order_id: request.body.metadata?.order_id
+      request_id: request.headers.X-Request-ID
 
-  # ========================================
-  # STEP 2: Validate amount
-  # ========================================
-  - id: validate_amount
-    type: switch
-    args:
-      invalid_amount: extract_request.amount == null || extract_request.amount < 50
-      valid_amount: extract_request.amount != null && extract_request.amount >= 50
-
-  - id: invalid_amount
-    type: assign
-    args:
-      error_response:
-        success: false
-        error:
-          code: '"invalid_amount"'
-          message: '"Amount must be at least 50 cents"'
-
-  # ========================================
-  # STEP 3: Insert payment record (pending)
-  # ========================================
-  - id: valid_amount
+  # Insert payment record (pending)
+  - id: insert_payment
     type: postgres.get
     args:
-      query: '"INSERT INTO payments (amount, currency, description, customer_email, customer_name, metadata_order_id, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING id, created_at"'
+      query: >
+        "INSERT INTO payments
+        (amount, currency, description, customer_email,
+        customer_name, metadata_order_id, status, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        RETURNING id, created_at"
       params:
         - extract_request.amount
         - extract_request.currency
@@ -69,12 +52,10 @@ steps:
   - id: store_payment_id
     type: assign
     args:
-      payment_id: valid_amount.result.row.id
-      created_at: valid_amount.result.row.created_at
+      payment_id: insert_payment.result.row.id
+      created_at: insert_payment.result.row.created_at
 
-  # ========================================
-  # STEP 4: Create Stripe PaymentIntent
-  # ========================================
+  # Create Stripe PaymentIntent
   - id: create_payment_intent
     type: http.request
     args:
@@ -92,29 +73,28 @@ steps:
           payment_id: store_payment_id.payment_id
           order_id: extract_request.metadata_order_id
 
-  # ========================================
-  # STEP 5: Check Stripe response
-  # ========================================
+  # Check Stripe response
   - id: check_stripe_response
     type: switch
     args:
       stripe_success: create_payment_intent.result.status_code == 200
       stripe_error: create_payment_intent.result.status_code != 200
 
-  # ========================================
-  # STEP 6a: Handle Stripe error
-  # ========================================
+  # Handle Stripe error
   - id: stripe_error
     type: assign
     args:
-      stripe_error_type: 'create_payment_intent.result.body.error?.type ?? "unknown"'
-      stripe_error_message: 'create_payment_intent.result.body.error?.message ?? "Stripe API error"'
+      stripe_error_type: 'create_payment_intent.result.body?.error?.type ?? "unknown"'
+      stripe_error_message: 'create_payment_intent.result.body?.error?.message ?? "Stripe API error"'
 
   - id: update_payment_failed
     type: postgres.exec
     condition: stripe_error.stripe_error_type != null
     args:
-      query: '"UPDATE payments SET status = $1, error_message = $2, updated_at = NOW() WHERE id = $3"'
+      query: >
+        "UPDATE payments
+        SET status = $1, error_message = $2, updated_at = NOW()
+        WHERE id = $3"
       params:
         - '"failed"'
         - stripe_error.stripe_error_message
@@ -131,9 +111,7 @@ steps:
           message: stripe_error.stripe_error_message
         payment_id: store_payment_id.payment_id
 
-  # ========================================
-  # STEP 6b: Handle Stripe success
-  # ========================================
+  # Handle Stripe success
   - id: stripe_success
     type: assign
     args:
@@ -145,7 +123,11 @@ steps:
     type: postgres.exec
     condition: stripe_success.payment_intent_id != null
     args:
-      query: '"UPDATE payments SET stripe_payment_intent_id = $1, stripe_client_secret = $2, stripe_status = $3, status = $4, updated_at = NOW() WHERE id = $5"'
+      query: >
+        "UPDATE payments
+        SET stripe_payment_intent_id = $1, stripe_client_secret = $2,
+        stripe_status = $3, status = $4, updated_at = NOW()
+        WHERE id = $5"
       params:
         - stripe_success.payment_intent_id
         - stripe_success.client_secret
@@ -153,9 +135,7 @@ steps:
         - '"requires_payment_method"'
         - store_payment_id.payment_id
 
-  # ========================================
-  # STEP 7: Build success response
-  # ========================================
+  # Build success response
   - id: success_response
     type: assign
     condition: stripe_success.payment_intent_id != null
@@ -171,9 +151,7 @@ steps:
           currency: extract_request.currency
           checkout_url: '"http://localhost:8080/checkout/" + string(store_payment_id.payment_id)'
 
-  # ========================================
-  # STEP 8: Determine final response
-  # ========================================
+  # Determine final response
   - id: build_final_response
     type: assign
     args:
@@ -182,10 +160,9 @@ steps:
       status_code: 'stripe_success.payment_intent_id != null ? 201 : 400'
 
 return:
-  type: http.response
+  type: http.json
   args:
-    # If invalid_amount step ran, its error_response exists; otherwise use build_final_response
-    status: 'invalid_amount.error_response != null ? 400 : (build_final_response.status_code ?? 500)'
+    status: 'build_final_response.status_code ?? 500'
     headers:
       X-Payment-ID: 'string(store_payment_id.payment_id ?? "")'
-    body: 'invalid_amount.error_response ?? build_final_response.response_body'
+    body: build_final_response.response_body
