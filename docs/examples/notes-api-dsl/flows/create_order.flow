@@ -1,0 +1,47 @@
+// Create a new order
+
+entrypoint.http {
+    method: POST
+    path: /api/orders
+    body: { type: json }
+}
+
+properties {
+    default_currency: "usd"
+}
+
+step validate_email(condition: request.body.customer_email == nil || request.body.customer_email == "") {
+    response.json({
+        status: 400,
+        body: { error: "customer_email is required" }
+    })
+}
+
+step validate_amount(condition: request.body.amount_cents == nil || request.body.amount_cents <= 0) {
+    response.json({
+        status: 400,
+        body: { error: "amount_cents must be greater than 0" }
+    })
+}
+
+step resolve_currency {
+    currency := request.body.currency
+    if currency == nil || currency == "" {
+        currency = default_currency
+    }
+    currency
+}
+
+step create_order {
+    postgres.get({
+        query: "INSERT INTO orders (customer_email, amount_cents, currency, status) VALUES ($1, $2, $3, 'pending') RETURNING id, customer_email, amount_cents, currency, status, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at",
+        params: [request.body.customer_email, request.body.amount_cents, resolve_currency]
+    })
+}
+
+return response.json({
+    status: 201,
+    body: {
+        order: create_order.row
+    }
+})

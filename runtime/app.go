@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gopkg.in/yaml.v3"
 )
 
 type App struct {
@@ -20,16 +19,22 @@ type App struct {
 	Flows            map[string]Flow
 	GlobalProperties map[string]any // Global properties from flow-config.yaml
 	server           *http.Server
+	loader           FlowLoader
+	evaluator        ExpressionEvaluator
+	stepExecutor     StepExecutor
+	newValueStore    func() ValueStore
 }
 
-// NewApp creates a new application with the given container.
-// Container should have plugins registered before calling Initialize.
-// globalProperties are loaded from flow-config.yaml and merged with flow-level properties.
-func NewApp(container *Container) *App {
+// NewApp creates a new application with the given container and engine components.
+func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, newValueStore func() ValueStore) *App {
 	return &App{
 		Container:        container,
 		Flows:            make(map[string]Flow),
 		GlobalProperties: make(map[string]any),
+		loader:           loader,
+		evaluator:        evaluator,
+		stepExecutor:     stepExecutor,
+		newValueStore:    newValueStore,
 	}
 }
 
@@ -59,12 +64,12 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 
 	// Create executor for flow execution
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	executor := NewExecutor(logger)
+	executor := NewExecutor(logger, a.evaluator, a.stepExecutor)
 
 	// Register flow endpoints
 	for flowID := range a.Flows {
 		flow := a.Flows[flowID] // Copy to avoid pointer issues
-		NewHttpHandler(&flow, a.Container, executor, a.GlobalProperties, router)
+		NewHttpHandler(&flow, a.Container, executor, a.GlobalProperties, a.newValueStore, router)
 	}
 
 	// Create HTTP server
@@ -110,16 +115,20 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 	return nil
 }
 
-// LoadFlows loads flow definitions from the specified directory.
-// Supports both embedded flows (at build time) and runtime loading.
+// loadFlows loads flow definitions from the specified directory using the configured FlowLoader.
 func (a *App) loadFlows(flowsDir string) error {
 	if flowsDir == "" {
 		return fmt.Errorf("flows directory not specified")
 	}
 
-	files, err := filepath.Glob(filepath.Join(flowsDir, "*.yaml"))
-	if err != nil {
-		return fmt.Errorf("error reading flows directory: %w", err)
+	// Collect files matching all loader extensions
+	var files []string
+	for _, ext := range a.loader.Extensions() {
+		matched, err := filepath.Glob(filepath.Join(flowsDir, ext))
+		if err != nil {
+			return fmt.Errorf("error reading flows directory: %w", err)
+		}
+		files = append(files, matched...)
 	}
 
 	if len(files) == 0 {
@@ -127,7 +136,7 @@ func (a *App) loadFlows(flowsDir string) error {
 	}
 
 	for _, file := range files {
-		flow, err := readFlow(file)
+		flow, err := a.loader.Load(file)
 		if err != nil {
 			return fmt.Errorf("error loading flow from %s: %w", file, err)
 		}
@@ -175,19 +184,4 @@ func (a *App) shutdown(ctx context.Context) error {
 
 func (a *App) registerFlow(flow Flow) {
 	a.Flows[flow.ID] = flow
-}
-
-func readFlow(file string) (Flow, error) {
-	yamlFile, err := os.ReadFile(file)
-	if err != nil {
-		return Flow{}, fmt.Errorf("error reading YAML file: %w", err)
-	}
-
-	var flow Flow
-	err = yaml.Unmarshal(yamlFile, &flow)
-	if err != nil {
-		return Flow{}, fmt.Errorf("error unmarshalling YAML: %w", err)
-	}
-
-	return flow, nil
 }

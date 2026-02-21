@@ -20,11 +20,13 @@ type Step struct {
 	Args      map[string]any `yaml:"args"`
 	Next      string         `yaml:"next,omitempty"`
 	Retry     *RetryConfig   `yaml:"retry,omitempty"`
+	Body      string         `yaml:"-"` // DSL: raw Risor code body (ignored by YAML)
 }
 
 type Return struct {
 	Type string         `yaml:"type"`
 	Args map[string]any `yaml:"args"`
+	Body string         `yaml:"-"` // DSL: raw Risor code for return (ignored by YAML)
 }
 
 type RetryConfig struct {
