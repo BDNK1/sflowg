@@ -28,7 +28,7 @@ func (e *StepExecutor) ExecuteStep(execution *runtime.Execution, step runtime.St
 		return "", nil
 	}
 
-	globals := e.buildGlobals(execution)
+	globals := e.buildEnv(execution)
 
 	e.l.InfoContext(execution, fmt.Sprintf("Executing DSL step: %s", step.ID))
 
@@ -50,9 +50,9 @@ func (e *StepExecutor) ExecuteStep(execution *runtime.Execution, step runtime.St
 	return "", nil
 }
 
-// buildGlobals assembles the globals map for a step's Risor evaluation.
+// buildEnv assembles the env map for a step's Risor evaluation.
 // Includes: all current store values + plugin modules + promoted properties.
-func (e *StepExecutor) buildGlobals(execution *runtime.Execution) map[string]any {
+func (e *StepExecutor) buildEnv(execution *runtime.Execution) map[string]any {
 	globals := make(map[string]any)
 
 	// Copy all current store values as globals

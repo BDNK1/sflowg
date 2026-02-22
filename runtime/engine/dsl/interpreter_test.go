@@ -118,6 +118,38 @@ func TestInterpreterEval_NestedMapAccess(t *testing.T) {
 	}
 }
 
+func TestInterpreterEval_MissingAttributeReturnsNil(t *testing.T) {
+	interp := &Interpreter{}
+	ctx := context.Background()
+
+	globals := map[string]any{
+		"request": map[string]any{
+			"body": map[string]any{
+				"amount": 100,
+				// customer_email intentionally absent
+			},
+		},
+	}
+
+	// Missing field should return nil, not throw "attribute not found"
+	result, err := interp.Eval(ctx, `request.body.customer_email == nil`, globals)
+	if err != nil {
+		t.Fatalf("unexpected error accessing missing field: %v", err)
+	}
+	if result != true {
+		t.Errorf("expected true (missing field == nil), got %v", result)
+	}
+
+	// Existing field should still return its value
+	result, err = interp.Eval(ctx, `request.body.amount`, globals)
+	if err != nil {
+		t.Fatalf("unexpected error accessing existing field: %v", err)
+	}
+	if result != int64(100) {
+		t.Errorf("expected 100, got %v", result)
+	}
+}
+
 func TestInterpreterEval_GoFunctionCall(t *testing.T) {
 	interp := &Interpreter{}
 	ctx := context.Background()

@@ -49,20 +49,17 @@ step create_payment {
         body: {
             amount: fetch_order.row.amount_cents,
             currency: fetch_order.row.currency,
-            description: sprintf("Order #%v", fetch_order.row.id),
+            description: `Order #${fetch_order.row.id}`,
             customer_email: fetch_order.row.customer_email,
             metadata: {
-                order_id: sprintf("%v", fetch_order.row.id)
+                order_id: `${fetch_order.row.id}`
             }
         }
     })
 }
 
 step payment_error(condition: create_payment.status_code != 201 || create_payment.body.success != true) {
-    message := "payment service error"
-    if create_payment.body != nil && create_payment.body.error != nil && create_payment.body.error.message != nil {
-        message = create_payment.body.error.message
-    }
+    let message = create_payment.body.error?.message ?? "payment service error"
     response.json({
         status: 502,
         body: {
@@ -86,7 +83,6 @@ return response.json({
         stripe: {
             checkout_url: create_payment.body.data.checkout_url,
             payment_intent_id: create_payment.body.data.payment_intent_id,
-            client_secret: create_payment.body.data.client_secret,
             status: create_payment.body.data.status
         }
     }

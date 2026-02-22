@@ -5,144 +5,103 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/risor-io/risor"
-	"github.com/risor-io/risor/object"
+	risor "github.com/deepnoodle-ai/risor/v2"
+	"github.com/deepnoodle-ai/risor/v2/pkg/object"
+	"github.com/deepnoodle-ai/risor/v2/pkg/op"
 )
 
-// Interpreter wraps Risor's Eval with sandboxing.
-// WithoutDefaultGlobals removes os/exec/file builtins — only explicitly
-// injected globals are available to flow code.
+// Interpreter wraps Risor's Eval.
+// v2 is sandboxed by default. Two conversion passes are applied to globals
+// before evaluation:
+//   - maps with Go function values → *object.Module (avoids built-in method shadowing)
+//   - maps with plain values → *lenientMap (returns nil for missing attribute access)
 type Interpreter struct{}
 
 func (i *Interpreter) Eval(ctx context.Context, code string, globals map[string]any) (any, error) {
-	// Pre-convert globals to Risor object types.
-	// Raw Go funcs and nested maps containing funcs would panic in the VM
-	// because object.AsObjects doesn't handle reflect.Func.
-	converted := convertGlobals(globals)
-
-	result, err := risor.Eval(ctx, code,
-		risor.WithoutDefaultGlobals(),
-		risor.WithGlobals(converted),
-	)
-	if err != nil {
-		return nil, err
-	}
-	return objectToGo(result), nil
+	return risor.Eval(ctx, code, risor.WithEnv(convertGlobals(globals)))
 }
 
-// convertGlobals converts a Go map into a Risor-safe globals map.
-// Functions become *object.Builtin, nested maps become *object.Module,
-// and primitive types are left as-is (Risor's VM handles them via FromGoType).
+// convertGlobals prepares the globals map for Risor evaluation.
 func convertGlobals(globals map[string]any) map[string]any {
 	result := make(map[string]any, len(globals))
 	for k, v := range globals {
-		result[k] = goToRisor(k, v)
+		if m, ok := v.(map[string]any); ok {
+			if containsFunc(m) {
+				result[k] = mapToModule(k, m)
+			} else {
+				result[k] = newLenientMap(m)
+			}
+		} else {
+			result[k] = v
+		}
 	}
 	return result
 }
 
-// goToRisor converts a single Go value to a Risor-compatible type.
-func goToRisor(name string, v any) any {
-	if v == nil {
-		return nil
-	}
-
-	// Already a Risor object? Pass through.
-	if _, ok := v.(object.Object); ok {
-		return v
-	}
-
-	rv := reflect.ValueOf(v)
-
-	switch rv.Kind() {
-	case reflect.Func:
-		return wrapGoFunc(name, v)
-
-	case reflect.Map:
-		// Check if any values are functions — if so, create a Module
-		if m, ok := v.(map[string]any); ok {
-			hasFuncs := false
-			for _, val := range m {
-				if val != nil && reflect.TypeOf(val).Kind() == reflect.Func {
-					hasFuncs = true
-					break
-				}
-			}
-			if hasFuncs {
-				return mapToModule(name, m)
-			}
-			// Pure data map — convert recursively so nested maps with funcs are handled
-			converted := make(map[string]any, len(m))
-			for k, val := range m {
-				converted[k] = goToRisor(k, val)
-			}
-			return converted
+func containsFunc(m map[string]any) bool {
+	for _, v := range m {
+		if v != nil && reflect.TypeOf(v).Kind() == reflect.Func {
+			return true
 		}
-		return v
-
-	default:
-		// Primitive types (string, int, float, bool, etc.) — Risor handles these
-		return v
 	}
+	return false
 }
 
-// wrapGoFunc wraps an arbitrary Go function as a Risor *object.Builtin.
-// The wrapper converts Risor Object args to Go values, calls the function
-// via reflection, and converts the return value back.
-func wrapGoFunc(name string, fn any) *object.Builtin {
-	fnValue := reflect.ValueOf(fn)
-	fnType := fnValue.Type()
+// mapToModule converts a map whose values include Go functions into a Risor
+// *object.Module. This prevents name collisions with built-in map methods
+// (e.g. .get, .keys) that would shadow function keys of the same name.
+func mapToModule(name string, m map[string]any) *object.Module {
+	contents := make(map[string]object.Object, len(m))
+	for k, v := range m {
+		if v == nil {
+			contents[k] = object.Nil
+		} else if reflect.TypeOf(v).Kind() == reflect.Func {
+			contents[k] = wrapGoFunc(fmt.Sprintf("%s.%s", name, k), v)
+		} else {
+			contents[k] = anyToObject(v)
+		}
+	}
+	return object.NewBuiltinsModule(name, contents)
+}
 
-	return object.NewBuiltin(name, func(ctx context.Context, args ...object.Object) object.Object {
-		// Convert Risor args to Go values
+// wrapGoFunc wraps a Go function as a Risor *object.Builtin.
+// Uses v2's (Object, error) return signature — errors propagate natively.
+func wrapGoFunc(name string, fn any) *object.Builtin {
+	fnVal := reflect.ValueOf(fn)
+	fnType := fnVal.Type()
+	errType := reflect.TypeOf((*error)(nil)).Elem()
+
+	return object.NewBuiltin(name, func(ctx context.Context, args ...object.Object) (object.Object, error) {
 		goArgs := make([]reflect.Value, len(args))
 		for i, arg := range args {
-			goVal := objectToGo(arg)
+			goVal := arg.Interface()
 			if i < fnType.NumIn() {
-				expectedType := fnType.In(i)
-				goArgs[i] = convertToExpectedType(goVal, expectedType)
-			} else if fnType.IsVariadic() && i >= fnType.NumIn()-1 {
-				elemType := fnType.In(fnType.NumIn() - 1).Elem()
-				goArgs[i] = convertToExpectedType(goVal, elemType)
+				goArgs[i] = convertArg(goVal, fnType.In(i))
 			} else {
 				goArgs[i] = reflect.ValueOf(goVal)
 			}
 		}
 
-		// Call the Go function
-		var results []reflect.Value
-		if fnType.IsVariadic() {
-			results = fnValue.Call(goArgs)
-		} else {
-			results = fnValue.Call(goArgs)
-		}
-
-		// Handle return values
+		results := fnVal.Call(goArgs)
 		if len(results) == 0 {
-			return object.Nil
+			return object.Nil, nil
 		}
 
-		// Check for error in last return value
 		lastIdx := len(results) - 1
-		if fnType.NumOut() > 0 && fnType.Out(lastIdx).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+		if fnType.NumOut() > 0 && fnType.Out(lastIdx).Implements(errType) {
 			if !results[lastIdx].IsNil() {
-				errVal := results[lastIdx].Interface().(error)
-				return object.NewError(errVal)
+				return nil, results[lastIdx].Interface().(error)
 			}
-			// If there's a non-error return value, use it
 			if len(results) > 1 {
-				return goValueToObject(results[0].Interface())
+				return anyToObject(results[0].Interface()), nil
 			}
-			return object.Nil
+			return object.Nil, nil
 		}
-
-		// Single return value
-		return goValueToObject(results[0].Interface())
+		return anyToObject(results[0].Interface()), nil
 	})
 }
 
-// convertToExpectedType converts a Go value to the expected reflect.Type.
-func convertToExpectedType(val any, expected reflect.Type) reflect.Value {
+func convertArg(val any, expected reflect.Type) reflect.Value {
 	if val == nil {
 		return reflect.Zero(expected)
 	}
@@ -153,14 +112,17 @@ func convertToExpectedType(val any, expected reflect.Type) reflect.Value {
 	if actual.Type().ConvertibleTo(expected) {
 		return actual.Convert(expected)
 	}
-	// Best effort — pass as-is
 	return actual
 }
 
-// goValueToObject converts a Go value to a Risor object.Object.
-func goValueToObject(v any) object.Object {
+// anyToObject converts a Go value to a Risor Object.
+// Maps become *lenientMap (nil for missing keys). Primitives use FromGoType.
+func anyToObject(v any) object.Object {
 	if v == nil {
 		return object.Nil
+	}
+	if m, ok := v.(map[string]any); ok {
+		return newLenientMap(m)
 	}
 	obj := object.FromGoType(v)
 	if obj == nil {
@@ -169,49 +131,37 @@ func goValueToObject(v any) object.Object {
 	return obj
 }
 
-// mapToModule converts a map[string]any (with function values) to a Risor Module.
-// This enables `http.request(...)` syntax — `http` is the module, `request` is a builtin.
-func mapToModule(name string, m map[string]any) *object.Module {
-	contents := make(map[string]object.Object, len(m))
-	for k, v := range m {
-		if v == nil {
-			contents[k] = object.Nil
-			continue
-		}
-		rv := reflect.ValueOf(v)
-		if rv.Kind() == reflect.Func {
-			contents[k] = wrapGoFunc(fmt.Sprintf("%s.%s", name, k), v)
-		} else {
-			contents[k] = goValueToObject(v)
-		}
-	}
-	return object.NewBuiltinsModule(name, contents)
+// lenientMap embeds *object.Map to inherit all map methods and the full
+// Object interface. Only GetAttr is overridden: missing keys return nil
+// instead of (nil, false) which would cause Risor to throw "attribute not found".
+//
+// This allows conditions like `request.body.customer_email == nil` to work
+// safely when the field is absent from the request. Use defined() to
+// distinguish between a field sent as nil vs a field not sent at all.
+type lenientMap struct {
+	*object.Map
 }
 
-// objectToGo recursively converts a Risor object.Object to a native Go value.
-func objectToGo(obj object.Object) any {
-	if obj == nil {
-		return nil
+func newLenientMap(data map[string]any) *lenientMap {
+	items := make(map[string]object.Object, len(data))
+	for k, v := range data {
+		items[k] = anyToObject(v)
 	}
+	return &lenientMap{Map: object.NewMap(items)}
+}
 
-	switch o := obj.(type) {
-	case *object.Map:
-		goMap := make(map[string]any)
-		for k, v := range o.Value() {
-			goMap[k] = objectToGo(v)
-		}
-		return goMap
-	case *object.List:
-		items := o.Value()
-		goSlice := make([]any, len(items))
-		for i, v := range items {
-			goSlice[i] = objectToGo(v)
-		}
-		return goSlice
-	case *object.NilType:
-		return nil
-	default:
-		// For String, Int, Float, Bool, etc. — Interface() returns the native Go value
-		return obj.Interface()
+// GetAttr overrides *object.Map's GetAttr to return nil for missing keys
+// instead of (nil, false). Built-in map methods (.get, .keys, etc.) are
+// still resolved first via the embedded Map.
+func (m *lenientMap) GetAttr(name string) (object.Object, bool) {
+	obj, ok := m.Map.GetAttr(name)
+	if ok {
+		return obj, true
 	}
+	return object.Nil, true
+}
+
+// RunOperation overrides the embedded map's operation to surface errors clearly.
+func (m *lenientMap) RunOperation(opType op.BinaryOpType, right object.Object) (object.Object, error) {
+	return nil, fmt.Errorf("map does not support operation %v", opType)
 }

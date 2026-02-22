@@ -25,11 +25,7 @@ step validate_amount(condition: request.body.amount_cents == nil || request.body
 }
 
 step resolve_currency {
-    currency := request.body.currency
-    if currency == nil || currency == "" {
-        currency = default_currency
-    }
-    currency
+    if (request.body.currency != nil && request.body.currency != "") { request.body.currency } else { default_currency }
 }
 
 step create_order {

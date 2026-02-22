@@ -116,8 +116,14 @@ func extractValues(e *Execution, keys []any, prefix string, getValue func(string
 }
 
 func extractBody(c *gin.Context, f *Flow, e *Execution) {
-	bodyConfig := f.Entrypoint.Config["body"].(map[string]any)
-	bodyType := bodyConfig["type"].(string)
+	bodyConfig, ok := f.Entrypoint.Config["body"].(map[string]any)
+	if !ok {
+		return
+	}
+	bodyType, ok := bodyConfig["type"].(string)
+	if !ok {
+		return
+	}
 
 	if bodyType == "json" {
 		extractJsonBody(c, e)
