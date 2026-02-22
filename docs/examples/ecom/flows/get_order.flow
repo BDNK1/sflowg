@@ -1,0 +1,28 @@
+// Get a single order by ID
+
+entrypoint.http {
+    method: GET
+    path: /api/orders/:id
+    pathVariables: [id]
+}
+
+step fetch_order {
+    postgres.get({
+        query: "SELECT id, customer_email, amount_cents, currency, status, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at FROM orders WHERE id = $1",
+        params: [request.pathVariables.id]
+    })
+}
+
+step not_found(condition: fetch_order.found == false) {
+    response.json({
+        status: 404,
+        body: { error: "order not found" }
+    })
+}
+
+return response.json({
+    status: 200,
+    body: {
+        order: fetch_order.row
+    }
+})

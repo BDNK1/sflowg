@@ -38,3 +38,9 @@ func (r *ResponseHandlerRegistry) Get(handlerType string) (ResponseHandler, bool
 	handler, exists := r.handlers[handlerType]
 	return handler, exists
 }
+
+// All returns the full map of registered response handlers.
+// Used by the DSL plugin bridge to create Risor-callable response functions.
+func (r *ResponseHandlerRegistry) All() map[string]ResponseHandler {
+	return r.handlers
+}

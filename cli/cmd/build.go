@@ -224,11 +224,24 @@ func runBuild(_ *cobra.Command, args []string) error {
 		fmt.Printf("  Core Plugins: %s\n", absPluginsPath)
 	}
 
-	// 6. Generate go.mod (phase 1: dependency resolution)
-	fmt.Println("\nGenerating go.mod...")
-	goModGen := generator.NewGoModGenerator(ws.UUID, cfg.Runtime.Version, absRuntimePath)
+	// 6. Resolve dynamic versions (latest) before go.mod generation
+	// so generated go.mod is concrete and deterministic.
+	resolvedRuntimeVersion, resolvedPlugins, err := resolveModuleVersions(
+		projectDir,
+		cfg.Runtime.Version,
+		absRuntimePath != "",
+		corePluginsPath != "",
+		plugins,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to resolve module versions: %w", err)
+	}
 
-	for _, plugin := range plugins {
+	// 7. Generate go.mod (phase 1: dependency resolution)
+	fmt.Println("\nGenerating go.mod...")
+	goModGen := generator.NewGoModGenerator(ws.UUID, resolvedRuntimeVersion, absRuntimePath)
+
+	for _, plugin := range resolvedPlugins {
 		pluginInfo := generator.PluginInfo{
 			Name:       plugin.Name,
 			ModulePath: plugin.ModulePath,
@@ -263,11 +276,6 @@ func runBuild(_ *cobra.Command, args []string) error {
 
 	fmt.Printf("  ✓ go.mod created\n")
 
-	// Resolve "latest" versions to concrete module versions before downloading modules.
-	if err := pinDynamicModuleVersions(ws.Path, absRuntimePath, cfg.Runtime.Version, corePluginsPath, plugins); err != nil {
-		return fmt.Errorf("failed to resolve dynamic module versions: %w", err)
-	}
-
 	// 7. Resolve/download dependencies before analysis (phase 1)
 	// This makes remote/core plugin source available in module cache so we can analyze
 	// real plugin types/config in phase 2.
@@ -280,10 +288,10 @@ func runBuild(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to download modules: %w", err)
 	}
 
-	// 8. Analyze plugin packages after deps are resolved (phase 2)
+	// 9. Analyze plugin packages after deps are resolved (phase 2)
 	fmt.Println("\nAnalyzing plugin packages...")
 	var analyzedPlugins []analyzedPlugin
-	for _, plugin := range plugins {
+	for _, plugin := range resolvedPlugins {
 		var sourcePath string
 
 		switch {
@@ -337,9 +345,9 @@ func runBuild(_ *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 
-	// 9. Generate main.go
+	// 10. Generate main.go
 	fmt.Println("\nGenerating main.go...")
-	mainGoGen := generator.NewMainGoGenerator(goModGen.ModuleName, cfg.Runtime.Port, embedFlows, cfg.Properties)
+	mainGoGen := generator.NewMainGoGenerator(goModGen.ModuleName, cfg.Runtime.Port, cfg.Runtime.Engine, embedFlows, cfg.Properties)
 
 	for _, plugin := range analyzedPlugins {
 		pluginInfo := generator.PluginInfo{
@@ -377,7 +385,7 @@ func runBuild(_ *cobra.Command, args []string) error {
 
 	fmt.Printf("  ✓ main.go created\n")
 
-	// 10. Build binary
+	// 11. Build binary
 	fmt.Println("\nBuilding binary...")
 
 	// Ensure go.mod/go.sum include all imports from generated main.go and plugins.
@@ -468,48 +476,48 @@ func downloadModules(workspacePath string) error {
 	return nil
 }
 
-func pinDynamicModuleVersions(
-	workspacePath string,
-	absRuntimePath string,
+func resolveModuleVersions(
+	projectDir string,
 	runtimeVersion string,
-	corePluginsPath string,
+	runtimeIsLocal bool,
+	corePluginsAreLocal bool,
 	plugins []detectedPlugin,
-) error {
-	// Runtime module: resolve latest only when not overridden by local runtime path.
-	if absRuntimePath == "" && isLatestVersion(runtimeVersion) {
-		resolved, err := resolveLatestVersion(workspacePath, constants.RuntimeModulePath)
-		if err != nil {
-			return fmt.Errorf("runtime latest resolution failed: %w", err)
-		}
-		if err := setModuleRequireVersion(workspacePath, constants.RuntimeModulePath, resolved); err != nil {
-			return fmt.Errorf("failed to pin runtime version: %w", err)
-		}
-	}
-
-	for _, plugin := range plugins {
-		// Local plugins are replaced to local paths in go.mod; no remote version resolution.
-		if plugin.Type == config.TypeLocalModule {
-			continue
-		}
-		// Core plugins with local override path are also local replaces.
-		if plugin.Type == config.TypeCorePlugin && corePluginsPath != "" {
-			continue
-		}
-		// Explicit versions are already concrete.
-		if !isLatestVersion(plugin.Version) {
-			continue
-		}
-
-		resolved, err := resolveLatestVersion(workspacePath, plugin.ModulePath)
-		if err != nil {
-			return fmt.Errorf("plugin '%s' latest resolution failed: %w", plugin.Name, err)
-		}
-		if err := setModuleRequireVersion(workspacePath, plugin.ModulePath, resolved); err != nil {
-			return fmt.Errorf("failed to pin plugin '%s' version: %w", plugin.Name, err)
+) (string, []detectedPlugin, error) {
+	resolvedRuntime := runtimeVersion
+	if isLatestVersion(resolvedRuntime) {
+		if runtimeIsLocal {
+			// Runtime is provided by local replace directive.
+			resolvedRuntime = "v0.0.0"
+		} else {
+			v, err := resolveLatestVersion(projectDir, constants.RuntimeModulePath)
+			if err != nil {
+				return "", nil, fmt.Errorf("runtime latest resolution failed: %w", err)
+			}
+			resolvedRuntime = v
 		}
 	}
 
-	return nil
+	resolvedPlugins := make([]detectedPlugin, 0, len(plugins))
+	for _, p := range plugins {
+		plugin := p
+		if isLatestVersion(plugin.Version) {
+			switch {
+			case plugin.Type == config.TypeLocalModule:
+				plugin.Version = "v0.0.0"
+			case plugin.Type == config.TypeCorePlugin && corePluginsAreLocal:
+				plugin.Version = "v0.0.0"
+			default:
+				v, err := resolveLatestVersion(projectDir, plugin.ModulePath)
+				if err != nil {
+					return "", nil, fmt.Errorf("plugin '%s' latest resolution failed: %w", plugin.Name, err)
+				}
+				plugin.Version = v
+			}
+		}
+		resolvedPlugins = append(resolvedPlugins, plugin)
+	}
+
+	return resolvedRuntime, resolvedPlugins, nil
 }
 
 func isLatestVersion(version string) bool {
@@ -528,14 +536,4 @@ func resolveLatestVersion(workspacePath, modulePath string) (string, error) {
 		return "", fmt.Errorf("empty latest version for %s", modulePath)
 	}
 	return version, nil
-}
-
-func setModuleRequireVersion(workspacePath, modulePath, version string) error {
-	cmd := exec.Command("go", "mod", "edit", "-require", fmt.Sprintf("%s@%s", modulePath, version))
-	cmd.Dir = workspacePath
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("go mod edit failed: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
 }

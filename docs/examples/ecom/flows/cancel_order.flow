@@ -1,0 +1,49 @@
+// Cancel an order
+
+entrypoint.http {
+    method: POST
+    path: /api/orders/:id/cancel
+    pathVariables: [id]
+}
+
+step fetch_order {
+    postgres.get({
+        query: "SELECT id, status FROM orders WHERE id = $1",
+        params: [request.pathVariables.id]
+    })
+}
+
+step not_found(condition: fetch_order.found == false) {
+    response.json({
+        status: 404,
+        body: { error: "order not found" }
+    })
+}
+
+step already_canceled(condition: fetch_order.row.status == "canceled") {
+    response.json({
+        status: 409,
+        body: { error: "order is already canceled" }
+    })
+}
+
+step already_paid(condition: fetch_order.row.status == "paid") {
+    response.json({
+        status: 409,
+        body: { error: "paid order cannot be canceled" }
+    })
+}
+
+step mark_canceled {
+    postgres.get({
+        query: "UPDATE orders SET status = 'canceled', canceled_at = NOW(), paid_at = NULL WHERE id = $1 RETURNING id, customer_email, amount_cents, currency, status, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at",
+        params: [request.pathVariables.id]
+    })
+}
+
+return response.json({
+    status: 200,
+    body: {
+        order: mark_canceled.row
+    }
+})

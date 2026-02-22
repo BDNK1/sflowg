@@ -1,4 +1,4 @@
-package runtime
+package yaml
 
 import (
 	"regexp"
@@ -14,6 +14,8 @@ func isDigit(r rune) bool {
 	return r >= '0' && r <= '9'
 }
 
+// FormatKey converts dot-separated and hyphenated keys to underscore-separated flat keys.
+// Example: "step.result.field" → "step_result_field"
 func FormatKey(key string) string {
 	key = strings.ReplaceAll(key, ".", "_")
 	key = hyphenStartOrEndRe.ReplaceAllString(key, "${1}_${2}")
@@ -21,6 +23,8 @@ func FormatKey(key string) string {
 	return key
 }
 
+// FormatExpression converts dot notation in expressions to underscore notation,
+// preserving string literals, optional chaining, numeric decimals, and parenthesized expressions.
 func FormatExpression(e string) string {
 	result := []rune(e)
 	openParentheses := 0

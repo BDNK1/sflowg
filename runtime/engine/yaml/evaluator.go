@@ -1,4 +1,4 @@
-package runtime
+package yaml
 
 import (
 	"encoding/base64"
@@ -23,15 +23,20 @@ var exprFunctions = []expr.Option{
 	}),
 }
 
-func Eval(expression string, context map[string]any) (any, error) {
+// ExpressionEvaluator evaluates expressions using the expr-lang library.
+// It formats keys and expressions using the flat underscore convention.
+type ExpressionEvaluator struct{}
+
+func NewExpressionEvaluator() *ExpressionEvaluator {
+	return &ExpressionEvaluator{}
+}
+
+func (e *ExpressionEvaluator) Eval(expression string, context map[string]any) (any, error) {
 	// Add null as alias for nil (JSON/YAML compatibility)
 	context["null"] = nil
 
 	// defined() checks if a path exists in context (distinguishes missing from null)
 	// Usage: defined("step.result.field") returns true if key exists, even if value is null
-	//
-	// OPTIMIZATION NOTE: This closure is created on every Eval() call.
-	// If needed, could be optimized by creating once per Execution and passing via opts.
 	definedFn := expr.Function(
 		"defined",
 		func(params ...any) (any, error) {

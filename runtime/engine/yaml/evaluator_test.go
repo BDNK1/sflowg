@@ -1,10 +1,11 @@
-package runtime
+package yaml
 
 import (
 	"testing"
 )
 
 func TestBase64Encode(t *testing.T) {
+	eval := NewExpressionEvaluator()
 	tests := []struct {
 		name     string
 		expr     string
@@ -34,7 +35,7 @@ func TestBase64Encode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := Eval(tt.expr, map[string]any{})
+			result, err := eval.Eval(tt.expr, map[string]any{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -46,6 +47,7 @@ func TestBase64Encode(t *testing.T) {
 }
 
 func TestBase64Decode(t *testing.T) {
+	eval := NewExpressionEvaluator()
 	tests := []struct {
 		name     string
 		expr     string
@@ -70,7 +72,7 @@ func TestBase64Decode(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := Eval(tt.expr, map[string]any{})
+			result, err := eval.Eval(tt.expr, map[string]any{})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -82,11 +84,12 @@ func TestBase64Decode(t *testing.T) {
 }
 
 func TestBase64WithContext(t *testing.T) {
+	eval := NewExpressionEvaluator()
 	ctx := map[string]any{
 		"api_key": "sk_test_abc123",
 	}
 
-	result, err := Eval(`"Basic " + base64_encode(api_key + ":")`, ctx)
+	result, err := eval.Eval(`"Basic " + base64_encode(api_key + ":")`, ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -98,9 +101,10 @@ func TestBase64WithContext(t *testing.T) {
 }
 
 func TestAllowUndefinedVariables(t *testing.T) {
+	eval := NewExpressionEvaluator()
 	ctx := map[string]any{
-		"exists":   "hello",
-		"is_nil":   nil,
+		"exists": "hello",
+		"is_nil": nil,
 	}
 
 	tests := []struct {
@@ -116,7 +120,7 @@ func TestAllowUndefinedVariables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := Eval(tt.expr, ctx)
+			result, err := eval.Eval(tt.expr, ctx)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -128,6 +132,7 @@ func TestAllowUndefinedVariables(t *testing.T) {
 }
 
 func TestNullCoalescing(t *testing.T) {
+	eval := NewExpressionEvaluator()
 	ctx := map[string]any{
 		"has_value": "hello",
 		"is_nil":    nil,
@@ -147,7 +152,7 @@ func TestNullCoalescing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := Eval(tt.expr, ctx)
+			result, err := eval.Eval(tt.expr, ctx)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -159,6 +164,7 @@ func TestNullCoalescing(t *testing.T) {
 }
 
 func TestOptionalChaining(t *testing.T) {
+	eval := NewExpressionEvaluator()
 	ctx := map[string]any{
 		"user_name": "John",
 		"user": map[string]any{
@@ -184,7 +190,7 @@ func TestOptionalChaining(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := Eval(tt.expr, ctx)
+			result, err := eval.Eval(tt.expr, ctx)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -195,14 +201,11 @@ func TestOptionalChaining(t *testing.T) {
 	}
 }
 
-// NOTE: expr-lang limitation - optional chaining on explicitly nil values in context
-// fails at compile time. This is acceptable because in real flows, missing steps
-// return nil via AllowUndefinedVariables, and nested data uses maps not bare nil.
-
 func TestDefinedFunction(t *testing.T) {
+	eval := NewExpressionEvaluator()
 	ctx := map[string]any{
-		"exists":        "hello",
-		"is_nil":        nil,
+		"exists":          "hello",
+		"is_nil":          nil,
 		"step_result_id": 123,
 	}
 
@@ -220,7 +223,7 @@ func TestDefinedFunction(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := Eval(tt.expr, ctx)
+			result, err := eval.Eval(tt.expr, ctx)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -232,6 +235,8 @@ func TestDefinedFunction(t *testing.T) {
 }
 
 func TestDefinedWithConditional(t *testing.T) {
+	eval := NewExpressionEvaluator()
+
 	// Simulate: step ran and returned nil vs step was skipped
 	ctxStepRan := map[string]any{
 		"step_result": nil,
@@ -241,7 +246,7 @@ func TestDefinedWithConditional(t *testing.T) {
 	}
 
 	// Step ran but returned nil
-	result, err := Eval(`defined("step.result") ? "ran" : "skipped"`, ctxStepRan)
+	result, err := eval.Eval(`defined("step.result") ? "ran" : "skipped"`, ctxStepRan)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -250,7 +255,7 @@ func TestDefinedWithConditional(t *testing.T) {
 	}
 
 	// Step was skipped
-	result, err = Eval(`defined("step.result") ? "ran" : "skipped"`, ctxStepSkipped)
+	result, err = eval.Eval(`defined("step.result") ? "ran" : "skipped"`, ctxStepSkipped)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

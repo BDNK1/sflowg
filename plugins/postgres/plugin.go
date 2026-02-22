@@ -47,7 +47,7 @@ type PostgresPlugin struct {
 }
 
 // Initialize opens the database connection pool
-func (p *PostgresPlugin) Initialize(exec *plugin.Execution) error {
+func (p *PostgresPlugin) Initialize() error {
 	// Debug: log connection string (mask password)
 	fmt.Printf("[postgres] DEBUG: Initializing with connection_string: %s\n", maskConnectionString(p.Config.ConnectionString))
 	fmt.Printf("[postgres] DEBUG: MaxOpenConns=%d, MaxIdleConns=%d, ConnMaxLifetimeMs=%d\n",
@@ -74,7 +74,7 @@ func (p *PostgresPlugin) Initialize(exec *plugin.Execution) error {
 }
 
 // Shutdown closes the database connection pool
-func (p *PostgresPlugin) Shutdown(exec *plugin.Execution) error {
+func (p *PostgresPlugin) Shutdown() error {
 	if p.db != nil {
 		return p.db.Close()
 	}

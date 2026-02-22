@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
 // Interface type constants for plugin capabilities
@@ -124,54 +123,33 @@ func (c *Container) GetPlugin(name string) any {
 	return c.plugins[name]
 }
 
-// Initialize calls Initialize on all plugins implementing Initializer interface
-// For Phase 1 MVP: Uses fail-fast approach (panics on any error)
+// Initialize calls Initialize on all plugins implementing Initializer interface.
+// Uses fail-fast approach (panics on any error).
 func (c *Container) Initialize(ctx context.Context) error {
-	// Get initializer plugins from registry (interface check already done during registration)
 	initializerPlugins := c.pluginsByInterface[InterfaceInitializer]
-
-	// Create an execution context for initialization
-	// This allows plugins to access the container and shared values during init
-	exec := &Execution{
-		ID:        "init-" + uuid.New().String(),
-		Values:    make(map[string]any),
-		Container: c,
-	}
 
 	for i, p := range initializerPlugins {
 		initializer := p.(Initializer)
-		if err := initializer.Initialize(exec); err != nil {
-			// Phase 1: Fail-fast with panic
+		if err := initializer.Initialize(); err != nil {
 			panic(fmt.Sprintf("plugin #%d initialization failed: %v", i, err))
 		}
 	}
 	return nil
 }
 
-// Shutdown calls Shutdown on all plugins implementing Shutdowner interface
-// Plugins are shut down in reverse order of registration
+// Shutdown calls Shutdown on all plugins implementing Shutdowner interface.
+// Plugins are shut down in reverse order of registration.
 func (c *Container) Shutdown(ctx context.Context) error {
-	// Get shutdowner plugins from registry
 	shutdownerPlugins := c.pluginsByInterface[InterfaceShutdowner]
 
-	// Create an execution context for shutdown
-	// This allows plugins to access the container and shared values during shutdown
-	exec := &Execution{
-		ID:        "shutdown-" + uuid.New().String(),
-		Values:    make(map[string]any),
-		Container: c,
-	}
-
-	// Shutdown in reverse order
 	var errors []error
 	for i := len(shutdownerPlugins) - 1; i >= 0; i-- {
 		shutdowner := shutdownerPlugins[i].(Shutdowner)
-		if err := shutdowner.Shutdown(exec); err != nil {
+		if err := shutdowner.Shutdown(); err != nil {
 			errors = append(errors, fmt.Errorf("plugin #%d shutdown failed: %w", i, err))
 		}
 	}
 
-	// Return combined errors if any
 	if len(errors) > 0 {
 		return fmt.Errorf("shutdown errors: %v", errors)
 	}

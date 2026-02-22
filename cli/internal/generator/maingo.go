@@ -16,20 +16,25 @@ type MainGoGenerator struct {
 	ModuleName        string
 	RuntimeModulePath string
 	Port              string
+	Engine            string                 // "yaml" or "dsl"
 	EmbedFlows        bool
 	GlobalProperties  map[string]interface{} // Global properties from flow-config.yaml
 	Plugins           []PluginInfo
 }
 
 // NewMainGoGenerator creates a new main.go generator
-func NewMainGoGenerator(moduleName string, port string, embedFlows bool, globalProperties map[string]interface{}) *MainGoGenerator {
+func NewMainGoGenerator(moduleName string, port string, engine string, embedFlows bool, globalProperties map[string]interface{}) *MainGoGenerator {
 	if port == "" {
 		port = constants.DefaultPort
+	}
+	if engine == "" {
+		engine = "yaml"
 	}
 	return &MainGoGenerator{
 		ModuleName:        moduleName,
 		RuntimeModulePath: constants.RuntimeModulePath,
 		Port:              port,
+		Engine:            engine,
 		EmbedFlows:        embedFlows,
 		GlobalProperties:  globalProperties,
 		Plugins:           []PluginInfo{},

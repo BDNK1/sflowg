@@ -13,11 +13,19 @@ import (
 
 var _ context.Context = &Execution{}
 
+// ResponseDescriptor captures a response set by steps (YAML return or DSL response.*() calls).
+// The HTTP handler dispatches them to the appropriate ResponseHandler.
+type ResponseDescriptor struct {
+	HandlerName string         // e.g. "http.json"
+	Args        map[string]any // e.g. {status: 404, body: {...}}
+}
+
 type Execution struct {
-	ID        string
-	Values    map[string]any
-	Flow      *Flow
-	Container *Container
+	ID                 string
+	Store              ValueStore
+	Flow               *Flow
+	Container          *Container
+	ResponseDescriptor *ResponseDescriptor
 }
 
 func (e *Execution) Deadline() (deadline time.Time, ok bool) {
@@ -37,24 +45,30 @@ func (e *Execution) Err() error {
 }
 
 func (e *Execution) AddValue(k string, v any) {
-	e.Values[FormatKey(k)] = v
+	e.Store.Set(k, v)
 }
 
 func (e *Execution) Value(key any) any {
 	k, ok := key.(string)
-
 	if !ok {
 		return nil
 	}
 
-	return e.Values[FormatKey(k)]
+	v, _ := e.Store.Get(k)
+	return v
 }
 
-func NewExecution(flow *Flow, container *Container, globalProperties map[string]any) Execution {
+// Values returns the full context map for expression evaluation.
+// This is a convenience accessor for backward compatibility.
+func (e *Execution) Values() map[string]any {
+	return e.Store.All()
+}
+
+func NewExecution(flow *Flow, container *Container, globalProperties map[string]any, store ValueStore) Execution {
 	id := uuid.New().String()
 	exec := Execution{
 		ID:        id,
-		Values:    make(map[string]any),
+		Store:     store,
 		Flow:      flow,
 		Container: container,
 	}

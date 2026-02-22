@@ -10,11 +10,17 @@ import (
 {{- end}}
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"{{.RuntimeModulePath}}"
+{{- if eq .Engine "dsl"}}
+	dslengine "{{.RuntimeModulePath}}/engine/dsl"
+{{- else}}
+	yamlengine "{{.RuntimeModulePath}}/engine/yaml"
+{{- end}}
 {{- range .Plugins}}
 {{- if eq .Type 3}}
 	"{{$.ModuleName}}/vendored"
@@ -140,9 +146,23 @@ func main() {
 	}
 {{- end}}
 
+	// Create engine components
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+{{- if eq .Engine "dsl"}}
+	loader := dslengine.NewFlowLoader()
+	evaluator := dslengine.NewExpressionEvaluator()
+	stepExecutor := dslengine.NewStepExecutor(logger)
+	newValueStore := func() runtime.ValueStore { return dslengine.NewValueStore() }
+{{- else}}
+	loader := yamlengine.NewFlowLoader()
+	evaluator := yamlengine.NewExpressionEvaluator()
+	stepExecutor := yamlengine.NewStepExecutor(evaluator, logger)
+	newValueStore := func() runtime.ValueStore { return yamlengine.NewValueStore() }
+{{- end}}
+
 	// Create app and start server (runtime handles everything)
 	// Runtime will: Initialize plugins → LoadFlows → Setup Gin → Handle signals → Graceful shutdown
-	app := runtime.NewApp(container)
+	app := runtime.NewApp(container, loader, evaluator, stepExecutor, newValueStore)
 
 {{- if .GlobalProperties}}
 	// Set global properties from flow-config.yaml
@@ -182,9 +202,10 @@ func extractEmbeddedFlows(fsys embed.FS, dir string) (string, error) {
 			continue
 		}
 
-		// Check if it's a YAML file
-		matched, err := filepath.Match("*.yaml", entry.Name())
-		if err != nil || !matched {
+		// Check if it's a flow file (YAML or DSL)
+		matchedYAML, _ := filepath.Match("*.yaml", entry.Name())
+		matchedDSL, _ := filepath.Match("*.flow", entry.Name())
+		if !matchedYAML && !matchedDSL {
 			continue
 		}
 

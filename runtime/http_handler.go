@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func NewHttpHandler(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, g *gin.Engine) {
+func NewHttpHandler(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, newValueStore func() ValueStore, g *gin.Engine) {
 	config := flow.Entrypoint.Config
 	method := strings.ToLower(config["method"].(string))
 	path := config["path"].(string)
@@ -20,23 +20,21 @@ func NewHttpHandler(flow *Flow, container *Container, executor *Executor, global
 
 	switch method {
 	case "get":
-		g.GET(path, handleRequest(flow, container, executor, globalProperties, false))
+		g.GET(path, handleRequest(flow, container, executor, globalProperties, newValueStore, false))
 	case "post":
-		g.POST(path, handleRequest(flow, container, executor, globalProperties, true))
+		g.POST(path, handleRequest(flow, container, executor, globalProperties, newValueStore, true))
 	default:
 		fmt.Printf("Method %s is not supported", method)
 	}
 }
 
-func handleRequest(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, withBody bool) gin.HandlerFunc {
+func handleRequest(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, newValueStore func() ValueStore, withBody bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		e := NewExecution(flow, container, globalProperties)
+		e := NewExecution(flow, container, globalProperties, newValueStore())
 
 		extractRequestData(c, flow, &e, withBody)
 
-		err := executor.ExecuteSteps(&e)
-
-		if err != nil {
+		if err := executor.ExecuteSteps(&e); err != nil {
 			slog.Error("Flow execution failed",
 				"flow", flow.ID,
 				"path", c.Request.URL.Path,
@@ -48,7 +46,34 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 			return
 		}
 
-		toResponse(c, &e)
+		dispatchResponse(c, &e)
+	}
+}
+
+// dispatchResponse handles the HTTP response dispatch based on the execution's ResponseDescriptor.
+// If no descriptor was set by any step, returns a default 200 OK.
+func dispatchResponse(c *gin.Context, execution *Execution) {
+	if execution.ResponseDescriptor == nil {
+		c.JSON(http.StatusOK, gin.H{"status": "success"})
+		return
+	}
+
+	handler, ok := execution.Container.ResponseHandlers.Get(execution.ResponseDescriptor.HandlerName)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": "unknown response handler: " + execution.ResponseDescriptor.HandlerName,
+		})
+		return
+	}
+
+	if err := handler.Handle(c, execution, execution.ResponseDescriptor.Args); err != nil {
+		slog.Error("Response handler execution failed",
+			"flow", execution.Flow.ID,
+			"handler", execution.ResponseDescriptor.HandlerName,
+			"error", err.Error())
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": "Error generating response: " + err.Error(),
+		})
 	}
 }
 
@@ -91,8 +116,14 @@ func extractValues(e *Execution, keys []any, prefix string, getValue func(string
 }
 
 func extractBody(c *gin.Context, f *Flow, e *Execution) {
-	bodyConfig := f.Entrypoint.Config["body"].(map[string]any)
-	bodyType := bodyConfig["type"].(string)
+	bodyConfig, ok := f.Entrypoint.Config["body"].(map[string]any)
+	if !ok {
+		return
+	}
+	bodyType, ok := bodyConfig["type"].(string)
+	if !ok {
+		return
+	}
 
 	if bodyType == "json" {
 		extractJsonBody(c, e)
@@ -121,130 +152,5 @@ func extractJsonBody(c *gin.Context, e *Execution) {
 
 	// Store values at all levels (intermediate objects + leaf values)
 	// This allows both: request.body.metadata.order_id AND request.body.metadata != null
-	storeWithIntermediates(e, RequestBodyPrefix, parsed)
-}
-
-// storeWithIntermediates recursively stores values at every level of the JSON structure.
-// This allows both leaf value access (request.body.metadata.order_id) and
-// intermediate object checks (request.body.metadata != null).
-func storeWithIntermediates(e *Execution, prefix string, value any) {
-	// Always store current value (whether object, array, or leaf)
-	e.AddValue(prefix, value)
-
-	// If it's a map, recurse into children
-	if m, ok := value.(map[string]any); ok {
-		for k, v := range m {
-			storeWithIntermediates(e, prefix+"."+k, v)
-		}
-	}
-
-	// If it's an array, recurse with indices
-	if arr, ok := value.([]any); ok {
-		for i, v := range arr {
-			storeWithIntermediates(e, fmt.Sprintf("%s.%d", prefix, i), v)
-		}
-	}
-}
-
-func toResponse(c *gin.Context, e *Execution) {
-	// Handle case where no return section is defined
-	if e.Flow.Return.Type == "" {
-		c.JSON(http.StatusOK, gin.H{"status": "success"})
-		return
-	}
-
-	// Evaluate all arguments recursively
-	evaluatedArgs, err := evaluateReturnArgs(e.Flow.Return.Args, e.Values)
-	if err != nil {
-		slog.Error("Failed to evaluate return arguments",
-			"flow", e.Flow.ID,
-			"type", e.Flow.Return.Type,
-			"error", err.Error())
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"message": "Error evaluating response: " + err.Error(),
-		})
-		return
-	}
-
-	// Lookup response handler from registry
-	handler, exists := e.Container.ResponseHandlers.Get(e.Flow.Return.Type)
-	if !exists {
-		slog.Error("Response handler not found",
-			"flow", e.Flow.ID,
-			"type", e.Flow.Return.Type)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"message": "Unknown response type: " + e.Flow.Return.Type,
-		})
-		return
-	}
-
-	// Execute response handler
-	if err := handler.Handle(c, e, evaluatedArgs); err != nil {
-		slog.Error("Response handler execution failed",
-			"flow", e.Flow.ID,
-			"type", e.Flow.Return.Type,
-			"error", err.Error())
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"message": "Error generating response: " + err.Error(),
-		})
-		return
-	}
-}
-
-// evaluateReturnArgs recursively evaluates all expressions in return arguments
-func evaluateReturnArgs(args map[string]any, values map[string]any) (map[string]any, error) {
-	result := make(map[string]any)
-
-	for key, value := range args {
-		evaluated, err := evaluateReturnArg(value, values)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate arg '%s': %w", key, err)
-		}
-		result[key] = evaluated
-	}
-
-	return result, nil
-}
-
-// evaluateReturnArg recursively evaluates a single argument value
-func evaluateReturnArg(value any, values map[string]any) (any, error) {
-	switch v := value.(type) {
-	case string:
-		// Try to evaluate as expression
-		evaluated, err := Eval(v, values)
-		if err != nil {
-			// If evaluation fails, return the original string
-			// This allows literal strings in return args
-			return v, nil
-		}
-		return evaluated, nil
-
-	case map[string]any:
-		// Recursively evaluate map values
-		result := make(map[string]any)
-		for k, val := range v {
-			evaluated, err := evaluateReturnArg(val, values)
-			if err != nil {
-				return nil, err
-			}
-			result[k] = evaluated
-		}
-		return result, nil
-
-	case []any:
-		// Recursively evaluate array elements
-		result := make([]any, len(v))
-		for i, val := range v {
-			evaluated, err := evaluateReturnArg(val, values)
-			if err != nil {
-				return nil, err
-			}
-			result[i] = evaluated
-		}
-		return result, nil
-
-	default:
-		// For other types (int, bool, etc.), return as-is
-		return value, nil
-	}
+	e.Store.SetNested(RequestBodyPrefix, parsed)
 }

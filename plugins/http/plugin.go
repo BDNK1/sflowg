@@ -43,9 +43,7 @@ type HTTPPlugin struct {
 
 // Initialize implements the plugin.Initializer interface
 // Config is already validated by the framework before this is called
-func (h *HTTPPlugin) Initialize(exec *plugin.Execution) error {
-	// Create resty client with validated config
-	// exec implements context.Context, so it can be used anywhere a context is needed
+func (h *HTTPPlugin) Initialize() error {
 	h.client = resty.New().
 		SetTimeout(h.Config.Timeout).
 		SetRetryCount(h.Config.MaxRetries).
@@ -145,7 +143,7 @@ func flattenToFormData(data map[string]any, prefix string) map[string]string {
 }
 
 // Shutdown implements the plugin.Shutdowner interface
-func (h *HTTPPlugin) Shutdown(exec *plugin.Execution) error {
+func (h *HTTPPlugin) Shutdown() error {
 	// Resty doesn't require explicit cleanup, but we can nil the client
 	h.client = nil
 	return nil
