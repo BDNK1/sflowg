@@ -4,7 +4,7 @@ A simple ecommerce orders workflow built with SFlowG's DSL engine, demonstrating
 
 ## DSL vs YAML
 
-This example uses `engine: dsl` in `flow-config.yaml`. Flows are written in `.flow` files using the DSL syntax instead of YAML. Compare with the `stripe-integration` example, which uses the default YAML engine.
+This example uses `engine: dsl` in `flow-config.yaml`. Flows are written in `.flow` files using the DSL syntax instead of YAML. The `stripe-integration` example also uses the DSL engine now.
 
 **DSL syntax highlights:**
 - Steps contain Risor code bodies instead of declarative args
@@ -54,6 +54,7 @@ Server: `http://localhost:8080`
 | GET | `/api/orders/:id` | Get order details |
 | POST | `/api/orders/:id/pay` | Create payment via stripe-integration flow |
 | POST | `/api/orders/:id/cancel` | Cancel order |
+| POST | `/internal/payments/stripe-webhook` | Internal callback for Stripe webhook status sync |
 
 ## Test
 
@@ -61,7 +62,7 @@ Server: `http://localhost:8080`
 # Create an order
 curl -s -X POST http://localhost:8080/api/orders \
   -H "Content-Type: application/json" \
-  -d '{"customer_email": "alice@example.com", "amount_cents": 14999, "currency": "usd"}'
+  -d '{"customer_email": "alice@example.com", "customer_name": "Alice", "amount_cents": 14999, "currency": "usd"}'
 
 # Get the order
 curl -s http://localhost:8080/api/orders/1

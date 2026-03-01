@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: stripe_payments
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - ./migrations/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - postgres_data:/var/lib/postgresql

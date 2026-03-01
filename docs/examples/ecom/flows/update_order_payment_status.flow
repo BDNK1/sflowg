@@ -1,0 +1,75 @@
+entrypoint.http {
+    method: POST
+    path: /internal/payments/stripe-webhook
+    body: { type: json }
+    timeout: 5000
+}
+
+step validate_order_id(condition: request.body.order_id == nil || request.body.order_id == "") {
+    response.json({
+        status: 400,
+        body: { error: "order_id is required" }
+    })
+}
+
+step map_event {
+    match request.body.event_type {
+        "payment_intent.succeeded" => {
+            handled: true,
+            status: "paid",
+            set_paid_at: true,
+            set_canceled_at: false
+        }
+        "payment_intent.payment_failed" => {
+            handled: true,
+            status: "payment_failed",
+            set_paid_at: false,
+            set_canceled_at: false
+        }
+        "payment_intent.canceled" => {
+            handled: true,
+            status: "canceled",
+            set_paid_at: false,
+            set_canceled_at: true
+        }
+        _ => {
+            handled: false
+        }
+    }
+}
+
+step ignored_event(condition: map_event.handled != true) {
+    response.json({
+        status: 202,
+        body: {
+            accepted: true,
+            updated: false,
+            reason: "event_not_handled"
+        }
+    })
+}
+
+step update_order {
+    postgres.exec({
+        query: "UPDATE orders SET status = $1, paid_at = CASE WHEN $2 THEN NOW() ELSE NULL END, canceled_at = CASE WHEN $3 THEN NOW() ELSE NULL END WHERE id = $4",
+        params: [map_event.status, map_event.set_paid_at, map_event.set_canceled_at, request.body.order_id]
+    })
+}
+
+step order_not_found(condition: update_order.affected_rows == 0) {
+    response.json({
+        status: 404,
+        body: { error: "order not found for callback" }
+    })
+}
+
+return response.json({
+    status: 200,
+    body: {
+        accepted: true,
+        updated: true,
+        order_id: request.body.order_id,
+        status: map_event.status,
+        payment_intent_id: request.body.payment_intent_id
+    }
+})

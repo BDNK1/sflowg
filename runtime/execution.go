@@ -20,46 +20,88 @@ type ResponseDescriptor struct {
 	Args        map[string]any // e.g. {status: 404, body: {...}}
 }
 
+// SuccessPath identifies which execution path (primary or fallback) succeeded for a step.
+type SuccessPath string
+
+const (
+	SuccessPathPrimary  SuccessPath = "primary"
+	SuccessPathFallback SuccessPath = "fallback"
+)
+
+// CompensationEntry records a step that produced side-effects and must be undone
+// if a later step fails. The Path field indicates which branch succeeded so
+// compensation logic can apply the correct undo operation.
+type CompensationEntry struct {
+	StepID string
+	Body   string
+	Path   SuccessPath
+}
+
 type Execution struct {
 	ID                 string
 	Store              ValueStore
 	Flow               *Flow
 	Container          *Container
 	ResponseDescriptor *ResponseDescriptor
+	CompensationStack  []CompensationEntry
+	ctx                context.Context // real context carrying deadline/cancellation
 }
 
+// context.Context implementation — delegates to the embedded ctx so that real
+// timeouts and cancellations propagate through all slog, Risor, and retry calls.
+
 func (e *Execution) Deadline() (deadline time.Time, ok bool) {
-	return time.Time{}, false
+	return e.ctx.Deadline()
 }
 
 func (e *Execution) Done() <-chan struct{} {
-	return nil
+	return e.ctx.Done()
 }
 
 func (e *Execution) Err() error {
-	if e.Container == nil {
-		return nil
-	}
-
-	return nil
-}
-
-func (e *Execution) AddValue(k string, v any) {
-	e.Store.Set(k, v)
+	return e.ctx.Err()
 }
 
 func (e *Execution) Value(key any) any {
 	k, ok := key.(string)
 	if !ok {
-		return nil
+		return e.ctx.Value(key)
 	}
 
 	v, _ := e.Store.Get(k)
 	return v
 }
 
+// WithContext returns a shallow copy of the Execution with a new embedded
+// context. Use this to apply a per-step timeout without mutating the parent.
+// Mirrors the http.Request.WithContext pattern.
+func (e *Execution) WithContext(ctx context.Context) *Execution {
+	copy := *e
+	copy.ctx = ctx
+	return &copy
+}
+
+// WithScopedContext temporarily swaps the execution context while fn runs.
+// This keeps execution state on a single object while allowing step-scoped
+// deadlines/cancellation to propagate to plugins that use exec as context.Context.
+// Execution is single-threaded, so temporary ctx mutation is safe here.
+func (e *Execution) WithScopedContext(ctx context.Context, fn func()) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	prev := e.ctx
+	e.ctx = ctx
+	defer func() {
+		e.ctx = prev
+	}()
+	fn()
+}
+
+func (e *Execution) AddValue(k string, v any) {
+	e.Store.Set(k, v)
+}
+
 // Values returns the full context map for expression evaluation.
-// This is a convenience accessor for backward compatibility.
 func (e *Execution) Values() map[string]any {
 	return e.Store.All()
 }
@@ -71,15 +113,14 @@ func NewExecution(flow *Flow, container *Container, globalProperties map[string]
 		Store:     store,
 		Flow:      flow,
 		Container: container,
+		ctx:       context.Background(),
 	}
 
 	// Merge properties: global properties first, then flow properties (flow overrides)
-	// 1. Load global properties from flow-config.yaml
 	for k, v := range globalProperties {
 		exec.AddValue("properties."+k, resolveEnvVar(v))
 	}
 
-	// 2. Load flow properties (override globals)
 	for k, v := range flow.Properties {
 		exec.AddValue("properties."+k, resolveEnvVar(v))
 	}
@@ -91,39 +132,28 @@ func NewExecution(flow *Flow, container *Container, globalProperties map[string]
 var envVarPattern = regexp.MustCompile(`^\$\{([A-Z_][A-Z0-9_]*)(:[^}]*)?\}$`)
 
 // resolveEnvVar resolves environment variables in property values
-// Supports:
-//   - ${VAR}         - Required environment variable (panics if not set)
-//   - ${VAR:default} - Optional environment variable with default
-//   - literal        - Plain literal value (returned as-is)
 func resolveEnvVar(value any) any {
-	// Only process string values for env var substitution
 	strValue, ok := value.(string)
 	if !ok {
-		return value // Return non-string values as-is
+		return value
 	}
 
-	// Check if it matches env var pattern
 	matches := envVarPattern.FindStringSubmatch(strValue)
 	if matches == nil {
-		// Not an env var pattern - return as-is
 		return value
 	}
 
 	varName := matches[1]
-	defaultPart := matches[2] // Will be ":default" or empty
+	defaultPart := matches[2]
 
-	// Try to get environment variable
 	envValue, exists := os.LookupEnv(varName)
 	if exists {
 		return envValue
 	}
 
-	// No env var found - check for default
 	if defaultPart != "" {
-		// Remove leading colon and return default value
 		return strings.TrimPrefix(defaultPart, ":")
 	}
 
-	// Required env var not set - panic with clear message
 	panic(fmt.Sprintf("Required environment variable not set: %s", varName))
 }

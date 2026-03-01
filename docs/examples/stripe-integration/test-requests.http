@@ -1,7 +1,7 @@
 ### Stripe Integration - Manual Test Requests
 ### Use with VS Code REST Client or IntelliJ HTTP Client
 
-@baseUrl = http://localhost:8080
+@baseUrl = http://localhost:8090
 
 ### ============================================
 ### Create Payment - Success
@@ -20,3 +20,46 @@ X-Request-ID: manual-test-001
     "order_id": "ORD-12345"
   }
 }
+
+### ============================================
+### Create Payment - Minimal Payload
+### ============================================
+POST {{baseUrl}}/api/payments
+Content-Type: application/json
+X-Request-ID: manual-test-002
+
+{
+  "amount": 990,
+  "customer_email": "minimal@example.com",
+  "metadata": {
+    "order_id": "ORD-20002"
+  }
+}
+
+### ============================================
+### Webhook - Invalid Signature (should return 400 INVALID_SIGNATURE)
+### Note: To test real webhook handling/not_handled paths, forward events via Stripe CLI.
+### ============================================
+POST {{baseUrl}}/api/webhooks/stripe
+Content-Type: application/json
+Stripe-Signature: test_signature
+
+{
+  "id": "evt_test_not_handled",
+  "type": "payment_intent.processing",
+  "data": {
+    "object": {
+      "id": "pi_test_123",
+      "status": "processing",
+      "metadata": {
+        "payment_id": "1",
+        "order_id": "1"
+      }
+    }
+  }
+}
+
+### ============================================
+### Checkout Page
+### ============================================
+GET {{baseUrl}}/checkout/order/ORD-12345

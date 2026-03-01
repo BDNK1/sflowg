@@ -1,0 +1,158 @@
+entrypoint.http {
+    method: POST
+    path: /api/webhooks/stripe
+    headers: [Stripe-Signature]
+    body: { type: json }
+    timeout: 10000
+}
+
+step verify_signature {
+    let result = signature_verifier.verifySignature({
+        signature: request.headers["Stripe-Signature"],
+        payload: request.rawBody
+    })
+    if (result.valid == false) {
+        raise("INVALID_SIGNATURE", result.error ?? "webhook signature verification failed")
+    }
+    result
+}
+
+step handle_supported_event {
+    let event_data = {
+        event_id: request.body.id,
+        event_type: request.body.type,
+        payment_intent_id: request.body.data?.object?.id,
+        payment_intent_status: request.body.data?.object?.status,
+        order_id: request.body.data?.object?.metadata?.order_id
+    }
+
+    let event_action = match event_data.event_type {
+        "payment_intent.succeeded" => {
+            status: "succeeded",
+            error_message: nil,
+            error_code: nil
+        }
+        "payment_intent.payment_failed" => {
+            status: "failed",
+            error_message: request.body.data?.object?.last_payment_error?.message ?? "Payment failed",
+            error_code: request.body.data?.object?.last_payment_error?.code ?? "unknown"
+        }
+        "payment_intent.canceled" => {
+            status: "canceled",
+            error_message: nil,
+            error_code: nil
+        }
+        _ => nil
+    }
+
+    if (event_action == nil) {
+        response.json({
+            status: 200,
+            body: {
+                received: true,
+                status: "not_handled"
+            }
+        })
+    }
+
+    {
+        event_id: event_data.event_id,
+        event_type: event_data.event_type,
+        payment_intent_id: event_data.payment_intent_id,
+        order_id: event_data.order_id,
+        payment_intent_status: event_data.payment_intent_status,
+        event_action: event_action
+    }
+}
+
+step update_payment_status {
+    let updated = postgres.exec({
+        query: "UPDATE payments SET status = $1, stripe_status = $2, error_message = $3, error_code = $4, updated_at = NOW() WHERE stripe_payment_intent_id = $5",
+        params: [handle_supported_event.event_action.status, handle_supported_event.payment_intent_status, handle_supported_event.event_action.error_message, handle_supported_event.event_action.error_code, handle_supported_event.payment_intent_id]
+    })
+    if (updated.affected_rows == 0) {
+        raise("PAYMENT_NOT_FOUND", "no payment found for payment_intent_id: " + handle_supported_event.payment_intent_id)
+    }
+
+    {
+        handled: true,
+        event_id: handle_supported_event.event_id,
+        event_type: handle_supported_event.event_type,
+        payment_intent_id: handle_supported_event.payment_intent_id,
+        status: handle_supported_event.event_action.status,
+        rows_updated: updated.affected_rows
+    }
+}
+
+step notify_ecom_order_status(
+    condition: handle_supported_event.order_id != nil,
+    retry: { max_attempts: 3, delay: 500, backoff: "exponential" }
+) {
+    let result = http.request({
+        url: properties.ecom_callback_url,
+        method: "POST",
+        content_type: "json",
+        body: {
+            order_id: handle_supported_event.order_id,
+            payment_intent_id: handle_supported_event.payment_intent_id,
+            event_type: handle_supported_event.event_type,
+            status: update_payment_status.status
+        }
+    })
+    if (result.status_code >= 500) {
+        raise("transient", "ECOM_CALLBACK_UNAVAILABLE", "ecommerce callback temporarily unavailable")
+    }
+    if (result.status_code not in [200, 202]) {
+        raise("ECOM_CALLBACK_FAILED", "ecommerce callback failed with status " + sprintf("%v", result.status_code))
+    }
+    {
+        notified: true,
+        status_code: result.status_code
+    }
+} fallback {
+    {
+        notified: false,
+        reason: "callback_unavailable"
+    }
+}
+
+return response.json({
+    status: 200,
+    body: {
+        received: true,
+        event_id: update_payment_status.event_id,
+        event_type: update_payment_status.event_type,
+        payment_intent_id: update_payment_status.payment_intent_id,
+        status: update_payment_status.status,
+        rows_updated: update_payment_status.rows_updated,
+        callback: notify_ecom_order_status
+    }
+})
+
+on_error {
+    let error_response = match error.code {
+        "INVALID_SIGNATURE" => {
+            status: 400,
+            error: error.code,
+            message: error.message
+        }
+        "PAYMENT_NOT_FOUND" => {
+            status: 404,
+            error: error.code,
+            message: error.message
+        }
+        _ => {
+            status: 500,
+            error: "INTERNAL_ERROR",
+            message: "webhook processing failed"
+        }
+    }
+
+    response.json({
+        status: error_response.status,
+        body: {
+            error: error_response.error,
+            message: error_response.message
+        }
+    })
+}

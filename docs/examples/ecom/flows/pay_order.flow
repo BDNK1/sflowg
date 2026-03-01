@@ -1,14 +1,13 @@
-// Create payment for an order via stripe-integration service
-
 entrypoint.http {
     method: POST
     path: /api/orders/:id/pay
     pathVariables: [id]
+    timeout: 8000
 }
 
 step fetch_order {
     postgres.get({
-        query: "SELECT id, customer_email, amount_cents, currency, status FROM orders WHERE id = $1",
+        query: "SELECT id, customer_email, customer_name, amount_cents, currency, status, stripe_payment_id, stripe_payment_intent_id, stripe_client_secret FROM orders WHERE id = $1",
         params: [request.pathVariables.id]
     })
 }
@@ -34,15 +33,38 @@ step already_canceled(condition: fetch_order.row.status == "canceled") {
     })
 }
 
-step payment_pending(condition: fetch_order.row.status == "payment_pending") {
+step payment_pending_with_checkout(condition: fetch_order.row.status == "payment_pending" && fetch_order.row.stripe_payment_id != nil && fetch_order.row.stripe_payment_id != "") {
     response.json({
-        status: 409,
-        body: { error: "payment is already in progress for this order" }
+        status: 200,
+        body: {
+            order: fetch_order.row,
+            stripe: {
+                checkout_url: properties.stripe_integration_url + "/checkout/order/" + sprintf("%v", fetch_order.row.id),
+                payment_intent_id: fetch_order.row.stripe_payment_intent_id,
+                status: "requires_payment_method",
+                existing_payment: true
+            }
+        }
     })
 }
 
-step create_payment {
-    http.request({
+step payment_retry_pending(condition: fetch_order.row.status == "payment_retry_pending") {
+    response.json({
+        status: 202,
+        body: {
+            order_id: request.pathVariables.id,
+            status: "payment_retry_pending",
+            payment: {
+                queued: true,
+                provider: "stripe",
+                reason: "stripe_temporarily_unavailable"
+            }
+        }
+    })
+}
+
+step create_payment(retry: { max_attempts: 3, delay: 500, backoff: "exponential" }) {
+    let result = http.request({
         url: properties.stripe_integration_url + "/api/payments",
         method: "POST",
         content_type: "json",
@@ -51,8 +73,33 @@ step create_payment {
             currency: fetch_order.row.currency,
             description: `Order #${fetch_order.row.id}`,
             customer_email: fetch_order.row.customer_email,
+            customer_name: fetch_order.row.customer_name,
             metadata: {
                 order_id: `${fetch_order.row.id}`
+            }
+        }
+    })
+    if (result.status_code >= 500) {
+        raise("transient", "PAYMENT_SERVICE_UNAVAILABLE", "payment service temporarily unavailable")
+    }
+    result
+} fallback {
+    let queued = postgres.exec({
+        query: "UPDATE orders SET status = 'payment_retry_pending' WHERE id = $1",
+        params: [request.pathVariables.id]
+    })
+    if (queued.affected_rows == 0) {
+        raise("ORDER_QUEUE_FAILED", "failed to queue payment retry")
+    }
+    response.json({
+        status: 202,
+        body: {
+            order_id: request.pathVariables.id,
+            status: "payment_retry_pending",
+            payment: {
+                queued: true,
+                provider: "stripe",
+                reason: "stripe_temporarily_unavailable"
             }
         }
     })
@@ -71,8 +118,8 @@ step payment_error(condition: create_payment.status_code != 201 || create_paymen
 
 step save_payment_intent {
     postgres.get({
-        query: "UPDATE orders SET status = 'payment_pending', stripe_payment_intent_id = $1, stripe_client_secret = $2 WHERE id = $3 RETURNING id, customer_email, amount_cents, currency, status, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at",
-        params: [create_payment.body.data.payment_intent_id, create_payment.body.data.client_secret, request.pathVariables.id]
+        query: "UPDATE orders SET status = 'payment_pending', stripe_payment_id = $1, stripe_payment_intent_id = $2, stripe_client_secret = $3 WHERE id = $4 RETURNING id, customer_email, customer_name, amount_cents, currency, status, stripe_payment_id, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at",
+        params: [create_payment.body.data.order_id, create_payment.body.data.payment_intent_id, create_payment.body.data.client_secret, request.pathVariables.id]
     })
 }
 

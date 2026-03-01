@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -102,8 +103,48 @@ func TestParse_StepWithCondition(t *testing.T) {
 	}
 }
 
+func TestParse_StepWithConditionInArray(t *testing.T) {
+	source := `step show_result(condition: get_payment.row.status in ["succeeded", "failed", "canceled"]) {
+	response.html({status: 200, body: "ok"})
+}`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(flow.Steps) != 1 {
+		t.Fatalf("steps len = %d, want 1", len(flow.Steps))
+	}
+	step := flow.Steps[0]
+	want := `get_payment.row.status in ["succeeded", "failed", "canceled"]`
+	if step.Condition != want {
+		t.Errorf("condition = %q, want %q", step.Condition, want)
+	}
+}
+
+func TestParse_StepWithConditionFunctionCallCommas(t *testing.T) {
+	source := `step guard(condition: check(a, b) && event.type in ["x", "y"]) {
+	response.json({status: 200, body: {ok: true}})
+}`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(flow.Steps) != 1 {
+		t.Fatalf("steps len = %d, want 1", len(flow.Steps))
+	}
+	step := flow.Steps[0]
+	want := `check(a, b) && event.type in ["x", "y"]`
+	if step.Condition != want {
+		t.Errorf("condition = %q, want %q", step.Condition, want)
+	}
+}
+
 func TestParse_StepWithRetry(t *testing.T) {
-	source := `step call_api(retry: { maxRetries: 3, delay: 1000, condition: call_api.status_code != 200 }) {
+	source := `step call_api(retry: { max_attempts: 3, delay: 1000, when: call_api.status_code != 200 }) {
 	http.request({url: "https://api.example.com"})
 }`
 
@@ -116,14 +157,14 @@ func TestParse_StepWithRetry(t *testing.T) {
 	if step.Retry == nil {
 		t.Fatal("retry config is nil")
 	}
-	if step.Retry.MaxRetries != 3 {
-		t.Errorf("maxRetries = %d, want 3", step.Retry.MaxRetries)
+	if step.Retry.MaxAttempts != 3 {
+		t.Errorf("maxAttempts = %d, want 3", step.Retry.MaxAttempts)
 	}
 	if step.Retry.Delay != 1000 {
 		t.Errorf("delay = %d, want 1000", step.Retry.Delay)
 	}
-	if step.Retry.Condition != "call_api.status_code != 200" {
-		t.Errorf("retry condition = %q, want call_api.status_code != 200", step.Retry.Condition)
+	if step.Retry.When != "call_api.status_code != 200" {
+		t.Errorf("retry when = %q, want call_api.status_code != 200", step.Retry.When)
 	}
 }
 
@@ -293,6 +334,204 @@ return response.json({
 	}
 	if flow.Return.Body == "" {
 		t.Error("return body is empty")
+	}
+}
+
+// ─── New error-handling parser tests ─────────────────────────────────────────
+
+func TestParseFlowOnErrorBlock(t *testing.T) {
+	source := `
+on_error {
+	log("flow failed: " + error.message)
+}
+`
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flow.OnErrorBody == "" {
+		t.Error("on_error body should not be empty")
+	}
+	if flow.OnErrorBody != `log("flow failed: " + error.message)` {
+		t.Errorf("on_error body = %q", flow.OnErrorBody)
+	}
+}
+
+func TestParseEntrypointTimeout(t *testing.T) {
+	source := `entrypoint.http {
+	method: POST
+	path: /api/payments
+	timeout: 5000
+}`
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flow.Timeout != 5000 {
+		t.Errorf("flow timeout = %d, want 5000", flow.Timeout)
+	}
+	// timeout should be consumed and not left in entrypoint config
+	if _, ok := flow.Entrypoint.Config["timeout"]; ok {
+		t.Error("timeout should be removed from entrypoint config")
+	}
+}
+
+func TestParseStepTimeout(t *testing.T) {
+	source := `step call_api(timeout: 2000) {
+	http.request({url: "https://api.example.com"})
+}`
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flow.Steps[0].Timeout != 2000 {
+		t.Errorf("step timeout = %d, want 2000", flow.Steps[0].Timeout)
+	}
+}
+
+func TestParseFallbackSuffix(t *testing.T) {
+	source := `step call_api {
+	http.request({url: "https://api.example.com"})
+}
+fallback {
+	use_cached_result()
+}
+`
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	step := flow.Steps[0]
+	if step.FallbackBody == "" {
+		t.Error("fallback body should not be empty")
+	}
+	if step.CompensateBody != "" {
+		t.Error("compensate body should be empty")
+	}
+}
+
+func TestParseCompensateSuffix(t *testing.T) {
+	source := `step charge_card {
+	stripe.charge({amount: 100})
+}
+compensate {
+	stripe.refund({charge_id: charge_card.id})
+}
+`
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	step := flow.Steps[0]
+	if step.CompensateBody == "" {
+		t.Error("compensate body should not be empty")
+	}
+	if step.FallbackBody != "" {
+		t.Error("fallback body should be empty")
+	}
+}
+
+func TestParseBothSuffixes(t *testing.T) {
+	source := `step charge_card {
+	stripe.charge({amount: 100})
+}
+fallback {
+	use_cached()
+}
+compensate {
+	stripe.refund({charge_id: charge_card.id})
+}
+`
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	step := flow.Steps[0]
+	if step.FallbackBody == "" {
+		t.Error("fallback body should not be empty")
+	}
+	if step.CompensateBody == "" {
+		t.Error("compensate body should not be empty")
+	}
+}
+
+func TestParseSuffixesReversedOrder(t *testing.T) {
+	source := `step charge_card {
+	stripe.charge({amount: 100})
+}
+compensate {
+	stripe.refund({charge_id: charge_card.id})
+}
+fallback {
+	use_cached()
+}
+`
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	step := flow.Steps[0]
+	if step.FallbackBody == "" {
+		t.Error("fallback body should not be empty (reversed order)")
+	}
+	if step.CompensateBody == "" {
+		t.Error("compensate body should not be empty (reversed order)")
+	}
+}
+
+func TestParseRetryEnhanced(t *testing.T) {
+	source := `step call_api(retry: {
+	max_attempts: 5,
+	delay: 500,
+	backoff: "exponential",
+	max_delay: 10000,
+	jitter: true,
+	when: error.type == "transient",
+	non_retryable: ["CARD_DECLINED", "INVALID_REQUEST"]
+}) {
+	http.request({url: "https://api.example.com"})
+}`
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	r := flow.Steps[0].Retry
+	if r == nil {
+		t.Fatal("retry config is nil")
+	}
+	if r.MaxAttempts != 5 {
+		t.Errorf("MaxAttempts = %d, want 5", r.MaxAttempts)
+	}
+	if r.Delay != 500 {
+		t.Errorf("Delay = %d, want 500", r.Delay)
+	}
+	if r.Backoff != "exponential" {
+		t.Errorf("Backoff = %q, want exponential", r.Backoff)
+	}
+	if r.MaxDelay != 10000 {
+		t.Errorf("MaxDelay = %d, want 10000", r.MaxDelay)
+	}
+	if !r.Jitter {
+		t.Error("Jitter should be true")
+	}
+	if r.When != `error.type == "transient"` {
+		t.Errorf("When = %q", r.When)
+	}
+	if len(r.NonRetryable) != 2 {
+		t.Errorf("NonRetryable len = %d, want 2", len(r.NonRetryable))
+	}
+}
+
+func TestParseRetryLegacyFieldsError(t *testing.T) {
+	source := `step call_api(retry: { maxRetries: 3, delay: 1000, backoff: true, condition: call_api.status_code != 200 }) {
+	http.request({url: "https://api.example.com"})
+}`
+	_, err := Parse(source)
+	if err == nil {
+		t.Fatal("expected error for legacy retry fields, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported retry field") {
+		t.Fatalf("expected unsupported retry field error, got: %v", err)
 	}
 }
 

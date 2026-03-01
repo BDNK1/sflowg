@@ -4,15 +4,16 @@ Content-Type: application/json
 
 {
     "customer_email": "alice@example.com",
+    "customer_name": "Alice",
     "amount_cents": 14999,
     "currency": "usd"
 }
 
 ### Get an order by ID
-GET http://localhost:8080/api/orders/1
+GET http://localhost:8080/api/orders/5
 
 ### Create payment via stripe-integration for an order
-POST http://localhost:8080/api/orders/1/pay
+POST http://localhost:8080/api/orders/5/pay
 
 ### Create another order
 POST http://localhost:8080/api/orders
@@ -20,6 +21,7 @@ Content-Type: application/json
 
 {
     "customer_email": "bob@example.com",
+    "customer_name": "Bob",
     "amount_cents": 3950
 }
 
@@ -37,3 +39,25 @@ Content-Type: application/json
 
 ### Get non-existent order (should return 404)
 GET http://localhost:8080/api/orders/99999
+
+### Internal callback sync (payment succeeded)
+POST http://localhost:8080/internal/payments/stripe-webhook
+Content-Type: application/json
+
+{
+    "order_id": "1",
+    "payment_intent_id": "pi_test_123",
+    "event_type": "payment_intent.succeeded",
+    "status": "succeeded"
+}
+
+### Internal callback sync (event not handled)
+POST http://localhost:8080/internal/payments/stripe-webhook
+Content-Type: application/json
+
+{
+    "order_id": "1",
+    "payment_intent_id": "pi_test_123",
+    "event_type": "payment_intent.processing",
+    "status": "processing"
+}
