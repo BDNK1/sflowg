@@ -10,13 +10,13 @@ import (
 // Config holds checkout plugin configuration
 type Config struct {
 	StripePublishableKey string `yaml:"stripe_publishable_key" validate:"required"`
-	ReturnURL            string `yaml:"return_url" default:"http://localhost:8080/payment-success"`
+	ReturnURL            string `yaml:"return_url" default:"http://localhost:8090/checkout/order/"`
 }
 
 // RenderInput defines input for checkout.render task
 type RenderInput struct {
 	ClientSecret string `json:"client_secret" validate:"required"`
-	PaymentID    int64  `json:"payment_id" validate:"required"`
+	OrderID      string `json:"order_id" validate:"required"`
 	Amount       int64  `json:"amount" validate:"required"`
 	Currency     string `json:"currency" validate:"required"`
 }
@@ -28,7 +28,7 @@ type RenderOutput struct {
 
 // RenderSuccessInput defines input for checkout.renderSuccess task
 type RenderSuccessInput struct {
-	PaymentID      int64  `json:"payment_id" validate:"required"`
+	OrderID        string `json:"order_id" validate:"required"`
 	Amount         int64  `json:"amount" validate:"required"`
 	Currency       string `json:"currency" validate:"required"`
 	RedirectStatus string `json:"redirect_status"`
@@ -65,14 +65,14 @@ func (p *CheckoutPlugin) Render(exec *plugin.Execution, input RenderInput) (Rend
 	data := struct {
 		StripePublishableKey string
 		ClientSecret         string
-		PaymentID            int64
+		OrderID              string
 		Amount               float64
 		Currency             string
 		ReturnURL            string
 	}{
 		StripePublishableKey: p.Config.StripePublishableKey,
 		ClientSecret:         input.ClientSecret,
-		PaymentID:            input.PaymentID,
+		OrderID:              input.OrderID,
 		Amount:               float64(input.Amount) / 100.0, // Convert cents to dollars
 		Currency:             input.Currency,
 		ReturnURL:            p.Config.ReturnURL,
@@ -92,13 +92,13 @@ func (p *CheckoutPlugin) RenderSuccess(exec *plugin.Execution, input RenderSucce
 	tmpl := template.Must(template.New("success").Parse(successTemplate))
 
 	data := struct {
-		PaymentID      int64
+		OrderID        string
 		Amount         float64
 		Currency       string
 		RedirectStatus string
 		PaymentIntent  string
 	}{
-		PaymentID:      input.PaymentID,
+		OrderID:        input.OrderID,
 		Amount:         float64(input.Amount) / 100.0, // Convert cents to dollars
 		Currency:       input.Currency,
 		RedirectStatus: input.RedirectStatus,
@@ -129,7 +129,7 @@ const checkoutTemplate = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Checkout - Payment #{{.PaymentID}}</title>
+    <title>Checkout - Order #{{.OrderID}}</title>
     <script src="https://js.stripe.com/v3/"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -234,7 +234,7 @@ const checkoutTemplate = `<!DOCTYPE html>
         <div class="amount">{{.Currency}} ${{printf "%.2f" .Amount}}</div>
 
         <div class="payment-info">
-            <p><strong>Payment ID:</strong> #{{.PaymentID}}</p>
+            <p><strong>Order ID:</strong> #{{.OrderID}}</p>
             <p><strong>Status:</strong> Awaiting payment</p>
         </div>
 
@@ -281,7 +281,7 @@ const checkoutTemplate = `<!DOCTYPE html>
             const {error} = await stripe.confirmPayment({
                 elements,
                 confirmParams: {
-                    return_url: '{{.ReturnURL}}{{.PaymentID}}',
+                    return_url: '{{.ReturnURL}}{{.OrderID}}',
                 },
             });
 
@@ -399,8 +399,8 @@ const successTemplate = `<!DOCTYPE html>
 
         <div class="details">
             <div class="detail-row">
-                <span class="label">Payment ID</span>
-                <span class="value">#{{.PaymentID}}</span>
+                <span class="label">Order ID</span>
+                <span class="value">#{{.OrderID}}</span>
             </div>
             <div class="detail-row">
                 <span class="label">Amount</span>

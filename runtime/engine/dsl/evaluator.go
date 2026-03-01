@@ -1,21 +1,22 @@
 package dsl
 
-import "context"
+import (
+	"github.com/BDNK1/sflowg/runtime"
+	risor "github.com/deepnoodle-ai/risor/v2"
+)
 
 // ExpressionEvaluator implements runtime.ExpressionEvaluator using Risor.
-// Used by the Executor for step conditions and retry conditions.
-// Unlike the YAML evaluator which uses expr-lang with flat keys,
-// this evaluator passes nested maps directly to Risor for native dot access.
-type ExpressionEvaluator struct {
-	interpreter *Interpreter
-}
+// The *Execution carries both the variable namespace (Values()) and the
+// cancellation context, so a single parameter covers both concerns.
+// Calls Risor directly rather than going through Interpreter, since expression
+// evaluation doesn't need the enriched globals (plugins, raise(), etc.) that
+// step body execution requires.
+type ExpressionEvaluator struct{}
 
 func NewExpressionEvaluator() *ExpressionEvaluator {
-	return &ExpressionEvaluator{
-		interpreter: &Interpreter{},
-	}
+	return &ExpressionEvaluator{}
 }
 
-func (e *ExpressionEvaluator) Eval(expression string, ctx map[string]any) (any, error) {
-	return e.interpreter.Eval(context.Background(), expression, ctx)
+func (e *ExpressionEvaluator) Eval(execution *runtime.Execution, expression string) (any, error) {
+	return risor.Eval(execution, expression, risor.WithEnv(convertGlobals(execution.Values())))
 }

@@ -35,10 +35,14 @@ step already_paid(condition: fetch_order.row.status == "paid") {
 }
 
 step mark_canceled {
-    postgres.get({
-        query: "UPDATE orders SET status = 'canceled', canceled_at = NOW(), paid_at = NULL WHERE id = $1 RETURNING id, customer_email, amount_cents, currency, status, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at",
+    let result = postgres.get({
+        query: "UPDATE orders SET status = 'canceled', canceled_at = NOW(), paid_at = NULL WHERE id = $1 RETURNING id, customer_email, customer_name, amount_cents, currency, status, stripe_payment_id, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at",
         params: [request.pathVariables.id]
     })
+    if (result.found == false) {
+        raise("CANCEL_FAILED", "order could not be marked as canceled")
+    }
+    result
 }
 
 return response.json({
@@ -47,3 +51,22 @@ return response.json({
         order: mark_canceled.row
     }
 })
+
+on_error {
+    if (error.type == "timeout") {
+        response.json({
+            status: 504,
+            body: { error: "request timed out while canceling order" }
+        })
+    } else if (error.code == "CANCEL_FAILED") {
+        response.json({
+            status: 500,
+            body: { error: "failed to cancel order", details: error.message }
+        })
+    } else {
+        response.json({
+            status: 500,
+            body: { error: "unexpected error", details: error.message }
+        })
+    }
+}

@@ -9,11 +9,14 @@ import (
 
 // Parse parses a .flow DSL source into a runtime.Flow.
 //
-// DSL syntax supports four top-level block types:
+// DSL syntax supports these top-level block types:
 //
-//	entrypoint.http { method: POST, path: /api/payments, ... }
+//	entrypoint.http { method: POST, path: /api/payments, timeout: 5000, ... }
 //	properties { key: value, ... }
-//	step step_name(condition: expr, retry: { ... }) { risor code }
+//	step step_name(condition: expr, timeout: 2000, retry: { ... }) { risor code }
+//	  fallback { risor code }          // optional suffix block
+//	  compensate { risor code }        // optional suffix block
+//	on_error { risor code }            // flow-level error handler
 //	return response.json({ ... })
 func Parse(source string) (runtime.Flow, error) {
 	p := &parser{source: source, pos: 0}
@@ -34,11 +37,12 @@ func (p *parser) parse() (runtime.Flow, error) {
 
 		switch {
 		case strings.HasPrefix(keyword, "entrypoint"):
-			ep, err := p.parseEntrypoint()
+			ep, timeout, err := p.parseEntrypoint()
 			if err != nil {
 				return flow, fmt.Errorf("parsing entrypoint: %w", err)
 			}
 			flow.Entrypoint = ep
+			flow.Timeout = timeout
 
 		case keyword == "properties":
 			props, err := p.parseProperties()
@@ -53,6 +57,13 @@ func (p *parser) parse() (runtime.Flow, error) {
 				return flow, fmt.Errorf("parsing step: %w", err)
 			}
 			flow.Steps = append(flow.Steps, step)
+
+		case keyword == "on_error":
+			body, err := p.parseOnError()
+			if err != nil {
+				return flow, fmt.Errorf("parsing on_error: %w", err)
+			}
+			flow.OnErrorBody = body
 
 		case keyword == "return":
 			ret, err := p.parseReturn()
@@ -97,29 +108,37 @@ func (p *parser) readWord() string {
 }
 
 // parseEntrypoint parses: entrypoint.http { ... }
-func (p *parser) parseEntrypoint() (runtime.Entrypoint, error) {
+// Returns the Entrypoint, the flow-level timeout (extracted from "timeout" key), and any error.
+func (p *parser) parseEntrypoint() (runtime.Entrypoint, int, error) {
 	word := p.readWord() // "entrypoint.http"
 	parts := strings.SplitN(word, ".", 2)
 	if len(parts) != 2 {
-		return runtime.Entrypoint{}, fmt.Errorf("expected entrypoint.TYPE, got %q", word)
+		return runtime.Entrypoint{}, 0, fmt.Errorf("expected entrypoint.TYPE, got %q", word)
 	}
 	epType := parts[1]
 
 	p.skipWhitespace()
 	body, err := p.readBracedBlock()
 	if err != nil {
-		return runtime.Entrypoint{}, err
+		return runtime.Entrypoint{}, 0, err
 	}
 
 	config, err := parseSimpleMap(body)
 	if err != nil {
-		return runtime.Entrypoint{}, fmt.Errorf("parsing entrypoint config: %w", err)
+		return runtime.Entrypoint{}, 0, fmt.Errorf("parsing entrypoint config: %w", err)
+	}
+
+	// Extract flow-level timeout from entrypoint config.
+	timeout := 0
+	if v, ok := config["timeout"]; ok {
+		timeout = toInt(v)
+		delete(config, "timeout")
 	}
 
 	return runtime.Entrypoint{
 		Type:   epType,
 		Config: config,
-	}, nil
+	}, timeout, nil
 }
 
 // parseProperties parses: properties { key: value, ... }
@@ -147,7 +166,11 @@ func (p *parser) parseProperties() (map[string]any, error) {
 	return props, nil
 }
 
-// parseStep parses: step NAME(condition: ..., retry: {...}) { body }
+// parseStep parses:
+//
+//	step NAME(condition: ..., timeout: N, retry: {...}) { body }
+//	  fallback { body }    // optional
+//	  compensate { body }  // optional
 func (p *parser) parseStep() (runtime.Step, error) {
 	p.readWord() // consume "step"
 	p.skipWhitespace()
@@ -163,7 +186,7 @@ func (p *parser) parseStep() (runtime.Step, error) {
 
 	p.skipWhitespace()
 
-	// Optional parenthesized options: (condition: ..., retry: {...})
+	// Optional parenthesized options: (condition: ..., timeout: N, retry: {...})
 	if p.pos < len(p.source) && p.source[p.pos] == '(' {
 		opts, err := p.readParenBlock()
 		if err != nil {
@@ -176,14 +199,50 @@ func (p *parser) parseStep() (runtime.Step, error) {
 
 	p.skipWhitespace()
 
-	// Read the step body
+	// Read the primary step body
 	body, err := p.readBracedBlock()
 	if err != nil {
 		return step, fmt.Errorf("parsing step body: %w", err)
 	}
 	step.Body = body
 
+	// Optionally read suffix blocks: fallback {} and compensate {} in any order.
+	for i := 0; i < 2; i++ {
+		p.skipWhitespaceAndComments()
+		kw := p.peekKeyword()
+		if kw == "fallback" {
+			p.readWord() // consume "fallback"
+			p.skipWhitespace()
+			fb, err := p.readBracedBlock()
+			if err != nil {
+				return step, fmt.Errorf("parsing fallback body for step %s: %w", name, err)
+			}
+			step.FallbackBody = fb
+		} else if kw == "compensate" {
+			p.readWord() // consume "compensate"
+			p.skipWhitespace()
+			cb, err := p.readBracedBlock()
+			if err != nil {
+				return step, fmt.Errorf("parsing compensate body for step %s: %w", name, err)
+			}
+			step.CompensateBody = cb
+		} else {
+			break
+		}
+	}
+
 	return step, nil
+}
+
+// parseOnError parses: on_error { risor code }
+func (p *parser) parseOnError() (string, error) {
+	p.readWord() // consume "on_error"
+	p.skipWhitespace()
+	body, err := p.readBracedBlock()
+	if err != nil {
+		return "", err
+	}
+	return body, nil
 }
 
 // parseReturn parses: return <expression>
@@ -236,7 +295,7 @@ func (p *parser) parseReturn() (runtime.Return, error) {
 				break
 			}
 			next := p.peekKeyword()
-			if next == "step" || next == "return" || next == "properties" || strings.HasPrefix(next, "entrypoint") {
+			if next == "step" || next == "return" || next == "properties" || next == "on_error" || strings.HasPrefix(next, "entrypoint") {
 				p.pos = saved
 				break
 			}
@@ -472,9 +531,62 @@ func readValue(block string, i int) (any, int, error) {
 
 	// Unquoted value — read until comma, newline, or closing delimiter
 	start := i
-	for i < len(block) && block[i] != ',' && block[i] != '\n' && block[i] != '}' && block[i] != ']' {
+	squareDepth := 0
+	parenDepth := 0
+	curlyDepth := 0
+	inString := false
+	stringChar := byte(0)
+
+	for i < len(block) {
+		c := block[i]
+
+		if inString {
+			if c == '\\' {
+				i++
+			} else if c == stringChar {
+				inString = false
+			}
+			i++
+			continue
+		}
+
+		switch c {
+		case '"', '\'', '`':
+			inString = true
+			stringChar = c
+		case '[':
+			squareDepth++
+		case ']':
+			if squareDepth > 0 {
+				squareDepth--
+			} else if parenDepth == 0 && curlyDepth == 0 {
+				// End of parent container (array) at top-level.
+				return strings.TrimSpace(block[start:i]), i, nil
+			}
+		case '(':
+			parenDepth++
+		case ')':
+			if parenDepth > 0 {
+				parenDepth--
+			}
+		case '{':
+			curlyDepth++
+		case '}':
+			if curlyDepth > 0 {
+				curlyDepth--
+			} else if squareDepth == 0 && parenDepth == 0 {
+				// End of parent container (map) at top-level.
+				return strings.TrimSpace(block[start:i]), i, nil
+			}
+		case ',', '\n':
+			if squareDepth == 0 && parenDepth == 0 && curlyDepth == 0 {
+				return strings.TrimSpace(block[start:i]), i, nil
+			}
+		}
+
 		i++
 	}
+
 	return strings.TrimSpace(block[start:i]), i, nil
 }
 
@@ -582,6 +694,7 @@ func resolveEnvCall(s string) string {
 }
 
 // applyStepOptions parses the parenthesized options string and applies to step.
+// Supports fields: max_attempts, delay, backoff, max_delay, jitter, when, non_retryable, timeout.
 func applyStepOptions(step *runtime.Step, opts string) error {
 	m, err := parseSimpleMap(opts)
 	if err != nil {
@@ -592,23 +705,58 @@ func applyStepOptions(step *runtime.Step, opts string) error {
 		step.Condition = fmt.Sprintf("%v", cond)
 	}
 
+	if t, ok := m["timeout"]; ok {
+		step.Timeout = toInt(t)
+	}
+
 	if retryRaw, ok := m["retry"]; ok {
 		retryMap, ok := retryRaw.(map[string]any)
 		if !ok {
 			return fmt.Errorf("retry must be a map")
 		}
-		step.Retry = &runtime.RetryConfig{}
-		if v, ok := retryMap["maxRetries"]; ok {
-			step.Retry.MaxRetries = toInt(v)
+		// Legacy aliases removed intentionally.
+		if _, ok := retryMap["maxRetries"]; ok {
+			return fmt.Errorf("unsupported retry field: maxRetries (use max_attempts)")
 		}
-		if v, ok := retryMap["delay"]; ok {
-			step.Retry.Delay = toInt(v)
+		if _, ok := retryMap["condition"]; ok {
+			return fmt.Errorf("unsupported retry field: condition (use when)")
+		}
+		step.Retry = &runtime.RetryConfig{}
+
+		if v, ok := retryMap["max_attempts"]; ok {
+			step.Retry.MaxAttempts = toInt(v)
+		}
+		if v, ok := retryMap["max_delay"]; ok {
+			step.Retry.MaxDelay = toInt(v)
+		}
+		if v, ok := retryMap["jitter"]; ok {
+			step.Retry.Jitter = toBool(v)
+		}
+		if v, ok := retryMap["when"]; ok {
+			step.Retry.When = fmt.Sprintf("%v", v)
+		}
+		if v, ok := retryMap["non_retryable"]; ok {
+			if arr, ok := v.([]any); ok {
+				for _, item := range arr {
+					step.Retry.NonRetryable = append(step.Retry.NonRetryable, fmt.Sprintf("%v", item))
+				}
+			}
 		}
 		if v, ok := retryMap["backoff"]; ok {
-			step.Retry.Backoff = toBool(v)
+			s, ok := v.(string)
+			if !ok {
+				return fmt.Errorf("retry.backoff must be a string: none | linear | exponential")
+			}
+			switch s {
+			case "none", "linear", "exponential":
+				step.Retry.Backoff = s
+			default:
+				return fmt.Errorf("invalid retry.backoff value: %q (allowed: none, linear, exponential)", s)
+			}
 		}
-		if v, ok := retryMap["condition"]; ok {
-			step.Retry.Condition = fmt.Sprintf("%v", v)
+
+		if v, ok := retryMap["delay"]; ok {
+			step.Retry.Delay = toInt(v)
 		}
 	}
 

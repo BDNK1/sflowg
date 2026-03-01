@@ -16,7 +16,7 @@ func (h *JSONResponseHandler) Handle(c *gin.Context, exec *Execution, args map[s
 	statusCode := http.StatusOK
 
 	// Extract status if provided
-	if status, ok := args["status"].(int); ok {
+	if status, ok := toStatusCode(args["status"]); ok {
 		statusCode = status
 	}
 
@@ -47,7 +47,7 @@ func (h *HTMLResponseHandler) Handle(c *gin.Context, exec *Execution, args map[s
 	statusCode := http.StatusOK
 
 	// Extract status if provided
-	if status, ok := args["status"].(int); ok {
+	if status, ok := toStatusCode(args["status"]); ok {
 		statusCode = status
 	}
 
@@ -89,7 +89,7 @@ func (h *RedirectResponseHandler) Handle(c *gin.Context, exec *Execution, args m
 	statusCode := http.StatusFound
 
 	// Extract status if provided and validate it's a redirect code
-	if status, ok := args["status"].(int); ok {
+	if status, ok := toStatusCode(args["status"]); ok {
 		if status < 300 || status >= 400 {
 			slog.Error("Invalid redirect status code",
 				"flow", exec.Flow.ID,
@@ -101,4 +101,17 @@ func (h *RedirectResponseHandler) Handle(c *gin.Context, exec *Execution, args m
 
 	c.Redirect(statusCode, location)
 	return nil
+}
+
+func toStatusCode(v any) (int, bool) {
+	switch s := v.(type) {
+	case int:
+		return s, true
+	case int64:
+		return int(s), true
+	case float64:
+		return int(s), true
+	default:
+		return 0, false
+	}
 }

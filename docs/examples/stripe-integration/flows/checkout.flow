@@ -1,0 +1,65 @@
+entrypoint.http {
+    method: GET
+    path: /checkout/order/:order_id
+    pathVariables: [order_id]
+    queryParameters: [redirect_status, payment_intent]
+    timeout: 5000
+}
+
+step get_payment {
+    let result = postgres.get({
+        query: "SELECT id, metadata_order_id, amount, currency, stripe_client_secret, stripe_payment_intent_id, status FROM payments WHERE metadata_order_id = $1 ORDER BY created_at DESC LIMIT 1",
+        params: [request.pathVariables.order_id]
+    })
+    if (result.found == false) {
+        raise("PAYMENT_NOT_FOUND", "order " + sprintf("%v", request.pathVariables.order_id) + " does not have a payment record")
+    }
+    result
+}
+
+step show_result(condition: get_payment.row.status in ["succeeded", "failed", "canceled"]) {
+    let rendered = checkout.renderSuccess({
+        order_id: get_payment.row.metadata_order_id,
+        amount: get_payment.row.amount,
+        currency: get_payment.row.currency,
+        redirect_status: request.queryParameters.redirect_status,
+        payment_intent: request.queryParameters.payment_intent
+    })
+
+    response.html({
+        status: 200,
+        body: rendered.html
+    })
+}
+
+step show_checkout {
+    let rendered = checkout.render({
+        client_secret: get_payment.row.stripe_client_secret,
+        order_id: get_payment.row.metadata_order_id,
+        amount: get_payment.row.amount,
+        currency: get_payment.row.currency
+    })
+
+    response.html({
+        status: 200,
+        body: rendered.html
+    })
+}
+
+on_error {
+    let error_response = match error.code {
+        "PAYMENT_NOT_FOUND" => {
+            status: 404,
+            body: "<html><body><h1>Payment Not Found</h1><p>No payment record for order ID: " + sprintf("%v", request.pathVariables.order_id) + ".</p></body></html>"
+        }
+        _ => {
+            status: 500,
+            body: "<html><body><h1>Error</h1><p>An unexpected error occurred. Please try again or contact support.</p></body></html>"
+        }
+    }
+
+    response.html({
+        status: error_response.status,
+        body: error_response.body
+    })
+}

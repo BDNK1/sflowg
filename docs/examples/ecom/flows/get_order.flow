@@ -8,7 +8,7 @@ entrypoint.http {
 
 step fetch_order {
     postgres.get({
-        query: "SELECT id, customer_email, amount_cents, currency, status, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at FROM orders WHERE id = $1",
+        query: "SELECT id, customer_email, customer_name, amount_cents, currency, status, stripe_payment_id, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at FROM orders WHERE id = $1",
         params: [request.pathVariables.id]
     })
 }

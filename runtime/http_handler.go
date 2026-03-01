@@ -1,12 +1,14 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -32,6 +34,17 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 	return func(c *gin.Context) {
 		e := NewExecution(flow, container, globalProperties, newValueStore())
 
+		// Apply flow-level timeout if configured.
+		// The execution embeds the context so all downstream code (Risor, retry
+		// sleeps, slog) automatically respects the deadline via e.Done().
+		if flow.Timeout > 0 {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(flow.Timeout)*time.Millisecond)
+			defer cancel()
+			e = *e.WithContext(ctx)
+		} else {
+			e = *e.WithContext(c.Request.Context())
+		}
+
 		extractRequestData(c, flow, &e, withBody)
 
 		if err := executor.ExecuteSteps(&e); err != nil {
@@ -40,6 +53,11 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 				"path", c.Request.URL.Path,
 				"method", c.Request.Method,
 				"error", err.Error())
+			// on_error handler may have set a response descriptor despite execution failure.
+			if e.ResponseDescriptor != nil {
+				dispatchResponse(c, &e)
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"message": "Error in task execution: " + err.Error(),
 			})
@@ -141,7 +159,6 @@ func extractJsonBody(c *gin.Context, e *Execution) {
 		return
 	}
 
-	// Store raw body for webhook signature verification and similar use cases
 	e.AddValue(RequestRawBodyKey, string(body))
 
 	var parsed any
@@ -150,7 +167,5 @@ func extractJsonBody(c *gin.Context, e *Execution) {
 		return
 	}
 
-	// Store values at all levels (intermediate objects + leaf values)
-	// This allows both: request.body.metadata.order_id AND request.body.metadata != null
 	e.Store.SetNested(RequestBodyPrefix, parsed)
 }

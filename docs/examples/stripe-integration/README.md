@@ -24,7 +24,7 @@ Required values:
 Stripe setup:
 - In Stripe Dashboard, enable **Test mode**
 - Copy API keys from **Developers -> API keys** (`sk_test_...`, `pk_test_...`)
-- Get webhook secret (`whsec_...`) from `stripe listen --forward-to localhost:8080/api/webhooks/stripe`
+- Get webhook secret (`whsec_...`) from `stripe listen --forward-to localhost:8090/api/webhooks/stripe`
 
 3. Build and run:
 
@@ -40,26 +40,30 @@ sflowg build . \
 ./stripe-integration
 ```
 
-Server: `http://localhost:8080`
+Server: `http://localhost:8090`
 
 ## Minimal Test
 
 ```bash
-curl -X POST http://localhost:8080/api/payments \
+curl -X POST http://localhost:8090/api/payments \
   -H "Content-Type: application/json" \
   -H "X-Request-ID: test-001" \
   -d '{
     "amount": 2000,
     "currency": "usd",
     "description": "Test payment",
-    "customer_email": "test@example.com"
+    "customer_email": "test@example.com",
+    "customer_name": "Test User",
+    "metadata": {
+      "order_id": "ORD-12345"
+    }
   }'
 ```
 
-Expected: `201` with `payment_id`, `client_secret`, and `checkout_url`.
+Expected: `201` with `order_id`, `client_secret`, and `checkout_url`.
 
 ## Endpoints
 
 - `POST /api/payments` creates PaymentIntent + DB record
-- `POST /api/webhooks/stripe` verifies signature and updates payment status
-- `GET /checkout/:payment_id` renders checkout or final result page
+- `POST /api/webhooks/stripe` verifies signature, updates payment status, and calls ecom internal callback (`ECOM_CALLBACK_URL`) to sync order status
+- `GET /checkout/order/:order_id` renders checkout or final result page
