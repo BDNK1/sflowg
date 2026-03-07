@@ -6,7 +6,8 @@ type Initializer interface {
 	// Initialize is called once when the container starts up.
 	// Use this to establish connections, initialize clients, etc.
 	// Config and dependencies are already set on the plugin struct.
-	Initialize() error
+	// The log parameter is pre-configured with source=plugin and plugin=name.
+	Initialize(log Logger) error
 }
 
 // Shutdowner interface allows plugins to perform graceful shutdown.
@@ -14,5 +15,6 @@ type Initializer interface {
 type Shutdowner interface {
 	// Shutdown is called during graceful shutdown.
 	// Use this to close connections, cleanup resources, etc.
-	Shutdown() error
+	// The log parameter is pre-configured with source=plugin and plugin=name.
+	Shutdown(log Logger) error
 }

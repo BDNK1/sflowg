@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"strings"
 
@@ -21,14 +20,24 @@ type Container struct {
 	ResponseHandlers   *ResponseHandlerRegistry
 	plugins            map[string]any   // Plugin instances (name -> plugin)
 	pluginsByInterface map[string][]any // Interface name -> plugins implementing that interface
+	pluginNameIndex    map[any]string   // Reverse lookup: plugin instance -> name
+	logger             Logger
 }
 
-func NewContainer() *Container {
+// Logger returns the container's logger for framework-level (non-execution) logs.
+// Use execution.Logger() instead when an *Execution is available.
+func (c *Container) Logger() Logger {
+	return c.logger
+}
+
+func NewContainer(logger Logger) *Container {
 	return &Container{
 		Tasks:              make(map[string]Task),
 		ResponseHandlers:   NewResponseHandlerRegistry(),
 		plugins:            make(map[string]any),
 		pluginsByInterface: make(map[string][]any),
+		pluginNameIndex:    make(map[any]string),
+		logger:             logger,
 	}
 }
 
@@ -52,6 +61,7 @@ func (c *Container) RegisterPlugin(pluginName string, plugin any) error {
 
 	// Store plugin instance
 	c.plugins[pluginName] = plugin
+	c.pluginNameIndex[plugin] = pluginName
 
 	// Detect and register plugin interfaces (do this once during registration)
 	c.detectPluginInterfaces(plugin)
@@ -75,7 +85,7 @@ func (c *Container) RegisterPlugin(pluginName string, plugin any) error {
 			taskName := fmt.Sprintf("%s.%s", pluginName, toLowerFirst(method.Name))
 
 			// Create task executor wrapper
-			taskExecutor := createTaskExecutor(pluginValue, method)
+			taskExecutor := createTaskExecutor(pluginName, pluginValue, method)
 
 			// Register task
 			c.Tasks[taskName] = taskExecutor
@@ -124,14 +134,15 @@ func (c *Container) GetPlugin(name string) any {
 }
 
 // Initialize calls Initialize on all plugins implementing Initializer interface.
-// Uses fail-fast approach (panics on any error).
+// Returns the first initialization error.
 func (c *Container) Initialize(ctx context.Context) error {
 	initializerPlugins := c.pluginsByInterface[InterfaceInitializer]
 
-	for i, p := range initializerPlugins {
+	for _, p := range initializerPlugins {
 		initializer := p.(Initializer)
-		if err := initializer.Initialize(); err != nil {
-			panic(fmt.Sprintf("plugin #%d initialization failed: %v", i, err))
+		name := c.pluginName(p)
+		if err := initializer.Initialize(c.logger.ForPlugin(name)); err != nil {
+			return fmt.Errorf("plugin %q initialization failed: %w", name, err)
 		}
 	}
 	return nil
@@ -145,7 +156,8 @@ func (c *Container) Shutdown(ctx context.Context) error {
 	var errors []error
 	for i := len(shutdownerPlugins) - 1; i >= 0; i-- {
 		shutdowner := shutdownerPlugins[i].(Shutdowner)
-		if err := shutdowner.Shutdown(); err != nil {
+		name := c.pluginName(shutdownerPlugins[i])
+		if err := shutdowner.Shutdown(c.logger.ForPlugin(name)); err != nil {
 			errors = append(errors, fmt.Errorf("plugin #%d shutdown failed: %w", i, err))
 		}
 	}
@@ -155,6 +167,10 @@ func (c *Container) Shutdown(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *Container) pluginName(plugin any) string {
+	return c.pluginNameIndex[plugin]
 }
 
 // isValidTaskSignature checks if method has valid task signature
@@ -230,10 +246,11 @@ func toLowerFirst(s string) string {
 
 // createTaskExecutor creates a Task wrapper for a plugin method
 // It automatically detects if the method uses typed or map-based signature
-func createTaskExecutor(pluginValue reflect.Value, method reflect.Method) Task {
+func createTaskExecutor(pluginName string, pluginValue reflect.Value, method reflect.Method) Task {
 	// Check if method uses typed signature
 	if isTypedSignature(method.Type) {
 		return &typedTaskWrapper{
+			pluginName: pluginName,
 			plugin:     pluginValue,
 			method:     method,
 			inputType:  method.Type.In(2),
@@ -243,38 +260,39 @@ func createTaskExecutor(pluginValue reflect.Value, method reflect.Method) Task {
 
 	// Otherwise use map-based wrapper
 	return &pluginTaskWrapper{
-		plugin: pluginValue,
-		method: method,
+		pluginName: pluginName,
+		plugin:     pluginValue,
+		method:     method,
 	}
 }
 
 // pluginTaskWrapper wraps a plugin method to implement Task interface
 type pluginTaskWrapper struct {
-	plugin reflect.Value
-	method reflect.Method
+	pluginName string
+	plugin     reflect.Value
+	method     reflect.Method
 }
 
 func (w *pluginTaskWrapper) Execute(exec *Execution, args map[string]any) (map[string]any, error) {
-	// Call plugin method using reflection
-	results := w.method.Func.Call([]reflect.Value{
-		w.plugin,
-		reflect.ValueOf(exec),
-		reflect.ValueOf(args),
-	})
-
-	// Extract result and error
-	resultMap := results[0].Interface().(map[string]any)
-
+	var resultMap map[string]any
 	var err error
-	if !results[1].IsNil() {
-		err = results[1].Interface().(error)
-	}
-
+	exec.WithActivePlugin(w.pluginName, func() {
+		results := w.method.Func.Call([]reflect.Value{
+			w.plugin,
+			reflect.ValueOf(exec),
+			reflect.ValueOf(args),
+		})
+		resultMap = results[0].Interface().(map[string]any)
+		if !results[1].IsNil() {
+			err = results[1].Interface().(error)
+		}
+	})
 	return resultMap, err
 }
 
 // typedTaskWrapper wraps a typed plugin method and handles conversion
 type typedTaskWrapper struct {
+	pluginName string
 	plugin     reflect.Value
 	method     reflect.Method
 	inputType  reflect.Type
@@ -282,10 +300,11 @@ type typedTaskWrapper struct {
 }
 
 func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[string]any, error) {
+	log := exec.Logger()
 	// Step 1: Convert map → struct
 	inputPtr := reflect.New(w.inputType)
 	if err := mapToStruct(args, inputPtr.Interface()); err != nil {
-		slog.Error("Task input conversion failed",
+		log.Error("Task input conversion failed",
 			"task", w.method.Name,
 			"args", args,
 			"error", err)
@@ -294,31 +313,35 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 
 	// Step 2: Validate input struct using existing validation framework
 	if err := validateConfig(inputPtr.Interface()); err != nil {
-		slog.Error("Task input validation failed",
+		log.Error("Task input validation failed",
 			"task", w.method.Name,
 			"args", args,
 			"error", err)
 		return nil, fmt.Errorf("validation failed for task %s: %w", w.method.Name, err)
 	}
 
-	// Step 3: Call typed method via reflection
-	results := w.method.Func.Call([]reflect.Value{
-		w.plugin,
-		reflect.ValueOf(exec),
-		inputPtr.Elem(), // Dereference pointer to pass struct value
-	})
-
-	// Step 4: Extract output and error from method call
-	output := results[0].Interface()
+	// Step 3: Call typed method via reflection with active plugin scope set
+	var output any
 	var err error
-	if !results[1].IsNil() {
-		err = results[1].Interface().(error)
+	exec.WithActivePlugin(w.pluginName, func() {
+		results := w.method.Func.Call([]reflect.Value{
+			w.plugin,
+			reflect.ValueOf(exec),
+			inputPtr.Elem(),
+		})
+		output = results[0].Interface()
+		if !results[1].IsNil() {
+			err = results[1].Interface().(error)
+		}
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	// Step 5: Convert struct → map
+	// Step 4: Convert struct → map
 	resultMap, convertErr := structToMap(output)
 	if convertErr != nil {
-		slog.Error("Task output conversion failed",
+		log.Error("Task output conversion failed",
 			"task", w.method.Name,
 			"error", convertErr)
 		return nil, fmt.Errorf("failed to convert output for task %s: %w", w.method.Name, convertErr)

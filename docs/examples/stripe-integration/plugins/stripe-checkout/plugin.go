@@ -46,7 +46,7 @@ type CheckoutPlugin struct {
 }
 
 // Initialize is called when the plugin is loaded
-func (p *CheckoutPlugin) Initialize(exec *plugin.Execution) error {
+func (p *CheckoutPlugin) Initialize(_ plugin.Logger) error {
 	if p.Config.StripePublishableKey == "" {
 		return fmt.Errorf("checkout: stripe_publishable_key is required")
 	}
@@ -54,7 +54,7 @@ func (p *CheckoutPlugin) Initialize(exec *plugin.Execution) error {
 }
 
 // Shutdown is called when the plugin is unloaded
-func (p *CheckoutPlugin) Shutdown(exec *plugin.Execution) error {
+func (p *CheckoutPlugin) Shutdown(_ plugin.Logger) error {
 	return nil
 }
 

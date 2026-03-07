@@ -24,6 +24,49 @@ return: # Required: response configuration
   args: { ... }
 ```
 
+## DSL Logging
+
+DSL flows can emit structured user logs from step bodies with the built-in `log` module.
+
+Available methods:
+
+- `log.debug(message, data?)`
+- `log.info(message, data?)`
+- `log.warn(message, data?)`
+- `log.error(message, data?)`
+
+Example:
+
+```sflowg
+step charge_card {
+    log.info("charging customer", {
+        order_id: request.body.order_id,
+        amount: request.body.amount,
+    })
+
+    result := http.request({
+        method: "POST",
+        url: properties.paymentProviderURL,
+        body: request.body
+    })
+
+    if result.status_code != 200 {
+        log.warn("payment provider returned non-200", {
+            status_code: result.status_code
+        })
+    }
+}
+```
+
+User logs are emitted with:
+
+- `source=user`
+- `execution_id`
+- `flow_id`
+- `step_id` when called from a step body
+
+Structured payloads are allowed, but large string-like values are truncated using the runtime logging limit.
+
 ## Entrypoint
 
 Defines how the flow is triggered. Currently supports HTTP entrypoints.

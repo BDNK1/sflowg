@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-resty/resty/v2"
 	"github.com/BDNK1/sflowg/runtime/plugin"
+	"github.com/go-resty/resty/v2"
 )
 
 // Config holds the HTTP plugin configuration with declarative tags
@@ -43,12 +43,14 @@ type HTTPPlugin struct {
 
 // Initialize implements the plugin.Initializer interface
 // Config is already validated by the framework before this is called
-func (h *HTTPPlugin) Initialize() error {
+func (h *HTTPPlugin) Initialize(log plugin.Logger) error {
 	h.client = resty.New().
 		SetTimeout(h.Config.Timeout).
 		SetRetryCount(h.Config.MaxRetries).
 		SetRetryWaitTime(time.Duration(h.Config.RetryWaitMS) * time.Millisecond).
 		SetDebug(h.Config.Debug)
+
+	log.Info("Initialized HTTP plugin")
 
 	return nil
 }
@@ -56,6 +58,11 @@ func (h *HTTPPlugin) Initialize() error {
 // Request executes an HTTP request using typed input/output
 // The framework automatically validates input and converts between map and struct
 func (h *HTTPPlugin) Request(exec *plugin.Execution, input RequestInput) (RequestOutput, error) {
+	log := exec.Logger()
+	log.Info("Executing HTTP request",
+		"method", input.Method,
+		"url", input.URL)
+
 	response := map[string]any{}
 	errorResponse := map[string]any{}
 
@@ -76,6 +83,7 @@ func (h *HTTPPlugin) Request(exec *plugin.Execution, input RequestInput) (Reques
 
 	resp, err := req.Execute(input.Method, input.URL)
 	if err != nil {
+		log.Error("HTTP request failed", "error", err)
 		return RequestOutput{}, fmt.Errorf("HTTP request failed: %w", err)
 	}
 
@@ -97,8 +105,10 @@ func (h *HTTPPlugin) Request(exec *plugin.Execution, input RequestInput) (Reques
 
 	// Use appropriate response based on error status
 	if resp.IsError() {
+		log.Warn("HTTP request completed with error response", "status_code", resp.StatusCode())
 		output.Body = errorResponse
 	} else {
+		log.Info("HTTP request completed", "status_code", resp.StatusCode())
 		output.Body = response
 	}
 

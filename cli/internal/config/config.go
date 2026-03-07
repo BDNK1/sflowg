@@ -6,16 +6,18 @@ import (
 	"path/filepath"
 
 	"github.com/BDNK1/sflowg/cli/internal/security"
+	"github.com/BDNK1/sflowg/runtime"
 	"gopkg.in/yaml.v3"
 )
 
 // FlowConfig represents the flow-config.yaml structure
 type FlowConfig struct {
-	Name       string                 `yaml:"name"`       // Optional: defaults to directory name
-	Version    string                 `yaml:"version"`    // Optional: defaults to "latest"
-	Runtime    RuntimeConfig          `yaml:"runtime"`    // Optional: runtime configuration
-	Properties map[string]interface{} `yaml:"properties"` // Optional: global properties for all flows
-	Plugins    []PluginConfig         `yaml:"plugins"`
+	Name          string                 `yaml:"name"`          // Optional: defaults to directory name
+	Version       string                 `yaml:"version"`       // Optional: defaults to "latest"
+	Runtime       RuntimeConfig          `yaml:"runtime"`       // Optional: runtime configuration
+	Observability ObservabilityConfig    `yaml:"observability"` // Optional: observability configuration
+	Properties    map[string]interface{} `yaml:"properties"`    // Optional: global properties for all flows
+	Plugins       []PluginConfig         `yaml:"plugins"`
 }
 
 // RuntimeConfig represents runtime configuration
@@ -24,6 +26,11 @@ type RuntimeConfig struct {
 	Version string `yaml:"version,omitempty"` // Optional: runtime module version, defaults to "latest"
 	Engine  string `yaml:"engine,omitempty"`  // Optional: "yaml" (default) or "dsl"
 }
+
+type ObservabilityConfig = runtime.ObservabilityConfig
+type LoggingConfig = runtime.LoggingConfig
+type LogSourcesConfig = runtime.LogSourcesConfig
+type MaskingConfig = runtime.MaskingConfig
 
 // PluginConfig represents a single plugin configuration
 type PluginConfig struct {
@@ -81,7 +88,9 @@ func Load(projectDir string) (*FlowConfig, error) {
 	}
 
 	// Apply defaults
-	config.ApplyDefaults(projectDir)
+	if err := config.ApplyDefaults(projectDir); err != nil {
+		return nil, fmt.Errorf("failed to apply defaults: %w", err)
+	}
 
 	return &config, nil
 }
@@ -102,11 +111,15 @@ func (c *FlowConfig) Validate() error {
 		return fmt.Errorf("runtime.engine must be 'yaml' or 'dsl', got %q", c.Runtime.Engine)
 	}
 
+	if err := runtime.ValidateObservabilityConfig(c.Observability); err != nil {
+		return fmt.Errorf("invalid observability config: %w", err)
+	}
+
 	return nil
 }
 
 // ApplyDefaults fills in missing optional fields with defaults
-func (c *FlowConfig) ApplyDefaults(projectDir string) {
+func (c *FlowConfig) ApplyDefaults(projectDir string) error {
 	// Default project name to directory name
 	if c.Name == "" {
 		// Extract directory name from path
@@ -129,10 +142,16 @@ func (c *FlowConfig) ApplyDefaults(projectDir string) {
 		c.Runtime.Engine = "yaml"
 	}
 
+	if err := runtime.ApplyObservabilityDefaults(&c.Observability); err != nil {
+		return fmt.Errorf("failed to apply observability defaults: %w", err)
+	}
+
 	// Apply defaults to each plugin
 	for i := range c.Plugins {
 		c.Plugins[i].ApplyDefaults()
 	}
+
+	return nil
 }
 
 // ApplyDefaults fills in missing optional fields for a plugin

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -18,7 +17,7 @@ func NewHttpHandler(flow *Flow, container *Container, executor *Executor, global
 	method := strings.ToLower(config["method"].(string))
 	path := config["path"].(string)
 
-	fmt.Printf("registering HTTP entrypoint for %s %s \n", method, path)
+	container.logger.Info("Registering HTTP entrypoint", "method", method, "path", path, "flow_id", flow.ID)
 
 	switch method {
 	case "get":
@@ -26,13 +25,14 @@ func NewHttpHandler(flow *Flow, container *Container, executor *Executor, global
 	case "post":
 		g.POST(path, handleRequest(flow, container, executor, globalProperties, newValueStore, true))
 	default:
-		fmt.Printf("Method %s is not supported", method)
+		container.logger.Error("Unsupported HTTP method", "method", method, "flow_id", flow.ID)
 	}
 }
 
 func handleRequest(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, newValueStore func() ValueStore, withBody bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		e := NewExecution(flow, container, globalProperties, newValueStore())
+		start := time.Now()
 
 		// Apply flow-level timeout if configured.
 		// The execution embeds the context so all downstream code (Risor, retry
@@ -44,15 +44,23 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 		} else {
 			e = *e.WithContext(c.Request.Context())
 		}
+		log := e.Logger()
+
+		defer func() {
+			log.Info("HTTP request completed",
+				"method", c.Request.Method,
+				"path", c.Request.URL.Path,
+				"status_code", c.Writer.Status(),
+				"duration_ms", time.Since(start).Milliseconds())
+		}()
 
 		extractRequestData(c, flow, &e, withBody)
 
 		if err := executor.ExecuteSteps(&e); err != nil {
-			slog.Error("Flow execution failed",
-				"flow", flow.ID,
+			log.Error("Flow execution failed",
 				"path", c.Request.URL.Path,
 				"method", c.Request.Method,
-				"error", err.Error())
+				"error", err)
 			// on_error handler may have set a response descriptor despite execution failure.
 			if e.ResponseDescriptor != nil {
 				dispatchResponse(c, &e)
@@ -71,6 +79,7 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 // dispatchResponse handles the HTTP response dispatch based on the execution's ResponseDescriptor.
 // If no descriptor was set by any step, returns a default 200 OK.
 func dispatchResponse(c *gin.Context, execution *Execution) {
+	log := execution.Logger()
 	if execution.ResponseDescriptor == nil {
 		c.JSON(http.StatusOK, gin.H{"status": "success"})
 		return
@@ -85,10 +94,9 @@ func dispatchResponse(c *gin.Context, execution *Execution) {
 	}
 
 	if err := handler.Handle(c, execution, execution.ResponseDescriptor.Args); err != nil {
-		slog.Error("Response handler execution failed",
-			"flow", execution.Flow.ID,
+		log.Error("Response handler execution failed",
 			"handler", execution.ResponseDescriptor.HandlerName,
-			"error", err.Error())
+			"error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"message": "Error generating response: " + err.Error(),
 		})

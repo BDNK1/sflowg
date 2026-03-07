@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/BDNK1/sflowg/cli/internal/config"
 	"github.com/BDNK1/sflowg/cli/internal/constants"
 )
 
@@ -16,14 +17,15 @@ type MainGoGenerator struct {
 	ModuleName        string
 	RuntimeModulePath string
 	Port              string
-	Engine            string                 // "yaml" or "dsl"
+	Engine            string // "yaml" or "dsl"
 	EmbedFlows        bool
 	GlobalProperties  map[string]interface{} // Global properties from flow-config.yaml
+	Observability     config.ObservabilityConfig
 	Plugins           []PluginInfo
 }
 
 // NewMainGoGenerator creates a new main.go generator
-func NewMainGoGenerator(moduleName string, port string, engine string, embedFlows bool, globalProperties map[string]interface{}) *MainGoGenerator {
+func NewMainGoGenerator(moduleName string, port string, engine string, embedFlows bool, globalProperties map[string]interface{}, observability config.ObservabilityConfig) *MainGoGenerator {
 	if port == "" {
 		port = constants.DefaultPort
 	}
@@ -37,6 +39,7 @@ func NewMainGoGenerator(moduleName string, port string, engine string, embedFlow
 		Engine:            engine,
 		EmbedFlows:        embedFlows,
 		GlobalProperties:  globalProperties,
+		Observability:     observability,
 		Plugins:           []PluginInfo{},
 	}
 }

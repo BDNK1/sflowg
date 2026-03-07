@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	_ "github.com/lib/pq"
 	"github.com/BDNK1/sflowg/runtime/plugin"
+	_ "github.com/lib/pq"
 )
 
 // Config holds the Postgres plugin configuration
@@ -47,11 +47,12 @@ type PostgresPlugin struct {
 }
 
 // Initialize opens the database connection pool
-func (p *PostgresPlugin) Initialize() error {
-	// Debug: log connection string (mask password)
-	fmt.Printf("[postgres] DEBUG: Initializing with connection_string: %s\n", maskConnectionString(p.Config.ConnectionString))
-	fmt.Printf("[postgres] DEBUG: MaxOpenConns=%d, MaxIdleConns=%d, ConnMaxLifetimeMs=%d\n",
-		p.Config.MaxOpenConns, p.Config.MaxIdleConns, p.Config.ConnMaxLifetimeMs)
+func (p *PostgresPlugin) Initialize(log plugin.Logger) error {
+	log.Info("Initializing Postgres plugin",
+		"connection_string", maskConnectionString(p.Config.ConnectionString),
+		"max_open_conns", p.Config.MaxOpenConns,
+		"max_idle_conns", p.Config.MaxIdleConns,
+		"conn_max_lifetime_ms", p.Config.ConnMaxLifetimeMs)
 
 	db, err := sql.Open("postgres", p.Config.ConnectionString)
 	if err != nil {
@@ -74,7 +75,7 @@ func (p *PostgresPlugin) Initialize() error {
 }
 
 // Shutdown closes the database connection pool
-func (p *PostgresPlugin) Shutdown() error {
+func (p *PostgresPlugin) Shutdown(_ plugin.Logger) error {
 	if p.db != nil {
 		return p.db.Close()
 	}
@@ -83,9 +84,10 @@ func (p *PostgresPlugin) Shutdown() error {
 
 // Get executes a SELECT query and returns a single row
 func (p *PostgresPlugin) Get(exec *plugin.Execution, input GetInput) (GetOutput, error) {
-	// DEBUG: Log query and params
-	fmt.Printf("[postgres.get] DEBUG Query: [%s]\n", input.Query)
-	fmt.Printf("[postgres.get] DEBUG Params: %+v\n", input.Params)
+	log := exec.Logger()
+	log.Debug("Executing postgres.get",
+		"query", input.Query,
+		"params", input.Params)
 
 	rows, err := p.db.Query(input.Query, input.Params...)
 	if err != nil {
@@ -120,6 +122,11 @@ func (p *PostgresPlugin) Get(exec *plugin.Execution, input GetInput) (GetOutput,
 
 // Exec executes INSERT, UPDATE, or DELETE query
 func (p *PostgresPlugin) Exec(exec *plugin.Execution, input ExecInput) (ExecOutput, error) {
+	log := exec.Logger()
+	log.Debug("Executing postgres.exec",
+		"query", input.Query,
+		"params", input.Params)
+
 	result, err := p.db.Exec(input.Query, input.Params...)
 	if err != nil {
 		return ExecOutput{}, fmt.Errorf("postgres.exec: query failed: %w", err)
