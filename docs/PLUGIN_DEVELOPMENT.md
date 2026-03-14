@@ -153,9 +153,7 @@ type Config struct {
 Called after configuration is loaded:
 
 ```go
-import "context"
-
-func (p *PaymentPlugin) Initialize(ctx context.Context) error {
+func (p *PaymentPlugin) Initialize(log plugin.Logger) error {
     // Setup connections, clients, etc.
     p.client = NewAPIClient(p.config.BaseURL, p.config.APIKey)
     return nil
@@ -167,13 +165,58 @@ func (p *PaymentPlugin) Initialize(ctx context.Context) error {
 Called during graceful shutdown:
 
 ```go
-func (p *PaymentPlugin) Shutdown(ctx context.Context) error {
+func (p *PaymentPlugin) Shutdown(log plugin.Logger) error {
     if p.client != nil {
         return p.client.Close()
     }
     return nil
 }
 ```
+
+### Plugin Logging
+
+Plugins can receive a preconfigured logger through field injection and use execution-scoped logging inside task methods.
+
+Add a logger field to the plugin struct:
+
+```go
+import (
+    "github.com/BDNK1/sflowg/runtime/plugin"
+)
+
+type PaymentPlugin struct {
+    Log plugin.Logger
+}
+```
+
+The framework injects this field before `Initialize()` is called.
+
+Use the injected logger in `Initialize()` / `Shutdown()`:
+
+```go
+func (p *PaymentPlugin) Initialize(log plugin.Logger) error {
+    log.Info("initializing payment plugin")
+    return nil
+}
+```
+
+Use the same logger with execution context inside task methods:
+
+```go
+func (p *PaymentPlugin) Charge(exec *plugin.Execution, args plugin.Input) (plugin.Output, error) {
+    p.Log.WithContext(exec).Info("charging payment",
+        "amount", args["amount"],
+    )
+    return plugin.Output{"status": "ok"}, nil
+}
+```
+
+Plugin task logs emitted with `Log.WithContext(exec).Info(...)` automatically inherit:
+
+- `execution_id`
+- `flow_id`
+- `step_id` when called from a step
+- `plugin`
 
 ## Task Methods
 
@@ -259,7 +302,6 @@ Dependencies are automatically injected by the framework.
 package notification
 
 import (
-    "context"
     "fmt"
     "net/smtp"
 
@@ -278,7 +320,7 @@ type NotificationPlugin struct {
     config Config
 }
 
-func (p *NotificationPlugin) Initialize(ctx context.Context) error {
+func (p *NotificationPlugin) Initialize(log plugin.Logger) error {
     // Validate SMTP connection
     addr := fmt.Sprintf("%s:%d", p.config.SMTPHost, p.config.SMTPPort)
     conn, err := smtp.Dial(addr)

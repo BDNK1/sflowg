@@ -10,7 +10,6 @@ import (
 {{- end}}
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,8 +46,47 @@ func main() {
 
 	ctx := context.Background()
 
-	// Create container
-	container := runtime.NewContainer()
+	// Create logger first so container and plugins have it from the start
+	logger := runtime.NewObservabilityLogger(runtime.ObservabilityConfig{
+		Logging: runtime.LoggingConfig{
+			Level:           "{{.Observability.Logging.Level}}",
+			Format:          "{{.Observability.Logging.Format}}",
+			MaxPayloadBytes: {{.Observability.Logging.MaxPayloadBytes}},
+{{- if .Observability.Logging.Attributes}}
+			Attributes: map[string]any{
+{{- range $key, $value := .Observability.Logging.Attributes}}
+				"{{$key}}": {{printf "%#v" $value}},
+{{- end}}
+			},
+{{- end}}
+{{- if or .Observability.Logging.Sources.Framework .Observability.Logging.Sources.Plugin .Observability.Logging.Sources.User}}
+			Sources: runtime.LogSourcesConfig{
+{{- if .Observability.Logging.Sources.Framework}}
+				Framework: "{{.Observability.Logging.Sources.Framework}}",
+{{- end}}
+{{- if .Observability.Logging.Sources.Plugin}}
+				Plugin:    "{{.Observability.Logging.Sources.Plugin}}",
+{{- end}}
+{{- if .Observability.Logging.Sources.User}}
+				User:      "{{.Observability.Logging.Sources.User}}",
+{{- end}}
+			},
+{{- end}}
+			Masking: runtime.MaskingConfig{
+{{- if .Observability.Logging.Masking.Fields}}
+				Fields: []string{
+{{- range .Observability.Logging.Masking.Fields}}
+					{{printf "%q" .}},
+{{- end}}
+				},
+{{- end}}
+				Placeholder: "{{.Observability.Logging.Masking.Placeholder}}",
+			},
+		},
+	})
+
+	// Create container with configured logger so plugins have it from registration
+	container := runtime.NewContainer(runtime.NewLogger(logger))
 
 	// Initialize plugins in dependency order (dependencies first)
 	// Phase 2.2: Automatic dependency injection via struct fields
@@ -147,11 +185,10 @@ func main() {
 {{- end}}
 
 	// Create engine components
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 {{- if eq .Engine "dsl"}}
 	loader := dslengine.NewFlowLoader()
 	evaluator := dslengine.NewExpressionEvaluator()
-	stepExecutor := dslengine.NewStepExecutor(logger)
+	stepExecutor := dslengine.NewStepExecutor()
 	newValueStore := func() runtime.ValueStore { return dslengine.NewValueStore() }
 {{- else}}
 	loader := yamlengine.NewFlowLoader()
@@ -171,7 +208,9 @@ func main() {
 		"{{$key}}": {{printf "%#v" $value}},
 {{- end}}
 	}
-	app.SetGlobalProperties(globalProperties)
+	if err := app.SetGlobalProperties(globalProperties); err != nil {
+		panic(fmt.Sprintf("Failed to set global properties: %v", err))
+	}
 {{- end}}
 
 	if err := app.Start(ctx, ":"+*port, flowsDir); err != nil {

@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,6 +25,7 @@ type App struct {
 }
 
 // NewApp creates a new application with the given container and engine components.
+// The container must be initialized with a logger before calling NewApp.
 func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, newValueStore func() ValueStore) *App {
 	return &App{
 		Container:        container,
@@ -40,8 +40,13 @@ func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluat
 
 // SetGlobalProperties sets global properties that will be merged with flow properties.
 // Flow properties override global properties.
-func (a *App) SetGlobalProperties(props map[string]any) {
-	a.GlobalProperties = props
+func (a *App) SetGlobalProperties(props map[string]any) error {
+	resolved, err := resolvePropertyMap(props)
+	if err != nil {
+		return fmt.Errorf("invalid global properties: %w", err)
+	}
+	a.GlobalProperties = resolved
+	return nil
 }
 
 // Start starts the HTTP server and blocks until shutdown.
@@ -63,8 +68,7 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 	router := gin.Default()
 
 	// Create executor for flow execution
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	executor := NewExecutor(logger, a.evaluator, a.stepExecutor)
+	executor := NewExecutor(a.evaluator, a.stepExecutor)
 
 	// Register flow endpoints
 	for flowID := range a.Flows {
@@ -85,7 +89,7 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 
 	go func() {
 		<-sigChan
-		fmt.Println("\nShutting down gracefully...")
+		a.Container.Logger().Info("Shutting down gracefully")
 
 		// Create shutdown context with timeout
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -99,8 +103,8 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 	}()
 
 	// Start server
-	fmt.Printf("Server listening on %s\n", port)
-	fmt.Printf("Loaded %d flow(s)\n", len(a.Flows))
+	a.Container.Logger().Info("Server listening", "port", port)
+	a.Container.Logger().Info("Flows loaded", "count", len(a.Flows))
 
 	err := a.server.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
@@ -140,6 +144,11 @@ func (a *App) loadFlows(flowsDir string) error {
 		if err != nil {
 			return fmt.Errorf("error loading flow from %s: %w", file, err)
 		}
+		resolvedProps, err := resolvePropertyMap(flow.Properties)
+		if err != nil {
+			return fmt.Errorf("error resolving properties for flow %s: %w", flow.ID, err)
+		}
+		flow.Properties = resolvedProps
 		a.registerFlow(flow)
 	}
 
@@ -159,17 +168,16 @@ func (a *App) initialize(ctx context.Context) error {
 // Calls plugin Shutdown methods in reverse order of initialization.
 func (a *App) shutdown(ctx context.Context) error {
 	var errors []error
-
 	// Shutdown HTTP server first
 	if a.server != nil {
-		fmt.Println("Shutting down HTTP server...")
+		a.Container.Logger().Info("Shutting down HTTP server")
 		if err := a.server.Shutdown(ctx); err != nil {
 			errors = append(errors, fmt.Errorf("http server shutdown: %w", err))
 		}
 	}
 
 	// Shutdown container (calls plugin Shutdown methods)
-	fmt.Println("Shutting down plugins...")
+	a.Container.Logger().Info("Shutting down plugins")
 	if err := a.Container.Shutdown(ctx); err != nil {
 		errors = append(errors, fmt.Errorf("container shutdown: %w", err))
 	}
@@ -178,7 +186,7 @@ func (a *App) shutdown(ctx context.Context) error {
 		return fmt.Errorf("shutdown errors: %v", errors)
 	}
 
-	fmt.Println("Shutdown complete")
+	a.Container.Logger().Info("Shutdown complete")
 	return nil
 }
 

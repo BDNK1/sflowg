@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/BDNK1/sflowg/runtime"
 )
@@ -15,13 +14,11 @@ import (
 // per-step and flow-level timeouts propagate into the interpreter.
 type StepExecutor struct {
 	interpreter *Interpreter
-	l           *slog.Logger
 }
 
-func NewStepExecutor(l *slog.Logger) *StepExecutor {
+func NewStepExecutor() *StepExecutor {
 	return &StepExecutor{
 		interpreter: &Interpreter{},
-		l:           l,
 	}
 }
 
@@ -32,7 +29,7 @@ func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execu
 
 	globals := e.buildEnv(execution)
 
-	e.l.InfoContext(execution, fmt.Sprintf("Executing DSL step: %s", step.ID))
+	execution.Logger().Info(fmt.Sprintf("Executing DSL step: %s", step.ID))
 
 	// Pass execution as context.Context so Risor honours deadline/cancellation.
 	result, err := e.interpreter.Eval(ctx, step.Body, globals)
@@ -122,6 +119,11 @@ func (e *StepExecutor) buildEnv(execution *runtime.Execution) map[string]any {
 
 	responseGlobals := BuildResponseGlobals(execution)
 	for k, v := range responseGlobals {
+		globals[k] = v
+	}
+
+	logGlobals := BuildLogGlobals(execution)
+	for k, v := range logGlobals {
 		globals[k] = v
 	}
 

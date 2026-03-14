@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -16,7 +15,6 @@ import (
 // compensation unwind, and the global on_error handler.
 // Delegating actual step execution to a StepExecutor.
 type Executor struct {
-	l            *slog.Logger
 	evaluator    ExpressionEvaluator
 	stepExecutor StepExecutor
 }
@@ -28,9 +26,8 @@ type OnErrorExecutor interface {
 	ExecuteCompensation(execution *Execution, body string, stepID string, path SuccessPath) error
 }
 
-func NewExecutor(l *slog.Logger, evaluator ExpressionEvaluator, stepExecutor StepExecutor) *Executor {
+func NewExecutor(evaluator ExpressionEvaluator, stepExecutor StepExecutor) *Executor {
 	return &Executor{
-		l:            l,
 		evaluator:    evaluator,
 		stepExecutor: stepExecutor,
 	}
@@ -40,6 +37,7 @@ func NewExecutor(l *slog.Logger, evaluator ExpressionEvaluator, stepExecutor Ste
 // The *Execution carries its own context (set by the HTTP handler with any
 // flow-level timeout), so no separate ctx parameter is needed.
 func (e *Executor) ExecuteSteps(execution *Execution) error {
+	log := execution.Logger()
 	nextStep := ""
 
 	for _, s := range execution.Flow.Steps {
@@ -52,11 +50,11 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 		// Step sequencing / branching.
 		if nextStep != "" {
 			if s.ID != nextStep {
-				e.l.InfoContext(execution, fmt.Sprintf("Skipping step: %s", s.ID))
+				log.Info(fmt.Sprintf("Skipping step: %s", s.ID))
 				continue
 			}
 			nextStep = ""
-			e.l.InfoContext(execution, fmt.Sprintf("Resuming flow at step: %s", s.ID))
+			log.Info(fmt.Sprintf("Resuming flow at step: %s", s.ID))
 		}
 
 		// Step condition guard.
@@ -64,7 +62,7 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 			fe := toFlowError(err, s.ID, 0)
 			return e.handleFailure(execution, fe)
 		} else if skip {
-			e.l.InfoContext(execution, fmt.Sprintf("Skipping step (condition false): %s", s.ID))
+			log.Info(fmt.Sprintf("Skipping step (condition false): %s", s.ID))
 			continue
 		}
 
@@ -85,7 +83,7 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 		} else {
 			// Primary failed — try fallback if available.
 			if s.FallbackBody != "" {
-				e.l.InfoContext(execution, fmt.Sprintf("Primary failed for step %s, trying fallback", s.ID))
+				log.Info(fmt.Sprintf("Primary failed for step %s, trying fallback", s.ID))
 				fbStep := s
 				fbStep.Body = s.FallbackBody
 				fbStep.Retry = nil // fallback has no retry policy
@@ -104,7 +102,7 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 					fe = nil // mark as success
 				} else {
 					// Both primary and fallback failed.
-					e.l.ErrorContext(execution, fmt.Sprintf("Fallback also failed for step %s", s.ID), "error", fbFE)
+					log.Error(fmt.Sprintf("Fallback also failed for step %s", s.ID), "error", fbFE)
 					return e.handleFailure(execution, fbFE)
 				}
 			} else {
@@ -115,7 +113,7 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 
 		// Early exit if a step set a response.
 		if execution.ResponseDescriptor != nil {
-			e.l.InfoContext(execution, fmt.Sprintf("Response produced at step: %s", s.ID))
+			log.Info(fmt.Sprintf("Response produced at step: %s", s.ID))
 			break
 		}
 
@@ -163,6 +161,7 @@ func (e *Executor) executeStepWithRetries(execution *Execution, step Step) *Flow
 	}
 
 	var lastFE *FlowError
+	log := execution.Logger()
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// Context check before each attempt.
@@ -194,7 +193,9 @@ func (e *Executor) executeStepWithRetries(execution *Execution, step Step) *Flow
 
 		var err error
 		execution.WithScopedContext(stepCtx, func() {
-			_, err = e.stepExecutor.ExecuteStep(stepCtx, execution, step)
+			execution.WithActiveStep(step.ID, func() {
+				_, err = e.stepExecutor.ExecuteStep(stepCtx, execution, step)
+			})
 		})
 		if err == nil {
 			return nil
@@ -205,14 +206,14 @@ func (e *Executor) executeStepWithRetries(execution *Execution, step Step) *Flow
 		fe.Retries = attempt
 		lastFE = fe
 
-		e.l.ErrorContext(execution, fmt.Sprintf("Step %s failed (attempt %d/%d)", step.ID, attempt+1, maxAttempts),
+		log.Error(fmt.Sprintf("Step %s failed (attempt %d/%d)", step.ID, attempt+1, maxAttempts),
 			"error_type", fe.Type,
 			"error_code", fe.Code,
 			"error", fe.Message)
 
 		// Decide whether to retry.
 		if attempt+1 < maxAttempts && e.shouldRetry(execution, step, fe) {
-			e.l.InfoContext(execution, fmt.Sprintf("Will retry step %s (attempt %d/%d)", step.ID, attempt+1, maxAttempts))
+			log.Info(fmt.Sprintf("Will retry step %s (attempt %d/%d)", step.ID, attempt+1, maxAttempts))
 			continue
 		}
 		break
@@ -239,7 +240,7 @@ func (e *Executor) shouldRetry(execution *Execution, step Step, fe *FlowError) b
 		result, err := e.evaluator.Eval(execution, retry.When)
 		execution.Store.Set("error", nil) // clean up regardless of result
 		if err != nil {
-			e.l.ErrorContext(execution, "Error evaluating retry when expression", "error", err)
+			execution.Logger().Error("error evaluating retry when expression", "error", err)
 			return false
 		}
 		b, ok := result.(bool)
@@ -291,12 +292,13 @@ func (e *Executor) runCompensations(execution *Execution) {
 	}
 
 	safeExec := execution.WithContext(context.WithoutCancel(execution))
+	log := safeExec.Logger()
 	stack := execution.CompensationStack
 	for i := len(stack) - 1; i >= 0; i-- {
 		entry := stack[i]
-		e.l.InfoContext(safeExec, fmt.Sprintf("Running compensation for step %s (path: %s)", entry.StepID, entry.Path))
+		log.Info(fmt.Sprintf("Running compensation for step %s (path: %s)", entry.StepID, entry.Path))
 		if err := oee.ExecuteCompensation(safeExec, entry.Body, entry.StepID, entry.Path); err != nil {
-			e.l.ErrorContext(safeExec, fmt.Sprintf("Compensation failed for step %s", entry.StepID), "error", err)
+			log.Error(fmt.Sprintf("Compensation failed for step %s", entry.StepID), "error", err)
 			// Continue remaining compensations even on failure.
 		}
 	}
@@ -315,12 +317,13 @@ func (e *Executor) runOnErrorHandler(execution *Execution, fe *FlowError) (handl
 	}
 
 	safeCtx := context.WithoutCancel(execution)
-	e.l.InfoContext(execution, "Running flow-level on_error handler", "error_code", fe.Code)
+	log := execution.Logger()
+	log.Info("Running flow-level on_error handler", "error_code", fe.Code)
 	var err error
 	execution.WithScopedContext(safeCtx, func() {
 		err = oee.ExecuteOnErrorHandler(execution, execution.Flow.OnErrorBody, fe)
 		if err != nil {
-			e.l.ErrorContext(execution, "on_error handler itself failed", "error", err)
+			log.Error("on_error handler itself failed", "error", err)
 		}
 	})
 	if err == nil {
@@ -336,9 +339,10 @@ func (e *Executor) evaluateCondition(execution *Execution, step Step) (skip bool
 		return false, nil
 	}
 
+	log := execution.Logger()
 	result, err := e.evaluator.Eval(execution, step.Condition)
 	if err != nil {
-		e.l.ErrorContext(execution, fmt.Sprintf("Error evaluating condition for step %s", step.ID),
+		log.Error(fmt.Sprintf("Error evaluating condition for step %s", step.ID),
 			"condition", step.Condition, "error", err)
 		return false, fmt.Errorf("error evaluating condition %s: %w", step.Condition, err)
 	}
@@ -350,7 +354,7 @@ func (e *Executor) evaluateCondition(execution *Execution, step Step) (skip bool
 	if !b {
 		return true, nil
 	}
-	e.l.InfoContext(execution, fmt.Sprintf("Condition met: %s", step.Condition))
+	log.Info(fmt.Sprintf("Condition met: %s", step.Condition))
 	return false, nil
 }
 

@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -43,6 +42,7 @@ func (h *JSONResponseHandler) Handle(c *gin.Context, exec *Execution, args map[s
 type HTMLResponseHandler struct{}
 
 func (h *HTMLResponseHandler) Handle(c *gin.Context, exec *Execution, args map[string]any) error {
+	log := exec.Logger()
 	// Default status code
 	statusCode := http.StatusOK
 
@@ -54,8 +54,7 @@ func (h *HTMLResponseHandler) Handle(c *gin.Context, exec *Execution, args map[s
 	// Extract and validate body (must be string)
 	body, ok := args["body"].(string)
 	if !ok {
-		slog.Error("HTML response body must be a string",
-			"flow", exec.Flow.ID,
+		log.Error("HTML response body must be a string",
 			"bodyType", fmt.Sprintf("%T", args["body"]))
 		return fmt.Errorf("html response body must be a string, got %T", args["body"])
 	}
@@ -77,11 +76,11 @@ func (h *HTMLResponseHandler) Handle(c *gin.Context, exec *Execution, args map[s
 type RedirectResponseHandler struct{}
 
 func (h *RedirectResponseHandler) Handle(c *gin.Context, exec *Execution, args map[string]any) error {
+	log := exec.Logger()
 	// Extract location (required)
 	location, ok := args["location"].(string)
 	if !ok || location == "" {
-		slog.Error("Redirect response requires a location",
-			"flow", exec.Flow.ID)
+		log.Error("Redirect response requires a location")
 		return fmt.Errorf("redirect response requires a 'location' argument")
 	}
 
@@ -91,8 +90,7 @@ func (h *RedirectResponseHandler) Handle(c *gin.Context, exec *Execution, args m
 	// Extract status if provided and validate it's a redirect code
 	if status, ok := toStatusCode(args["status"]); ok {
 		if status < 300 || status >= 400 {
-			slog.Error("Invalid redirect status code",
-				"flow", exec.Flow.ID,
+			log.Error("Invalid redirect status code",
 				"status", status)
 			return fmt.Errorf("redirect status must be 3xx, got %d", status)
 		}

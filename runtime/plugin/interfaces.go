@@ -22,7 +22,8 @@ import (
 //	    db     *sql.DB
 //	}
 //
-//	func (p *DatabasePlugin) Initialize() error {
+//	func (p *DatabasePlugin) Initialize(log Logger) error {
+//	    log.Info("Connecting to database")
 //	    db, err := sql.Open("postgres", p.Config.DSN)
 //	    if err != nil {
 //	        return fmt.Errorf("failed to connect: %w", err)
@@ -58,7 +59,8 @@ type Initializer = runtime.Initializer
 //
 // # Implementation Example
 //
-//	func (p *CachePlugin) Shutdown() error {
+//	func (p *CachePlugin) Shutdown(log Logger) error {
+//	    log.Info("Closing cache")
 //	    if p.cache != nil {
 //	        return p.cache.Close()
 //	    }

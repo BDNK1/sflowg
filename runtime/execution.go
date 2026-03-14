@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -44,6 +45,8 @@ type Execution struct {
 	Container          *Container
 	ResponseDescriptor *ResponseDescriptor
 	CompensationStack  []CompensationEntry
+	activeStepID       string
+	activePlugin       string
 	ctx                context.Context // real context carrying deadline/cancellation
 }
 
@@ -101,9 +104,54 @@ func (e *Execution) AddValue(k string, v any) {
 	e.Store.Set(k, v)
 }
 
+func (e *Execution) Logger() Logger {
+	if e.Container == nil {
+		return NewLogger(nil).WithContext(e)
+	}
+	base := e.Container.Logger()
+	if e.activePlugin != "" {
+		base = base.ForPlugin(e.activePlugin)
+	}
+	return base.WithContext(e)
+}
+
+func (e *Execution) WithActiveStep(stepID string, fn func()) {
+	prev := e.activeStepID
+	e.activeStepID = stepID
+	defer func() {
+		e.activeStepID = prev
+	}()
+	fn()
+}
+
+func (e *Execution) WithActivePlugin(pluginName string, fn func()) {
+	prev := e.activePlugin
+	e.activePlugin = pluginName
+	defer func() {
+		e.activePlugin = prev
+	}()
+	fn()
+}
+
 // Values returns the full context map for expression evaluation.
 func (e *Execution) Values() map[string]any {
 	return e.Store.All()
+}
+
+func (e *Execution) observabilityAttrs() []slog.Attr {
+	attrs := []slog.Attr{
+		slog.String("execution_id", e.ID),
+	}
+	if e.Flow != nil && e.Flow.ID != "" {
+		attrs = append(attrs, slog.String("flow_id", e.Flow.ID))
+	}
+	if e.activeStepID != "" {
+		attrs = append(attrs, slog.String("step_id", e.activeStepID))
+	}
+	if e.activePlugin != "" {
+		attrs = append(attrs, slog.String("plugin", e.activePlugin))
+	}
+	return attrs
 }
 
 func NewExecution(flow *Flow, container *Container, globalProperties map[string]any, store ValueStore) Execution {
@@ -116,31 +164,49 @@ func NewExecution(flow *Flow, container *Container, globalProperties map[string]
 		ctx:       context.Background(),
 	}
 
-	// Merge properties: global properties first, then flow properties (flow overrides)
+	// Merge properties: global properties first, then flow properties (flow overrides).
+	// Properties are resolved during startup, not per request.
 	for k, v := range globalProperties {
-		exec.AddValue("properties."+k, resolveEnvVar(v))
+		exec.AddValue("properties."+k, v)
 	}
 
 	for k, v := range flow.Properties {
-		exec.AddValue("properties."+k, resolveEnvVar(v))
+		exec.AddValue("properties."+k, v)
 	}
 
 	return exec
+}
+
+func resolvePropertyMap(props map[string]any) (map[string]any, error) {
+	if len(props) == 0 {
+		return map[string]any{}, nil
+	}
+
+	resolved := make(map[string]any, len(props))
+	for key, value := range props {
+		resolvedValue, err := resolveEnvVar(value)
+		if err != nil {
+			return nil, fmt.Errorf("property %s: %w", key, err)
+		}
+		resolved[key] = resolvedValue
+	}
+
+	return resolved, nil
 }
 
 // envVarPattern matches ${VAR} and ${VAR:default} syntax
 var envVarPattern = regexp.MustCompile(`^\$\{([A-Z_][A-Z0-9_]*)(:[^}]*)?\}$`)
 
 // resolveEnvVar resolves environment variables in property values
-func resolveEnvVar(value any) any {
+func resolveEnvVar(value any) (any, error) {
 	strValue, ok := value.(string)
 	if !ok {
-		return value
+		return value, nil
 	}
 
 	matches := envVarPattern.FindStringSubmatch(strValue)
 	if matches == nil {
-		return value
+		return value, nil
 	}
 
 	varName := matches[1]
@@ -148,12 +214,12 @@ func resolveEnvVar(value any) any {
 
 	envValue, exists := os.LookupEnv(varName)
 	if exists {
-		return envValue
+		return envValue, nil
 	}
 
 	if defaultPart != "" {
-		return strings.TrimPrefix(defaultPart, ":")
+		return strings.TrimPrefix(defaultPart, ":"), nil
 	}
 
-	panic(fmt.Sprintf("Required environment variable not set: %s", varName))
+	return nil, fmt.Errorf("required environment variable not set: %s", varName)
 }

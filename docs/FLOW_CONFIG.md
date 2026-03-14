@@ -13,6 +13,11 @@ version: "1.0.0"
 runtime:
   port: "8080"
 
+observability:
+  logging:
+    level: info
+    max_payload_bytes: 10240
+
 properties:
   key: value
 
@@ -44,6 +49,43 @@ runtime:
 
 **Fields:**
 - `port` - HTTP server port (default: "8080")
+
+### Observability Configuration
+
+```yaml
+observability:
+  logging:
+    level: info                  # debug | info | warn | error
+    format: json                 # currently only json is supported
+    max_payload_bytes: 10240     # default: 10 KB
+    attributes:
+      service: payment-service
+      environment: prod
+    sources:
+      framework: info
+      plugin: info
+      user: debug
+    masking:
+      fields: [authorization, password, token]
+      placeholder: "***"
+```
+
+**Logging Fields:**
+- `level` - Default log level
+- `format` - Log output format (currently `json`)
+- `max_payload_bytes` - Max size for string-like payload fields before truncation
+- `attributes` - Static attributes attached to all log entries
+- `sources.framework` - Optional override for framework log level
+- `sources.plugin` - Optional override for plugin log level
+- `sources.user` - Optional override for DSL user log level
+- `masking.fields` - Optional list of field names to mask
+- `masking.placeholder` - Replacement string for masked values
+
+**Notes:**
+- Masking is opt-in. There is no default masking list.
+- Payload truncation is enforced centrally for framework, plugin, and DSL logs.
+- Flow logs automatically include `execution_id` and `flow_id`.
+- Step-scoped logs also include `step_id`.
 
 ### Global Properties
 

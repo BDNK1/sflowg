@@ -347,7 +347,7 @@ func runBuild(_ *cobra.Command, args []string) error {
 
 	// 10. Generate main.go
 	fmt.Println("\nGenerating main.go...")
-	mainGoGen := generator.NewMainGoGenerator(goModGen.ModuleName, cfg.Runtime.Port, cfg.Runtime.Engine, embedFlows, cfg.Properties)
+	mainGoGen := generator.NewMainGoGenerator(goModGen.ModuleName, cfg.Runtime.Port, cfg.Runtime.Engine, embedFlows, cfg.Properties, cfg.Observability)
 
 	for _, plugin := range analyzedPlugins {
 		pluginInfo := generator.PluginInfo{

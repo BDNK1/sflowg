@@ -1,5 +1,9 @@
 package plugin
 
+import "github.com/BDNK1/sflowg/runtime"
+
+type Logger = runtime.Logger
+
 // Input is the type alias for map-based task input arguments.
 //
 // Plugin developers can use either the explicit type `plugin.Input`

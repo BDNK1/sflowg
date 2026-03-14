@@ -30,6 +30,7 @@ func InitializeConfig(config any, rawValues map[string]any) error {
 	// Step 1: Apply defaults from struct tags
 	if err := ApplyDefaults(config); err != nil {
 		slog.Error("Plugin config: failed to apply defaults",
+			"source", "framework",
 			"config_type", reflect.TypeOf(config).String(),
 			"error", err)
 		return fmt.Errorf("failed to apply defaults: %w", err)
@@ -40,6 +41,7 @@ func InitializeConfig(config any, rawValues map[string]any) error {
 	if len(rawValues) > 0 {
 		if err := mapToStructFromYAML(rawValues, config); err != nil {
 			slog.Error("Plugin config: failed to apply config values",
+				"source", "framework",
 				"config_type", reflect.TypeOf(config).String(),
 				"raw_values", rawValues,
 				"error", err)
@@ -56,6 +58,7 @@ func InitializeConfig(config any, rawValues map[string]any) error {
 
 	if err := validateConfig(configValue.Interface()); err != nil {
 		slog.Error("Plugin config validation failed",
+			"source", "framework",
 			"config_type", reflect.TypeOf(config).String(),
 			"config_value", configValue.Interface(),
 			"error", err)

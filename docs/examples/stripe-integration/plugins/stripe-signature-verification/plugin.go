@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +37,7 @@ type StripePlugin struct {
 }
 
 // Initialize is called when the plugin is loaded
-func (p *StripePlugin) Initialize(exec *plugin.Execution) error {
+func (p *StripePlugin) Initialize(_ plugin.Logger) error {
 	if p.Config.WebhookSecret == "" {
 		return fmt.Errorf("stripe: webhook_secret is required")
 	}
@@ -46,30 +45,30 @@ func (p *StripePlugin) Initialize(exec *plugin.Execution) error {
 }
 
 // Shutdown is called when the plugin is unloaded
-func (p *StripePlugin) Shutdown(exec *plugin.Execution) error {
+func (p *StripePlugin) Shutdown(_ plugin.Logger) error {
 	return nil
 }
 
 // VerifySignature verifies a Stripe webhook signature
 // Stripe-Signature header format: t=timestamp,v1=signature,v1=signature2...
 func (p *StripePlugin) VerifySignature(exec *plugin.Execution, input VerifySignatureInput) (VerifySignatureOutput, error) {
-	slog.Info("VerifySignature called",
+	log := exec.Logger()
+	log.Info("VerifySignature called",
 		"signature_header", input.Signature,
 		"payload_length", len(input.Payload),
 		"payload_preview", truncate(input.Payload, 100))
 
-	fmt.Println("LOG from stripe plugin")
 	// Parse the signature header
 	timestamp, signatures, err := parseSignatureHeader(input.Signature)
 	if err != nil {
-		slog.Error("Failed to parse signature header", "error", err)
+		log.Error("Failed to parse signature header", "error", err)
 		return VerifySignatureOutput{
 			Valid: false,
 			Error: fmt.Sprintf("invalid signature header: %v", err),
 		}, nil
 	}
 
-	slog.Info("Parsed signature header",
+	log.Info("Parsed signature header",
 		"timestamp", timestamp,
 		"signatures_count", len(signatures))
 
@@ -79,12 +78,12 @@ func (p *StripePlugin) VerifySignature(exec *plugin.Execution, input VerifySigna
 		if age < 0 {
 			age = -age
 		}
-		slog.Info("Checking timestamp tolerance",
+		log.Info("Checking timestamp tolerance",
 			"age_seconds", age,
 			"tolerance_seconds", p.Config.ToleranceSeconds)
 
 		if age > int64(p.Config.ToleranceSeconds) {
-			slog.Warn("Timestamp outside tolerance window", "age", age)
+			log.Warn("Timestamp outside tolerance window", "age", age)
 			return VerifySignatureOutput{
 				Valid:     false,
 				Timestamp: timestamp,
@@ -98,21 +97,10 @@ func (p *StripePlugin) VerifySignature(exec *plugin.Execution, input VerifySigna
 	signedPayload := fmt.Sprintf("%d.%s", timestamp, input.Payload)
 	expectedSig := computeSignature(signedPayload, p.Config.WebhookSecret)
 
-	slog.Info("Computed expected signature",
-		"signed_payload_preview", truncate(signedPayload, 100),
-		"expected_sig", expectedSig,
-		"webhook_secret_length", len(p.Config.WebhookSecret))
-
 	// Check if any signature matches
-	for i, sig := range signatures {
-		slog.Info("Comparing signature",
-			"index", i,
-			"provided_sig", sig,
-			"expected_sig", expectedSig,
-			"match", sig == expectedSig)
-
+	for _, sig := range signatures {
 		if hmac.Equal([]byte(sig), []byte(expectedSig)) {
-			slog.Info("Signature verification SUCCESS")
+			log.Info("Signature verification succeeded")
 			return VerifySignatureOutput{
 				Valid:     true,
 				Timestamp: timestamp,
@@ -120,7 +108,7 @@ func (p *StripePlugin) VerifySignature(exec *plugin.Execution, input VerifySigna
 		}
 	}
 
-	slog.Warn("Signature verification FAILED - no matching signature found")
+	log.Warn("Signature verification failed")
 	return VerifySignatureOutput{
 		Valid:     false,
 		Timestamp: timestamp,
