@@ -66,13 +66,19 @@ func (e *Execution) Err() error {
 }
 
 func (e *Execution) Value(key any) any {
+	if e.ctx == nil {
+		return nil
+	}
+
 	k, ok := key.(string)
-	if !ok {
+	if !ok || e.Store == nil {
 		return e.ctx.Value(key)
 	}
 
-	v, _ := e.Store.Get(k)
-	return v
+	if v, found := e.Store.Get(k); found {
+		return v
+	}
+	return e.ctx.Value(key)
 }
 
 // WithContext returns a shallow copy of the Execution with a new embedded

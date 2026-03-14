@@ -10,6 +10,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func NewHttpHandler(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, newValueStore func() ValueStore, g *gin.Engine) {
@@ -30,19 +35,43 @@ func NewHttpHandler(flow *Flow, container *Container, executor *Executor, global
 }
 
 func handleRequest(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, newValueStore func() ValueStore, withBody bool) gin.HandlerFunc {
+	propagator := otel.GetTextMapPropagator()
+
 	return func(c *gin.Context) {
 		e := NewExecution(flow, container, globalProperties, newValueStore())
 		start := time.Now()
+		var requestErr error
+		reqCtx := propagator.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
+		spanCtx, span := container.Tracer().Start(reqCtx, fmt.Sprintf("flow %s", flow.ID),
+			trace.WithAttributes(
+				attribute.String("flow.id", flow.ID),
+				attribute.String("execution.id", e.ID),
+				attribute.String("http.method", c.Request.Method),
+				attribute.String("http.path", c.Request.URL.Path),
+			),
+		)
+		defer func() {
+			statusCode := c.Writer.Status()
+			if statusCode > 0 {
+				span.SetAttributes(attribute.Int("http.status_code", statusCode))
+			}
+			if requestErr == nil && statusCode >= http.StatusInternalServerError {
+				requestErr = fmt.Errorf("request completed with status %d", statusCode)
+				span.RecordError(requestErr)
+				span.SetStatus(codes.Error, requestErr.Error())
+			}
+			span.End()
+		}()
 
 		// Apply flow-level timeout if configured.
 		// The execution embeds the context so all downstream code (Risor, retry
 		// sleeps, slog) automatically respects the deadline via e.Done().
 		if flow.Timeout > 0 {
-			ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(flow.Timeout)*time.Millisecond)
+			ctx, cancel := context.WithTimeout(spanCtx, time.Duration(flow.Timeout)*time.Millisecond)
 			defer cancel()
 			e = *e.WithContext(ctx)
 		} else {
-			e = *e.WithContext(c.Request.Context())
+			e = *e.WithContext(spanCtx)
 		}
 		log := e.Logger()
 
@@ -57,13 +86,20 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 		extractRequestData(c, flow, &e, withBody)
 
 		if err := executor.ExecuteSteps(&e); err != nil {
+			requestErr = err
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			log.Error("Flow execution failed",
 				"path", c.Request.URL.Path,
 				"method", c.Request.Method,
 				"error", err)
 			// on_error handler may have set a response descriptor despite execution failure.
 			if e.ResponseDescriptor != nil {
-				dispatchResponse(c, &e)
+				if err := dispatchResponse(c, &e); err != nil {
+					requestErr = err
+					span.RecordError(err)
+					span.SetStatus(codes.Error, err.Error())
+				}
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -72,25 +108,33 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 			return
 		}
 
-		dispatchResponse(c, &e)
+		if err := dispatchResponse(c, &e); err != nil {
+			requestErr = err
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
 	}
 }
 
 // dispatchResponse handles the HTTP response dispatch based on the execution's ResponseDescriptor.
 // If no descriptor was set by any step, returns a default 200 OK.
-func dispatchResponse(c *gin.Context, execution *Execution) {
+func dispatchResponse(c *gin.Context, execution *Execution) error {
 	log := execution.Logger()
 	if execution.ResponseDescriptor == nil {
 		c.JSON(http.StatusOK, gin.H{"status": "success"})
-		return
+		return nil
 	}
 
 	handler, ok := execution.Container.ResponseHandlers.Get(execution.ResponseDescriptor.HandlerName)
 	if !ok {
+		err := fmt.Errorf("unknown response handler: %s", execution.ResponseDescriptor.HandlerName)
+		log.Error("Unknown response handler",
+			"handler", execution.ResponseDescriptor.HandlerName,
+			"error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"message": "unknown response handler: " + execution.ResponseDescriptor.HandlerName,
+			"message": err.Error(),
 		})
-		return
+		return err
 	}
 
 	if err := handler.Handle(c, execution, execution.ResponseDescriptor.Args); err != nil {
@@ -100,7 +144,10 @@ func dispatchResponse(c *gin.Context, execution *Execution) {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"message": "Error generating response: " + err.Error(),
 		})
+		return err
 	}
+
+	return nil
 }
 
 const (
