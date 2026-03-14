@@ -10,6 +10,7 @@ SFlowG compiles declarative YAML flows into standalone Go binaries. Define your 
 - **Compiled**: Single binary deployment, no runtime dependencies
 - **Extensible**: Custom plugins for any integration
 - **Fast**: Native Go performance with zero cold start
+- **Observable**: Structured logs plus optional OpenTelemetry tracing
 
 ## Quick Example
 
@@ -72,6 +73,7 @@ go install github.com/BDNK1/sflowg/cli@latest
 | [Getting Started](docs/GETTING_STARTED.md) | 5-minute tutorial to build your first service |
 | [Flow Syntax](docs/FLOW_SYNTAX.md) | Complete YAML flow reference |
 | [Configuration](docs/FLOW_CONFIG.md) | Project configuration (flow-config.yaml) |
+| [Tracing](docs/TRACING.md) | Tracing configuration and runtime architecture |
 | [CLI Reference](docs/CLI.md) | Build tool commands and options |
 | [Plugin Development](docs/PLUGIN_DEVELOPMENT.md) | Create custom plugins |
 

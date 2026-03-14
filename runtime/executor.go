@@ -8,6 +8,10 @@ import (
 	"math/rand/v2"
 	"slices"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Executor orchestrates flow step execution.
@@ -145,13 +149,22 @@ func (e *Executor) handleFailure(execution *Execution, fe *FlowError) error {
 // executeStepWithRetries runs the step body respecting its RetryConfig.
 // Returns nil on success or the last FlowError on exhausted retries.
 func (e *Executor) executeStepWithRetries(execution *Execution, step Step) *FlowError {
-	stepCtx := execution.ctx
-	if stepCtx == nil {
-		stepCtx = context.Background()
+	parentCtx := execution.ctx
+	if parentCtx == nil {
+		parentCtx = context.Background()
 	}
+
+	spanCtx, span := execution.Container.Tracer().Start(parentCtx, fmt.Sprintf("step %s", step.ID),
+		trace.WithAttributes(
+			attribute.String("step.id", step.ID),
+		),
+	)
+	defer span.End()
+
+	stepCtx := spanCtx
 	cancel := func() {}
 	if step.Timeout > 0 {
-		stepCtx, cancel = context.WithTimeout(execution, time.Duration(step.Timeout)*time.Millisecond)
+		stepCtx, cancel = context.WithTimeout(spanCtx, time.Duration(step.Timeout)*time.Millisecond)
 	}
 	defer cancel()
 
@@ -163,16 +176,18 @@ func (e *Executor) executeStepWithRetries(execution *Execution, step Step) *Flow
 	var lastFE *FlowError
 	log := execution.Logger()
 
+attemptLoop:
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// Context check before each attempt.
 		if ctxErr := stepCtx.Err(); ctxErr != nil {
-			return &FlowError{
+			lastFE = &FlowError{
 				Type:    ErrorTypeTimeout,
 				Code:    string(ErrorCodeContextCancelled),
 				Message: ctxErr.Error(),
 				Step:    step.ID,
 				Retries: attempt,
 			}
+			break
 		}
 
 		// Wait between retries (skip for first attempt).
@@ -181,13 +196,14 @@ func (e *Executor) executeStepWithRetries(execution *Execution, step Step) *Flow
 			select {
 			case <-time.After(delay):
 			case <-stepCtx.Done():
-				return &FlowError{
+				lastFE = &FlowError{
 					Type:    ErrorTypeTimeout,
 					Code:    string(ErrorCodeContextCancelled),
 					Message: "context cancelled during retry wait",
 					Step:    step.ID,
 					Retries: attempt,
 				}
+				break attemptLoop
 			}
 		}
 
@@ -217,6 +233,16 @@ func (e *Executor) executeStepWithRetries(execution *Execution, step Step) *Flow
 			continue
 		}
 		break
+	}
+
+	if lastFE != nil {
+		span.RecordError(lastFE)
+		span.SetStatus(codes.Error, lastFE.Message)
+		span.SetAttributes(
+			attribute.String("error.type", string(lastFE.Type)),
+			attribute.String("error.code", lastFE.Code),
+			attribute.Int("retries", lastFE.Retries),
+		)
 	}
 
 	return lastFE

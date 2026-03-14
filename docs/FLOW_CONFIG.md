@@ -17,6 +17,8 @@ observability:
   logging:
     level: info
     max_payload_bytes: 10240
+  tracing:
+    enabled: false
 
 properties:
   key: value
@@ -68,6 +70,15 @@ observability:
     masking:
       fields: [authorization, password, token]
       placeholder: "***"
+  tracing:
+    enabled: true
+    endpoint: localhost:4317     # OTLP/gRPC collector
+    insecure: true               # disable TLS for local collectors
+    sampler: parent_based        # always_on | always_off | trace_id_ratio | parent_based
+    sample_rate: 0.5             # used by trace_id_ratio and parent_based
+    attributes:
+      service.name: payment-api
+      deployment.environment: staging
 ```
 
 **Logging Fields:**
@@ -81,11 +92,24 @@ observability:
 - `masking.fields` - Optional list of field names to mask
 - `masking.placeholder` - Replacement string for masked values
 
+**Tracing Fields:**
+- `enabled` - Enable OpenTelemetry tracing (default: `false`)
+- `endpoint` - OTLP/gRPC collector endpoint in `host:port` form, required when tracing is enabled
+- `insecure` - Disable TLS for OTLP/gRPC export, useful for local collectors
+- `sampler` - Sampling strategy: `always_on`, `always_off`, `trace_id_ratio`, or `parent_based`
+- `sample_rate` - Sampling ratio from `0.0` to `1.0`; used by `trace_id_ratio` and `parent_based`
+- `attributes` - Static resource attributes attached to emitted traces
+
 **Notes:**
 - Masking is opt-in. There is no default masking list.
 - Payload truncation is enforced centrally for framework, plugin, and DSL logs.
 - Flow logs automatically include `execution_id` and `flow_id`.
 - Step-scoped logs also include `step_id`.
+- When tracing is enabled, logs emitted inside an active span also include `trace_id` and `span_id`.
+- Incoming HTTP `traceparent` headers are continued automatically when present.
+- Each traced execution produces a flow span with child spans for executed steps and plugin calls.
+- When tracing is disabled, the runtime uses a noop tracer and flow code does not need to change.
+- `sample_rate` only matters for `trace_id_ratio` and `parent_based`.
 
 ### Global Properties
 
@@ -184,6 +208,25 @@ version: "1.0.0"
 runtime:
   port: "8080"
 
+observability:
+  logging:
+    level: info
+    sources:
+      framework: info
+      plugin: info
+      user: debug
+    masking:
+      fields: [authorization, password, token]
+  tracing:
+    enabled: true
+    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:localhost:4317}
+    insecure: true
+    sampler: parent_based
+    sample_rate: 0.25
+    attributes:
+      service.name: payment-system-integration
+      deployment.environment: dev
+
 properties:
   # Service URLs (environment-specific)
   paymentProviderURL: ${PAYMENT_PROVIDER_URL:http://localhost:9002/v1/charges}
@@ -253,4 +296,5 @@ $ export TAXRATE=0.20  # Would override if using ${TAXRATE:...} syntax
 
 - [CLI.md](./CLI.md) - Build commands and CLI usage
 - [FLOW_SYNTAX.md](./FLOW_SYNTAX.md) - Flow YAML syntax reference
+- [TRACING.md](./TRACING.md) - Tracing configuration and architecture
 - [PLUGIN_DEVELOPMENT.md](./PLUGIN_DEVELOPMENT.md) - Creating custom plugins

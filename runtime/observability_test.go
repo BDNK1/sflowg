@@ -2,9 +2,11 @@ package runtime
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/trace"
 	"log/slog"
 )
 
@@ -129,5 +131,42 @@ func TestLoggerForUser_SetsSourceUser(t *testing.T) {
 
 	if !strings.Contains(buf.String(), `"source":"user"`) {
 		t.Fatalf("expected source=user in output, got %s", buf.String())
+	}
+}
+
+func TestObservabilityHandler_InjectsTraceContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(newObservabilityHandler(&buf, LoggingConfig{Level: "debug"}, "framework"))
+
+	traceID := trace.TraceID{0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe, 0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe}
+	spanID := trace.SpanID{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11}
+	ctx := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: trace.FlagsSampled,
+	}))
+
+	logger.InfoContext(ctx, "traced log")
+
+	output := buf.String()
+	for _, want := range []string{
+		`"trace_id":"1032547698badcfe1032547698badcfe"`,
+		`"span_id":"aabbccddeeff0011"`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %s in output, got %s", want, output)
+		}
+	}
+}
+
+func TestValidateObservabilityConfig_RequiresTracingEndpointWhenEnabled(t *testing.T) {
+	err := ValidateObservabilityConfig(ObservabilityConfig{
+		Tracing: TracingConfig{Enabled: true},
+	})
+	if err == nil {
+		t.Fatal("expected tracing validation error")
+	}
+	if !strings.Contains(err.Error(), "Endpoint") {
+		t.Fatalf("expected endpoint validation error, got %v", err)
 	}
 }

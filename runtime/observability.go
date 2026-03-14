@@ -9,12 +9,15 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 const defaultLogPayloadLimit = 10 * 1024
 
 type ObservabilityConfig struct {
 	Logging LoggingConfig `yaml:"logging"`
+	Tracing TracingConfig `yaml:"tracing"`
 }
 
 type LoggingConfig struct {
@@ -35,6 +38,15 @@ type LogSourcesConfig struct {
 type MaskingConfig struct {
 	Fields      []string `yaml:"fields,omitempty"`
 	Placeholder string   `yaml:"placeholder,omitempty" default:"***"`
+}
+
+type TracingConfig struct {
+	Enabled    bool              `yaml:"enabled" default:"false"`
+	Endpoint   string            `yaml:"endpoint,omitempty" validate:"omitempty,hostname_port"`
+	Insecure   bool              `yaml:"insecure" default:"false"`
+	Sampler    string            `yaml:"sampler" default:"always_on" validate:"omitempty,oneof=always_on always_off trace_id_ratio parent_based"`
+	SampleRate float64           `yaml:"sample_rate" default:"1.0" validate:"gte=0,lte=1"`
+	Attributes map[string]string `yaml:"attributes,omitempty"`
 }
 
 type observabilityContext interface {
@@ -69,7 +81,24 @@ func ApplyObservabilityDefaults(cfg *ObservabilityConfig) error {
 }
 
 func ValidateObservabilityConfig(cfg ObservabilityConfig) error {
-	return validateConfig(cfg)
+	if err := validateConfig(cfg); err != nil {
+		return err
+	}
+
+	tracing := cfg.Tracing
+	if tracing.Enabled && strings.TrimSpace(tracing.Endpoint) == "" {
+		return fmt.Errorf("config validation failed:\n  - field 'Endpoint' is required when tracing is enabled")
+	}
+
+	sampler := tracing.Sampler
+	if sampler == "" {
+		sampler = "always_on"
+	}
+	if sampler != "trace_id_ratio" && sampler != "parent_based" && tracing.SampleRate != 0 && tracing.SampleRate != 1 {
+		return fmt.Errorf("config validation failed:\n  - field 'SampleRate' is only used with trace_id_ratio or parent_based samplers")
+	}
+
+	return nil
 }
 
 func parseLogLevel(level string, fallback slog.Level) slog.Level {
@@ -185,6 +214,13 @@ func (h *observabilityHandler) Handle(ctx context.Context, r slog.Record) error 
 
 	if carrier, ok := ctx.(observabilityContext); ok {
 		record.AddAttrs(carrier.observabilityAttrs()...)
+	}
+
+	if spanCtx := trace.SpanContextFromContext(ctx); spanCtx.IsValid() {
+		record.AddAttrs(
+			slog.String("trace_id", spanCtx.TraceID().String()),
+			slog.String("span_id", spanCtx.SpanID().String()),
+		)
 	}
 
 	return h.next.Handle(ctx, record)

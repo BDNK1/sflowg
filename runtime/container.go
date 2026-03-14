@@ -7,6 +7,9 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Interface type constants for plugin capabilities
@@ -22,12 +25,20 @@ type Container struct {
 	pluginsByInterface map[string][]any // Interface name -> plugins implementing that interface
 	pluginNameIndex    map[any]string   // Reverse lookup: plugin instance -> name
 	logger             Logger
+	tracer             trace.Tracer
 }
 
 // Logger returns the container's logger for framework-level (non-execution) logs.
 // Use execution.Logger() instead when an *Execution is available.
 func (c *Container) Logger() Logger {
 	return c.logger
+}
+
+func (c *Container) Tracer() trace.Tracer {
+	if c.tracer == nil {
+		return newNoopTracer()
+	}
+	return c.tracer
 }
 
 func NewContainer(logger Logger) *Container {
@@ -38,7 +49,16 @@ func NewContainer(logger Logger) *Container {
 		pluginsByInterface: make(map[string][]any),
 		pluginNameIndex:    make(map[any]string),
 		logger:             logger,
+		tracer:             newNoopTracer(),
 	}
+}
+
+func (c *Container) SetTracer(tracer trace.Tracer) {
+	if tracer == nil {
+		c.tracer = newNoopTracer()
+		return
+	}
+	c.tracer = tracer
 }
 
 func (c *Container) GetTask(name string) Task {
@@ -274,19 +294,39 @@ type pluginTaskWrapper struct {
 }
 
 func (w *pluginTaskWrapper) Execute(exec *Execution, args map[string]any) (map[string]any, error) {
+	methodName := toLowerFirst(w.method.Name)
+	parentCtx := exec.ctx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+
+	spanCtx, span := exec.Container.Tracer().Start(parentCtx, fmt.Sprintf("plugin %s.%s", w.pluginName, methodName),
+		trace.WithAttributes(
+			attribute.String("plugin.name", w.pluginName),
+			attribute.String("plugin.method", methodName),
+		),
+	)
+	defer span.End()
+
 	var resultMap map[string]any
 	var err error
-	exec.WithActivePlugin(w.pluginName, func() {
-		results := w.method.Func.Call([]reflect.Value{
-			w.plugin,
-			reflect.ValueOf(exec),
-			reflect.ValueOf(args),
+	exec.WithScopedContext(spanCtx, func() {
+		exec.WithActivePlugin(w.pluginName, func() {
+			results := w.method.Func.Call([]reflect.Value{
+				w.plugin,
+				reflect.ValueOf(exec),
+				reflect.ValueOf(args),
+			})
+			resultMap = results[0].Interface().(map[string]any)
+			if !results[1].IsNil() {
+				err = results[1].Interface().(error)
+			}
 		})
-		resultMap = results[0].Interface().(map[string]any)
-		if !results[1].IsNil() {
-			err = results[1].Interface().(error)
-		}
 	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
 	return resultMap, err
 }
 
@@ -300,7 +340,20 @@ type typedTaskWrapper struct {
 }
 
 func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[string]any, error) {
-	log := exec.Logger()
+	methodName := toLowerFirst(w.method.Name)
+	parentCtx := exec.ctx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+
+	spanCtx, span := exec.Container.Tracer().Start(parentCtx, fmt.Sprintf("plugin %s.%s", w.pluginName, methodName),
+		trace.WithAttributes(
+			attribute.String("plugin.name", w.pluginName),
+			attribute.String("plugin.method", methodName),
+		),
+	)
+	defer span.End()
+	log := exec.Logger().WithContext(spanCtx)
 	// Step 1: Convert map → struct
 	inputPtr := reflect.New(w.inputType)
 	if err := mapToStruct(args, inputPtr.Interface()); err != nil {
@@ -308,6 +361,8 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 			"task", w.method.Name,
 			"args", args,
 			"error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("invalid input for task %s: %w", w.method.Name, err)
 	}
 
@@ -317,24 +372,30 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 			"task", w.method.Name,
 			"args", args,
 			"error", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("validation failed for task %s: %w", w.method.Name, err)
 	}
 
 	// Step 3: Call typed method via reflection with active plugin scope set
 	var output any
 	var err error
-	exec.WithActivePlugin(w.pluginName, func() {
-		results := w.method.Func.Call([]reflect.Value{
-			w.plugin,
-			reflect.ValueOf(exec),
-			inputPtr.Elem(),
+	exec.WithScopedContext(spanCtx, func() {
+		exec.WithActivePlugin(w.pluginName, func() {
+			results := w.method.Func.Call([]reflect.Value{
+				w.plugin,
+				reflect.ValueOf(exec),
+				inputPtr.Elem(),
+			})
+			output = results[0].Interface()
+			if !results[1].IsNil() {
+				err = results[1].Interface().(error)
+			}
 		})
-		output = results[0].Interface()
-		if !results[1].IsNil() {
-			err = results[1].Interface().(error)
-		}
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 
@@ -344,6 +405,8 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 		log.Error("Task output conversion failed",
 			"task", w.method.Name,
 			"error", convertErr)
+		span.RecordError(convertErr)
+		span.SetStatus(codes.Error, convertErr.Error())
 		return nil, fmt.Errorf("failed to convert output for task %s: %w", w.method.Name, convertErr)
 	}
 
