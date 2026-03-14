@@ -71,7 +71,7 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 		}
 
 		// --- Primary body with retries ---
-		fe := e.executeStepWithRetries(execution, s)
+		fe := e.executeStepWithRetries(execution, s, SuccessPathPrimary)
 
 		if fe == nil {
 			// Primary succeeded.
@@ -91,7 +91,7 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 				fbStep := s
 				fbStep.Body = s.FallbackBody
 				fbStep.Retry = nil // fallback has no retry policy
-				fbFE := e.executeStepWithRetries(execution, fbStep)
+				fbFE := e.executeStepWithRetries(execution, fbStep, SuccessPathFallback)
 
 				if fbFE == nil {
 					// Fallback succeeded — store its result under the original step ID
@@ -148,11 +148,13 @@ func (e *Executor) handleFailure(execution *Execution, fe *FlowError) error {
 
 // executeStepWithRetries runs the step body respecting its RetryConfig.
 // Returns nil on success or the last FlowError on exhausted retries.
-func (e *Executor) executeStepWithRetries(execution *Execution, step Step) *FlowError {
+func (e *Executor) executeStepWithRetries(execution *Execution, step Step, path SuccessPath) *FlowError {
 	parentCtx := execution.ctx
 	if parentCtx == nil {
 		parentCtx = context.Background()
 	}
+	start := time.Now()
+	var lastFE *FlowError
 
 	spanCtx, span := execution.Container.Tracer().Start(parentCtx, fmt.Sprintf("step %s", step.ID),
 		trace.WithAttributes(
@@ -160,6 +162,16 @@ func (e *Executor) executeStepWithRetries(execution *Execution, step Step) *Flow
 		),
 	)
 	defer span.End()
+	defer func() {
+		execution.Container.Metrics().RecordStep(
+			spanCtx,
+			execFlowID(execution),
+			step.ID,
+			string(path),
+			classifyMetricOutcome(lastFlowError(lastFE)),
+			time.Since(start),
+		)
+	}()
 
 	stepCtx := spanCtx
 	cancel := func() {}
@@ -173,20 +185,14 @@ func (e *Executor) executeStepWithRetries(execution *Execution, step Step) *Flow
 		maxAttempts = step.Retry.MaxAttempts
 	}
 
-	var lastFE *FlowError
 	log := execution.Logger()
 
 attemptLoop:
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		// Context check before each attempt.
 		if ctxErr := stepCtx.Err(); ctxErr != nil {
-			lastFE = &FlowError{
-				Type:    ErrorTypeTimeout,
-				Code:    string(ErrorCodeContextCancelled),
-				Message: ctxErr.Error(),
-				Step:    step.ID,
-				Retries: attempt,
-			}
+			lastFE = e.flowError(execution, step.ID, ctxErr)
+			lastFE.Retries = attempt
 			break
 		}
 
@@ -196,13 +202,8 @@ attemptLoop:
 			select {
 			case <-time.After(delay):
 			case <-stepCtx.Done():
-				lastFE = &FlowError{
-					Type:    ErrorTypeTimeout,
-					Code:    string(ErrorCodeContextCancelled),
-					Message: "context cancelled during retry wait",
-					Step:    step.ID,
-					Retries: attempt,
-				}
+				lastFE = e.flowError(execution, step.ID, stepCtx.Err())
+				lastFE.Retries = attempt
 				break attemptLoop
 			}
 		}
@@ -214,6 +215,7 @@ attemptLoop:
 			})
 		})
 		if err == nil {
+			lastFE = nil
 			return nil
 		}
 
@@ -229,6 +231,7 @@ attemptLoop:
 
 		// Decide whether to retry.
 		if attempt+1 < maxAttempts && e.shouldRetry(execution, step, fe) {
+			execution.Container.Metrics().RecordRetry(spanCtx, execFlowID(execution), step.ID, string(path))
 			log.Info(fmt.Sprintf("Will retry step %s (attempt %d/%d)", step.ID, attempt+1, maxAttempts))
 			continue
 		}
@@ -246,6 +249,13 @@ attemptLoop:
 	}
 
 	return lastFE
+}
+
+func lastFlowError(fe *FlowError) error {
+	if fe == nil {
+		return nil
+	}
+	return fe
 }
 
 // shouldRetry decides whether to retry based on the RetryConfig and the error.
@@ -389,11 +399,30 @@ func (e *Executor) flowError(_ *Execution, stepID string, err error) *FlowError 
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &FlowError{Type: ErrorTypeTimeout, Code: string(ErrorCodeDeadlineExceeded), Message: err.Error(), Step: stepID}
 	}
-	return &FlowError{Type: ErrorTypePermanent, Code: string(ErrorCodeContextCancelled), Message: err.Error(), Step: stepID}
+	return &FlowError{Type: ErrorTypeTimeout, Code: string(ErrorCodeContextCancelled), Message: err.Error(), Step: stepID}
 }
 
 // toFlowError converts any error to a *FlowError, preserving existing FlowErrors.
 func toFlowError(err error, stepID string, attempt int) *FlowError {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &FlowError{
+			Type:    ErrorTypeTimeout,
+			Code:    string(ErrorCodeDeadlineExceeded),
+			Message: err.Error(),
+			Step:    stepID,
+			Retries: attempt,
+		}
+	}
+	if errors.Is(err, context.Canceled) {
+		return &FlowError{
+			Type:    ErrorTypeTimeout,
+			Code:    string(ErrorCodeContextCancelled),
+			Message: err.Error(),
+			Step:    stepID,
+			Retries: attempt,
+		}
+	}
+
 	var fe *FlowError
 	if errors.As(err, &fe) {
 		if fe.Step == "" {

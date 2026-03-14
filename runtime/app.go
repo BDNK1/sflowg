@@ -24,6 +24,7 @@ type App struct {
 	newValueStore    func() ValueStore
 	observability    ObservabilityConfig
 	tracerShutdown   func(context.Context) error
+	metricsShutdown  func(context.Context) error
 }
 
 // NewApp creates a new application with the given container and engine components.
@@ -73,6 +74,21 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 		if cleanupTracing && a.tracerShutdown != nil {
 			_ = a.tracerShutdown(context.Background())
 			a.tracerShutdown = nil
+		}
+	}()
+
+	metrics, shutdownMetrics, err := InitMetrics(a.observability.Metrics)
+	if err != nil {
+		return fmt.Errorf("initialize metrics: %w", err)
+	}
+	a.Container.SetMetrics(metrics)
+	a.metricsShutdown = shutdownMetrics
+
+	cleanupMetrics := true
+	defer func() {
+		if cleanupMetrics && a.metricsShutdown != nil {
+			_ = a.metricsShutdown(context.Background())
+			a.metricsShutdown = nil
 		}
 	}()
 
@@ -140,6 +156,7 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 	}
 
 	cleanupTracing = false
+	cleanupMetrics = false
 	return nil
 }
 
@@ -212,6 +229,14 @@ func (a *App) shutdown(ctx context.Context) error {
 			errors = append(errors, fmt.Errorf("tracing shutdown: %w", err))
 		}
 		a.tracerShutdown = nil
+	}
+
+	if a.metricsShutdown != nil {
+		a.Container.Logger().Info("Shutting down metrics")
+		if err := a.metricsShutdown(ctx); err != nil {
+			errors = append(errors, fmt.Errorf("metrics shutdown: %w", err))
+		}
+		a.metricsShutdown = nil
 	}
 
 	if len(errors) > 0 {

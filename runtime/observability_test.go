@@ -3,10 +3,13 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/trace"
+	"gopkg.in/yaml.v3"
 	"log/slog"
 )
 
@@ -168,5 +171,149 @@ func TestValidateObservabilityConfig_RequiresTracingEndpointWhenEnabled(t *testi
 	}
 	if !strings.Contains(err.Error(), "Endpoint") {
 		t.Fatalf("expected endpoint validation error, got %v", err)
+	}
+}
+
+func TestApplyObservabilityDefaults_DefaultsLogExportModeToStdout(t *testing.T) {
+	cfg := ObservabilityConfig{}
+	if err := ApplyObservabilityDefaults(&cfg); err != nil {
+		t.Fatalf("ApplyObservabilityDefaults failed: %v", err)
+	}
+	if got, want := []string(cfg.Logging.Export.Mode), []string{logExportModeStdout}; !slices.Equal(got, want) {
+		t.Fatalf("expected default log export mode %v, got %v", want, got)
+	}
+}
+
+func TestValidateObservabilityConfig_RequiresLoggingExportEndpointWhenOTLPEnabled(t *testing.T) {
+	err := ValidateObservabilityConfig(ObservabilityConfig{
+		Logging: LoggingConfig{
+			Export: LogExportConfig{
+				Enabled: true,
+				Mode:    LogExportModes{logExportModeOTLP},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected logging export validation error")
+	}
+	if !strings.Contains(err.Error(), "Endpoint") {
+		t.Fatalf("expected endpoint validation error, got %v", err)
+	}
+}
+
+func TestLogExportModes_UnmarshalScalarAndSequence(t *testing.T) {
+	var scalar struct {
+		Mode LogExportModes `yaml:"mode"`
+	}
+	if err := yaml.Unmarshal([]byte("mode: otlp\n"), &scalar); err != nil {
+		t.Fatalf("yaml.Unmarshal scalar failed: %v", err)
+	}
+	if got, want := []string(scalar.Mode), []string{"otlp"}; !slices.Equal(got, want) {
+		t.Fatalf("expected scalar mode %v, got %v", want, got)
+	}
+
+	var sequence struct {
+		Mode LogExportModes `yaml:"mode"`
+	}
+	if err := yaml.Unmarshal([]byte("mode: [stdout, otlp]\n"), &sequence); err != nil {
+		t.Fatalf("yaml.Unmarshal sequence failed: %v", err)
+	}
+	if got, want := []string(sequence.Mode), []string{"stdout", "otlp"}; !slices.Equal(got, want) {
+		t.Fatalf("expected sequence mode %v, got %v", want, got)
+	}
+}
+
+func TestInitObservabilityLoggerWithWriter_FansOutToStdoutAndOTLP(t *testing.T) {
+	var stdout bytes.Buffer
+	var otlp bytes.Buffer
+
+	prev := newOTLPLogHandler
+	t.Cleanup(func() { newOTLPLogHandler = prev })
+	newOTLPLogHandler = func(cfg LoggingConfig) (slog.Handler, func(context.Context) error, error) {
+		return slog.NewJSONHandler(&otlp, &slog.HandlerOptions{Level: slog.LevelDebug}), func(context.Context) error { return nil }, nil
+	}
+
+	logger, shutdown, err := InitObservabilityLoggerWithWriter(&stdout, ObservabilityConfig{
+		Logging: LoggingConfig{
+			Level: "debug",
+			Masking: MaskingConfig{
+				Fields:      []string{"password"},
+				Placeholder: "***",
+			},
+			Export: LogExportConfig{
+				Enabled:  true,
+				Mode:     LogExportModes{logExportModeStdout, logExportModeOTLP},
+				Endpoint: "localhost:4317",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("InitObservabilityLoggerWithWriter failed: %v", err)
+	}
+	defer func() {
+		if err := shutdown(context.Background()); err != nil {
+			t.Fatalf("shutdown failed: %v", err)
+		}
+	}()
+
+	logger.Info("fanout", "password", "secret")
+
+	for _, output := range []string{stdout.String(), otlp.String()} {
+		if !strings.Contains(output, `"password":"***"`) {
+			t.Fatalf("expected masked password in output, got %s", output)
+		}
+		if !strings.Contains(output, `"source":"framework"`) {
+			t.Fatalf("expected source in output, got %s", output)
+		}
+	}
+}
+
+func TestInitObservabilityLoggerWithWriter_OTLPOnlySkipsStdout(t *testing.T) {
+	var stdout bytes.Buffer
+	var otlp bytes.Buffer
+
+	prev := newOTLPLogHandler
+	t.Cleanup(func() { newOTLPLogHandler = prev })
+	newOTLPLogHandler = func(cfg LoggingConfig) (slog.Handler, func(context.Context) error, error) {
+		return slog.NewJSONHandler(&otlp, &slog.HandlerOptions{Level: slog.LevelDebug}), func(context.Context) error { return nil }, nil
+	}
+
+	logger, shutdown, err := InitObservabilityLoggerWithWriter(&stdout, ObservabilityConfig{
+		Logging: LoggingConfig{
+			Level: "debug",
+			Export: LogExportConfig{
+				Enabled:  true,
+				Mode:     LogExportModes{logExportModeOTLP},
+				Endpoint: "localhost:4317",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("InitObservabilityLoggerWithWriter failed: %v", err)
+	}
+	defer func() {
+		if err := shutdown(context.Background()); err != nil {
+			t.Fatalf("shutdown failed: %v", err)
+		}
+	}()
+
+	logger.Info("otlp only")
+
+	if stdout.Len() != 0 {
+		t.Fatalf("expected no stdout output, got %s", stdout.String())
+	}
+	if !strings.Contains(otlp.String(), "otlp only") {
+		t.Fatalf("expected otlp output, got %s", otlp.String())
+	}
+}
+
+func TestJoinShutdowns_JoinsErrors(t *testing.T) {
+	wantErr := errors.New("boom")
+	err := joinShutdowns([]func(context.Context) error{
+		func(context.Context) error { return wantErr },
+		func(context.Context) error { return nil },
+	})(context.Background())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected joined error to contain %v, got %v", wantErr, err)
 	}
 }

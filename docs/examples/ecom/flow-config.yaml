@@ -5,6 +5,36 @@ runtime:
   port: 8080
   engine: dsl
 
+observability:
+  logging:
+    level: info
+    format: json
+    export:
+      enabled: true
+      mode: [stdout, otlp]
+      endpoint: localhost:4317
+      insecure: true
+      attributes:
+        service.name: ecommerce-api
+        deployment.environment: local
+  tracing:
+    enabled: true
+    endpoint: localhost:4317
+    insecure: true
+    sampler: parent_based
+    sample_rate: 1.0
+    attributes:
+      service.name: ecommerce-api
+      deployment.environment: local
+  metrics:
+    enabled: true
+    endpoint: localhost:4317
+    insecure: true
+    export_interval_ms: 10000
+    attributes:
+      service.name: ecommerce-api
+      deployment.environment: local
+
 properties:
   app_name: "Ecommerce API"
   stripe_integration_url: ${STRIPE_INTEGRATION_URL:http://localhost:8090}
