@@ -26,21 +26,22 @@ func NewHttpHandler(flow *Flow, container *Container, executor *Executor, global
 
 	switch method {
 	case "get":
-		g.GET(path, handleRequest(flow, container, executor, globalProperties, newValueStore, false))
+		g.GET(path, handleRequest(flow, path, container, executor, globalProperties, newValueStore, false))
 	case "post":
-		g.POST(path, handleRequest(flow, container, executor, globalProperties, newValueStore, true))
+		g.POST(path, handleRequest(flow, path, container, executor, globalProperties, newValueStore, true))
 	default:
 		container.logger.Error("Unsupported HTTP method", "method", method, "flow_id", flow.ID)
 	}
 }
 
-func handleRequest(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, newValueStore func() ValueStore, withBody bool) gin.HandlerFunc {
+func handleRequest(flow *Flow, route string, container *Container, executor *Executor, globalProperties map[string]any, newValueStore func() ValueStore, withBody bool) gin.HandlerFunc {
 	propagator := otel.GetTextMapPropagator()
 
 	return func(c *gin.Context) {
 		e := NewExecution(flow, container, globalProperties, newValueStore())
 		start := time.Now()
 		var requestErr error
+		var flowErr error
 		reqCtx := propagator.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
 		spanCtx, span := container.Tracer().Start(reqCtx, fmt.Sprintf("flow %s", flow.ID),
 			trace.WithAttributes(
@@ -76,6 +77,19 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 		log := e.Logger()
 
 		defer func() {
+			duration := time.Since(start)
+			container.Metrics().RecordFlow(spanCtx, flow.ID, classifyMetricOutcome(flowErr), duration)
+			container.Metrics().RecordHTTPRequest(
+				spanCtx,
+				flow.ID,
+				c.Request.Method,
+				route,
+				classifyHTTPStatus(c.Writer.Status()),
+				duration,
+			)
+		}()
+
+		defer func() {
 			log.Info("HTTP request completed",
 				"method", c.Request.Method,
 				"path", c.Request.URL.Path,
@@ -85,14 +99,15 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 
 		extractRequestData(c, flow, &e, withBody)
 
-		if err := executor.ExecuteSteps(&e); err != nil {
-			requestErr = err
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+		flowErr = executor.ExecuteSteps(&e)
+		if flowErr != nil {
+			requestErr = flowErr
+			span.RecordError(flowErr)
+			span.SetStatus(codes.Error, flowErr.Error())
 			log.Error("Flow execution failed",
 				"path", c.Request.URL.Path,
 				"method", c.Request.Method,
-				"error", err)
+				"error", flowErr)
 			// on_error handler may have set a response descriptor despite execution failure.
 			if e.ResponseDescriptor != nil {
 				if err := dispatchResponse(c, &e); err != nil {
@@ -103,7 +118,7 @@ func handleRequest(flow *Flow, container *Container, executor *Executor, globalP
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"message": "Error in task execution: " + err.Error(),
+				"message": "Error in task execution: " + flowErr.Error(),
 			})
 			return
 		}

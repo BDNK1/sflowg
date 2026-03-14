@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"{{.RuntimeModulePath}}"
 {{- if eq .Engine "dsl"}}
@@ -81,6 +82,25 @@ func main() {
 {{- end}}
 				Placeholder: "{{.Observability.Logging.Masking.Placeholder}}",
 			},
+			Export: runtime.LogExportConfig{
+				Enabled:  {{.Observability.Logging.Export.Enabled}},
+{{- if .Observability.Logging.Export.Mode}}
+				Mode: runtime.LogExportModes{
+{{- range .Observability.Logging.Export.Mode}}
+					{{printf "%q" .}},
+{{- end}}
+				},
+{{- end}}
+				Endpoint: "{{.Observability.Logging.Export.Endpoint}}",
+				Insecure: {{.Observability.Logging.Export.Insecure}},
+{{- if .Observability.Logging.Export.Attributes}}
+				Attributes: map[string]string{
+{{- range $key, $value := .Observability.Logging.Export.Attributes}}
+					"{{$key}}": {{printf "%q" $value}},
+{{- end}}
+				},
+{{- end}}
+			},
 		},
 		Tracing: runtime.TracingConfig{
 			Enabled:    {{.Observability.Tracing.Enabled}},
@@ -96,10 +116,65 @@ func main() {
 			},
 {{- end}}
 		},
+		Metrics: runtime.MetricsConfig{
+			Enabled:          {{.Observability.Metrics.Enabled}},
+			Endpoint:         "{{.Observability.Metrics.Endpoint}}",
+			Insecure:         {{.Observability.Metrics.Insecure}},
+			ExportIntervalMS: {{.Observability.Metrics.ExportIntervalMS}},
+{{- if .Observability.Metrics.Attributes}}
+			Attributes: map[string]string{
+{{- range $key, $value := .Observability.Metrics.Attributes}}
+				"{{$key}}": {{printf "%q" $value}},
+{{- end}}
+			},
+{{- end}}
+{{- if or .Observability.Metrics.HistogramBuckets.HTTPRequestMS .Observability.Metrics.HistogramBuckets.FlowMS .Observability.Metrics.HistogramBuckets.StepMS .Observability.Metrics.HistogramBuckets.PluginMS}}
+			HistogramBuckets: runtime.HistogramBuckets{
+{{- if .Observability.Metrics.HistogramBuckets.HTTPRequestMS}}
+				HTTPRequestMS: []float64{
+{{- range .Observability.Metrics.HistogramBuckets.HTTPRequestMS}}
+					{{printf "%g" .}},
+{{- end}}
+				},
+{{- end}}
+{{- if .Observability.Metrics.HistogramBuckets.FlowMS}}
+				FlowMS: []float64{
+{{- range .Observability.Metrics.HistogramBuckets.FlowMS}}
+					{{printf "%g" .}},
+{{- end}}
+				},
+{{- end}}
+{{- if .Observability.Metrics.HistogramBuckets.StepMS}}
+				StepMS: []float64{
+{{- range .Observability.Metrics.HistogramBuckets.StepMS}}
+					{{printf "%g" .}},
+{{- end}}
+				},
+{{- end}}
+{{- if .Observability.Metrics.HistogramBuckets.PluginMS}}
+				PluginMS: []float64{
+{{- range .Observability.Metrics.HistogramBuckets.PluginMS}}
+					{{printf "%g" .}},
+{{- end}}
+				},
+{{- end}}
+			},
+{{- end}}
+		},
 	}
 
 	// Create logger first so container and plugins have it from the start
-	logger := runtime.NewObservabilityLogger(observabilityCfg)
+	logger, shutdownLogging, err := runtime.InitObservabilityLogger(observabilityCfg)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to initialize observability logger: %v", err))
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownLogging(shutdownCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to shutdown observability logger: %v\n", err)
+		}
+	}()
 
 	// Create container with configured logger so plugins have it from registration
 	container := runtime.NewContainer(runtime.NewLogger(logger))

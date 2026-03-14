@@ -12,5 +12,17 @@ services:
       - ./migrations/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - postgres_data:/var/lib/postgresql
 
+  otel-lgtm:
+    image: grafana/otel-lgtm
+    container_name: ecommerce-otel-lgtm
+    environment:
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /otel-lgtm/grafana/conf/provisioning/dashboards/custom/sflowg-otlp-overview.json
+    ports:
+      - "3000:3000"
+      - "4317:4317"
+    volumes:
+      - ./grafana/dashboards/sflowg-otlp-overview.json:/otel-lgtm/grafana/conf/provisioning/dashboards/custom/sflowg-otlp-overview.json:ro
+      - ./grafana/provisioning/dashboards/custom.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/custom.yaml:ro
+
 volumes:
   postgres_data:

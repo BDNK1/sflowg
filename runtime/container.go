@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
@@ -26,6 +27,7 @@ type Container struct {
 	pluginNameIndex    map[any]string   // Reverse lookup: plugin instance -> name
 	logger             Logger
 	tracer             trace.Tracer
+	metrics            *Metrics
 }
 
 // Logger returns the container's logger for framework-level (non-execution) logs.
@@ -41,6 +43,13 @@ func (c *Container) Tracer() trace.Tracer {
 	return c.tracer
 }
 
+func (c *Container) Metrics() *Metrics {
+	if c.metrics == nil {
+		return NewNoopMetrics()
+	}
+	return c.metrics
+}
+
 func NewContainer(logger Logger) *Container {
 	return &Container{
 		Tasks:              make(map[string]Task),
@@ -50,6 +59,7 @@ func NewContainer(logger Logger) *Container {
 		pluginNameIndex:    make(map[any]string),
 		logger:             logger,
 		tracer:             newNoopTracer(),
+		metrics:            NewNoopMetrics(),
 	}
 }
 
@@ -59,6 +69,14 @@ func (c *Container) SetTracer(tracer trace.Tracer) {
 		return
 	}
 	c.tracer = tracer
+}
+
+func (c *Container) SetMetrics(metrics *Metrics) {
+	if metrics == nil {
+		c.metrics = NewNoopMetrics()
+		return
+	}
+	c.metrics = metrics
 }
 
 func (c *Container) GetTask(name string) Task {
@@ -307,6 +325,7 @@ func (w *pluginTaskWrapper) Execute(exec *Execution, args map[string]any) (map[s
 		),
 	)
 	defer span.End()
+	start := time.Now()
 
 	var resultMap map[string]any
 	var err error
@@ -327,6 +346,15 @@ func (w *pluginTaskWrapper) Execute(exec *Execution, args map[string]any) (map[s
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 	}
+	exec.Container.Metrics().RecordPluginCall(
+		spanCtx,
+		execFlowID(exec),
+		exec.activeStepID,
+		w.pluginName,
+		methodName,
+		classifyMetricOutcome(err),
+		time.Since(start),
+	)
 	return resultMap, err
 }
 
@@ -378,6 +406,7 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 	}
 
 	// Step 3: Call typed method via reflection with active plugin scope set
+	start := time.Now()
 	var output any
 	var err error
 	exec.WithScopedContext(spanCtx, func() {
@@ -396,6 +425,15 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+		exec.Container.Metrics().RecordPluginCall(
+			spanCtx,
+			execFlowID(exec),
+			exec.activeStepID,
+			w.pluginName,
+			methodName,
+			classifyMetricOutcome(err),
+			time.Since(start),
+		)
 		return nil, err
 	}
 
@@ -407,10 +445,35 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 			"error", convertErr)
 		span.RecordError(convertErr)
 		span.SetStatus(codes.Error, convertErr.Error())
+		exec.Container.Metrics().RecordPluginCall(
+			spanCtx,
+			execFlowID(exec),
+			exec.activeStepID,
+			w.pluginName,
+			methodName,
+			classifyMetricOutcome(convertErr),
+			time.Since(start),
+		)
 		return nil, fmt.Errorf("failed to convert output for task %s: %w", w.method.Name, convertErr)
 	}
 
+	exec.Container.Metrics().RecordPluginCall(
+		spanCtx,
+		execFlowID(exec),
+		exec.activeStepID,
+		w.pluginName,
+		methodName,
+		classifyMetricOutcome(nil),
+		time.Since(start),
+	)
 	return resultMap, err
+}
+
+func execFlowID(exec *Execution) string {
+	if exec == nil || exec.Flow == nil {
+		return ""
+	}
+	return exec.Flow.ID
 }
 
 // isValidResponseHandlerSignature checks if method has valid response handler signature
