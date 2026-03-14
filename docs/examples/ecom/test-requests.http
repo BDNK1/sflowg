@@ -10,10 +10,10 @@ Content-Type: application/json
 }
 
 ### Get an order by ID
-GET http://localhost:8080/api/orders/5
+GET http://localhost:8080/api/orders/1
 
 ### Create payment via stripe-integration for an order
-POST http://localhost:8080/api/orders/5/pay
+POST http://localhost:8080/api/orders/1/pay
 
 ### Create another order
 POST http://localhost:8080/api/orders
@@ -26,7 +26,7 @@ Content-Type: application/json
 }
 
 ### Cancel an order
-POST http://localhost:8080/api/orders/2/cancel
+POST http://localhost:8080/api/orders/12/cancel
 
 ### Invalid create (should fail with 400)
 POST http://localhost:8080/api/orders

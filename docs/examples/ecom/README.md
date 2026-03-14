@@ -14,11 +14,15 @@ This example uses `engine: dsl` in `flow-config.yaml`. Flows are written in `.fl
 
 ## Quick Setup
 
-1. Start PostgreSQL:
+1. Start local dependencies:
 
 ```bash
 docker compose up -d
 ```
+
+This starts:
+- PostgreSQL on `localhost:5432`
+- An OTLP collector plus Grafana stack on `localhost:4317` and `localhost:3000`
 
 2. Configure env:
 
@@ -45,6 +49,21 @@ Server: `http://localhost:8080`
 
 `/api/orders/:id/pay` expects the stripe-integration example running separately
 (for example on `http://localhost:8090`).
+
+Logging, metrics, and tracing are enabled by default for this example and
+exported via OTLP/gRPC to `localhost:4317`, which is provided by the included
+`otel-lgtm` compose service. Logging uses
+`observability.logging.export.mode: [stdout, otlp]`, so logs still appear in
+the local terminal while also being sent to Loki through the collector.
+
+Grafana is available at `http://localhost:3000` with the default credentials
+`admin` / `admin`. It opens on a provisioned `SFlowG OTLP Overview` dashboard
+that shows the framework’s OTLP metrics, a Loki logs panel for
+`service_name="ecommerce-api"`, and TraceQL starting points for the exported
+traces.
+
+If you change the dashboard JSON locally, Grafana reloads provisioned
+dashboards every 30 seconds.
 
 ## Endpoints
 

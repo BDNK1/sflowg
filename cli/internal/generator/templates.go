@@ -13,13 +13,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"{{.RuntimeModulePath}}"
-{{- if eq .Engine "dsl"}}
 	dslengine "{{.RuntimeModulePath}}/engine/dsl"
-{{- else}}
-	yamlengine "{{.RuntimeModulePath}}/engine/yaml"
-{{- end}}
 {{- range .Plugins}}
 {{- if eq .Type 3}}
 	"{{$.ModuleName}}/vendored"
@@ -81,6 +78,25 @@ func main() {
 {{- end}}
 				Placeholder: "{{.Observability.Logging.Masking.Placeholder}}",
 			},
+			Export: runtime.LogExportConfig{
+				Enabled:  {{.Observability.Logging.Export.Enabled}},
+{{- if .Observability.Logging.Export.Mode}}
+				Mode: runtime.LogExportModes{
+{{- range .Observability.Logging.Export.Mode}}
+					{{printf "%q" .}},
+{{- end}}
+				},
+{{- end}}
+				Endpoint: "{{.Observability.Logging.Export.Endpoint}}",
+				Insecure: {{.Observability.Logging.Export.Insecure}},
+{{- if .Observability.Logging.Export.Attributes}}
+				Attributes: map[string]string{
+{{- range $key, $value := .Observability.Logging.Export.Attributes}}
+					"{{$key}}": {{printf "%q" $value}},
+{{- end}}
+				},
+{{- end}}
+			},
 		},
 		Tracing: runtime.TracingConfig{
 			Enabled:    {{.Observability.Tracing.Enabled}},
@@ -96,15 +112,67 @@ func main() {
 			},
 {{- end}}
 		},
+		Metrics: runtime.MetricsConfig{
+			Enabled:          {{.Observability.Metrics.Enabled}},
+			Endpoint:         "{{.Observability.Metrics.Endpoint}}",
+			Insecure:         {{.Observability.Metrics.Insecure}},
+			ExportIntervalMS: {{.Observability.Metrics.ExportIntervalMS}},
+{{- if .Observability.Metrics.Attributes}}
+			Attributes: map[string]string{
+{{- range $key, $value := .Observability.Metrics.Attributes}}
+				"{{$key}}": {{printf "%q" $value}},
+{{- end}}
+			},
+{{- end}}
+{{- if or .Observability.Metrics.HistogramBuckets.HTTPRequestMS .Observability.Metrics.HistogramBuckets.FlowMS .Observability.Metrics.HistogramBuckets.StepMS .Observability.Metrics.HistogramBuckets.PluginMS}}
+			HistogramBuckets: runtime.HistogramBuckets{
+{{- if .Observability.Metrics.HistogramBuckets.HTTPRequestMS}}
+				HTTPRequestMS: []float64{
+{{- range .Observability.Metrics.HistogramBuckets.HTTPRequestMS}}
+					{{printf "%g" .}},
+{{- end}}
+				},
+{{- end}}
+{{- if .Observability.Metrics.HistogramBuckets.FlowMS}}
+				FlowMS: []float64{
+{{- range .Observability.Metrics.HistogramBuckets.FlowMS}}
+					{{printf "%g" .}},
+{{- end}}
+				},
+{{- end}}
+{{- if .Observability.Metrics.HistogramBuckets.StepMS}}
+				StepMS: []float64{
+{{- range .Observability.Metrics.HistogramBuckets.StepMS}}
+					{{printf "%g" .}},
+{{- end}}
+				},
+{{- end}}
+{{- if .Observability.Metrics.HistogramBuckets.PluginMS}}
+				PluginMS: []float64{
+{{- range .Observability.Metrics.HistogramBuckets.PluginMS}}
+					{{printf "%g" .}},
+{{- end}}
+				},
+{{- end}}
+			},
+{{- end}}
+		},
 	}
 
-	// Create logger first so container and plugins have it from the start
-	logger := runtime.NewObservabilityLogger(observabilityCfg)
+		// Create container and initialize observability before registering plugins
+		container := runtime.NewContainer(runtime.NewLogger(nil))
+		if err := container.InitObservability(observabilityCfg); err != nil {
+			panic(fmt.Sprintf("Failed to initialize observability: %v", err))
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := container.ShutdownObservability(shutdownCtx); err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to shutdown observability: %v\n", err)
+			}
+		}()
 
-	// Create container with configured logger so plugins have it from registration
-	container := runtime.NewContainer(runtime.NewLogger(logger))
-
-	// Initialize plugins in dependency order (dependencies first)
+		// Initialize plugins in dependency order (dependencies first)
 	// Phase 2.2: Automatic dependency injection via struct fields
 	// Phase 2.3: Configuration system with env vars and validation
 {{- range $plugin := .Plugins}}
@@ -201,17 +269,10 @@ func main() {
 {{- end}}
 
 	// Create engine components
-{{- if eq .Engine "dsl"}}
 	loader := dslengine.NewFlowLoader()
 	evaluator := dslengine.NewExpressionEvaluator()
 	stepExecutor := dslengine.NewStepExecutor()
 	newValueStore := func() runtime.ValueStore { return dslengine.NewValueStore() }
-{{- else}}
-	loader := yamlengine.NewFlowLoader()
-	evaluator := yamlengine.NewExpressionEvaluator()
-	stepExecutor := yamlengine.NewStepExecutor(evaluator, logger)
-	newValueStore := func() runtime.ValueStore { return yamlengine.NewValueStore() }
-{{- end}}
 
 	// Create app and start server (runtime handles everything)
 	// Runtime will: Initialize plugins → LoadFlows → Setup Gin → Handle signals → Graceful shutdown
