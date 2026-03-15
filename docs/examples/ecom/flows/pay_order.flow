@@ -106,6 +106,7 @@ step create_payment(retry: { max_attempts: 3, delay: 500, backoff: "exponential"
 }
 
 step payment_error(condition: create_payment.status_code != 201 || create_payment.body.success != true) {
+    metric.ecom_payment_errors.inc()
     let message = create_payment.body.error?.message ?? "payment service error"
     response.json({
         status: 502,
@@ -117,6 +118,7 @@ step payment_error(condition: create_payment.status_code != 201 || create_paymen
 }
 
 step save_payment_intent {
+    metric.ecom_payment_initiated.inc()
     postgres.get({
         query: "UPDATE orders SET status = 'payment_pending', stripe_payment_id = $1, stripe_payment_intent_id = $2, stripe_client_secret = $3 WHERE id = $4 RETURNING id, customer_email, customer_name, amount_cents, currency, status, stripe_payment_id, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at",
         params: [create_payment.body.data.order_id, create_payment.body.data.payment_intent_id, create_payment.body.data.client_secret, request.pathVariables.id]

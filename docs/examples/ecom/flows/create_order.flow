@@ -41,6 +41,9 @@ step create_order {
         currency: resolve_currency
     })
 
+    metric.ecom_orders_created.inc()
+    metric.ecom_order_amount_cents.record(request.body.amount_cents)
+
     postgres.get({
         query: "INSERT INTO orders (customer_email, customer_name, amount_cents, currency, status) VALUES ($1, $2, $3, $4, 'pending') RETURNING id, customer_email, customer_name, amount_cents, currency, status, stripe_payment_id, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at",
         params: [request.body.customer_email, request.body.customer_name, request.body.amount_cents, resolve_currency]

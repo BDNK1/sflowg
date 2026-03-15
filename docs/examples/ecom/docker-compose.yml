@@ -12,5 +12,46 @@ services:
       - ./migrations/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - postgres_data:/var/lib/postgresql
 
+  otelcollector:
+    image: otel/opentelemetry-collector-contrib:0.103.0
+    container_name: ecommerce-otelcollector
+    command: ["--config=/etc/otelcol/otelcol.yaml"]
+    volumes:
+      - ./otelcol.yaml:/etc/otelcol/otelcol.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver (app → collector)
+      - "4318:4318"   # OTLP HTTP receiver
+      - "8889:8889"   # Prometheus metrics scrape endpoint
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: ecommerce-prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: ecommerce-grafana
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
+  prometheus_data:
+  grafana_data:

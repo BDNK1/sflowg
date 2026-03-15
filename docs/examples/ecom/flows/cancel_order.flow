@@ -42,6 +42,7 @@ step mark_canceled {
     if (result.found == false) {
         raise("CANCEL_FAILED", "order could not be marked as canceled")
     }
+    metric.ecom_orders_canceled.inc()
     result
 }
 

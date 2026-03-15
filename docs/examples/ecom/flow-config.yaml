@@ -5,6 +5,31 @@ runtime:
   port: 8080
   engine: dsl
 
+observability:
+  logging:
+    level: info
+  tracing:
+    enabled: ${TRACING_ENABLED:false}
+    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:localhost:4317}
+    insecure: true
+  metrics:
+    - name: ecom_orders_created
+      type: counter
+      description: "Total number of orders created"
+    - name: ecom_order_amount_cents
+      type: histogram
+      description: "Distribution of order amounts in cents"
+      unit: "cents"
+    - name: ecom_payment_initiated
+      type: counter
+      description: "Total number of payment initiations"
+    - name: ecom_payment_errors
+      type: counter
+      description: "Total number of payment errors"
+    - name: ecom_orders_canceled
+      type: counter
+      description: "Total number of orders canceled"
+
 properties:
   app_name: "Ecommerce API"
   stripe_integration_url: ${STRIPE_INTEGRATION_URL:http://localhost:8090}
