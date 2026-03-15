@@ -26,92 +26,135 @@ func NewHttpHandler(flow *Flow, container *Container, executor *Executor, global
 
 	switch method {
 	case "get":
-		g.GET(path, handleRequest(flow, container, executor, globalProperties, newValueStore, false))
+		g.GET(path, handleRequest(flow, path, container, executor, globalProperties, newValueStore, false))
 	case "post":
-		g.POST(path, handleRequest(flow, container, executor, globalProperties, newValueStore, true))
+		g.POST(path, handleRequest(flow, path, container, executor, globalProperties, newValueStore, true))
 	default:
 		container.logger.Error("Unsupported HTTP method", "method", method, "flow_id", flow.ID)
 	}
 }
 
-func handleRequest(flow *Flow, container *Container, executor *Executor, globalProperties map[string]any, newValueStore func() ValueStore, withBody bool) gin.HandlerFunc {
-	propagator := otel.GetTextMapPropagator()
+type requestScope struct {
+	execution *Execution
+	flow      *Flow
+	route     string
+	start     time.Time
+	spanCtx   context.Context
+	span      trace.Span
+	cancel    context.CancelFunc
+	log       Logger
+}
 
+func beginRequestScope(c *gin.Context, flow *Flow, route string, execution *Execution) *requestScope {
+	propagator := otel.GetTextMapPropagator()
+	reqCtx := propagator.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
+	spanCtx, span := execution.Tracer().Start(reqCtx, fmt.Sprintf("flow %s", flow.ID),
+		trace.WithAttributes(
+			attribute.String("flow.id", flow.ID),
+			attribute.String("execution.id", execution.ID),
+			attribute.String("http.method", c.Request.Method),
+			attribute.String("http.path", c.Request.URL.Path),
+		),
+	)
+
+	cancel := func() {}
+	if flow.Timeout > 0 {
+		ctx, timeoutCancel := context.WithTimeout(spanCtx, time.Duration(flow.Timeout)*time.Millisecond)
+		*execution = *execution.WithContext(ctx)
+		cancel = timeoutCancel
+	} else {
+		*execution = *execution.WithContext(spanCtx)
+	}
+
+	return &requestScope{
+		execution: execution,
+		flow:      flow,
+		route:     route,
+		start:     time.Now(),
+		spanCtx:   spanCtx,
+		span:      span,
+		cancel:    cancel,
+		log:       execution.Logger(),
+	}
+}
+
+func (s *requestScope) finish(c *gin.Context, requestErr error) {
+	defer s.cancel()
+
+	duration := time.Since(s.start)
+	statusCode := c.Writer.Status()
+	finalErr := requestErr
+	if finalErr == nil && statusCode >= http.StatusInternalServerError {
+		finalErr = fmt.Errorf("request completed with status %d", statusCode)
+	}
+
+	s.log.Info("HTTP request completed",
+		"method", c.Request.Method,
+		"path", c.Request.URL.Path,
+		"status_code", statusCode,
+		"duration_ms", duration.Milliseconds())
+
+	s.execution.Metrics().RecordFlow(s.spanCtx, s.flow.ID, classifyMetricOutcome(finalErr), duration)
+	s.execution.Metrics().RecordHTTPRequest(
+		s.spanCtx,
+		s.flow.ID,
+		c.Request.Method,
+		s.route,
+		classifyHTTPStatus(statusCode),
+		duration,
+	)
+
+	if statusCode > 0 {
+		s.span.SetAttributes(attribute.Int("http.status_code", statusCode))
+	}
+	if requestErr == nil && finalErr != nil {
+		s.span.RecordError(finalErr)
+		s.span.SetStatus(codes.Error, finalErr.Error())
+	}
+	s.span.End()
+}
+
+func handleRequest(flow *Flow, route string, container *Container, executor *Executor, globalProperties map[string]any, newValueStore func() ValueStore, withBody bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		e := NewExecution(flow, container, globalProperties, newValueStore())
-		start := time.Now()
 		var requestErr error
-		reqCtx := propagator.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
-		spanCtx, span := container.Tracer().Start(reqCtx, fmt.Sprintf("flow %s", flow.ID),
-			trace.WithAttributes(
-				attribute.String("flow.id", flow.ID),
-				attribute.String("execution.id", e.ID),
-				attribute.String("http.method", c.Request.Method),
-				attribute.String("http.path", c.Request.URL.Path),
-			),
-		)
+		var flowErr error
+		scope := beginRequestScope(c, flow, route, &e)
 		defer func() {
-			statusCode := c.Writer.Status()
-			if statusCode > 0 {
-				span.SetAttributes(attribute.Int("http.status_code", statusCode))
-			}
-			if requestErr == nil && statusCode >= http.StatusInternalServerError {
-				requestErr = fmt.Errorf("request completed with status %d", statusCode)
-				span.RecordError(requestErr)
-				span.SetStatus(codes.Error, requestErr.Error())
-			}
-			span.End()
+			scope.finish(c, requestErr)
 		}()
-
-		// Apply flow-level timeout if configured.
-		// The execution embeds the context so all downstream code (Risor, retry
-		// sleeps, slog) automatically respects the deadline via e.Done().
-		if flow.Timeout > 0 {
-			ctx, cancel := context.WithTimeout(spanCtx, time.Duration(flow.Timeout)*time.Millisecond)
-			defer cancel()
-			e = *e.WithContext(ctx)
-		} else {
-			e = *e.WithContext(spanCtx)
-		}
-		log := e.Logger()
-
-		defer func() {
-			log.Info("HTTP request completed",
-				"method", c.Request.Method,
-				"path", c.Request.URL.Path,
-				"status_code", c.Writer.Status(),
-				"duration_ms", time.Since(start).Milliseconds())
-		}()
+		log := scope.log
 
 		extractRequestData(c, flow, &e, withBody)
 
-		if err := executor.ExecuteSteps(&e); err != nil {
-			requestErr = err
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+		flowErr = executor.ExecuteSteps(&e)
+		if flowErr != nil {
+			requestErr = flowErr
+			scope.span.RecordError(flowErr)
+			scope.span.SetStatus(codes.Error, flowErr.Error())
 			log.Error("Flow execution failed",
 				"path", c.Request.URL.Path,
 				"method", c.Request.Method,
-				"error", err)
+				"error", flowErr)
 			// on_error handler may have set a response descriptor despite execution failure.
 			if e.ResponseDescriptor != nil {
 				if err := dispatchResponse(c, &e); err != nil {
 					requestErr = err
-					span.RecordError(err)
-					span.SetStatus(codes.Error, err.Error())
+					scope.span.RecordError(err)
+					scope.span.SetStatus(codes.Error, err.Error())
 				}
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{
-				"message": "Error in task execution: " + err.Error(),
+				"message": "Error in task execution: " + flowErr.Error(),
 			})
 			return
 		}
 
 		if err := dispatchResponse(c, &e); err != nil {
 			requestErr = err
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
+			scope.span.RecordError(err)
+			scope.span.SetStatus(codes.Error, err.Error())
 		}
 	}
 }

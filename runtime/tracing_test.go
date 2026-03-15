@@ -7,14 +7,14 @@ import (
 )
 
 func TestTracingResource_PreservesDefaultMetadata(t *testing.T) {
-	res, err := tracingResource(map[string]string{
+	res, err := otelResource(map[string]string{
 		"deployment.environment": "test",
 	})
 	if err != nil {
-		t.Fatalf("expected tracingResource to succeed, got %v", err)
+		t.Fatalf("expected otelResource to succeed, got %v", err)
 	}
 	if res == nil {
-		t.Fatal("expected tracingResource to return a resource")
+		t.Fatal("expected otelResource to return a resource")
 	}
 
 	if value, ok := resourceAttribute(res.Attributes(), attribute.Key("deployment.environment")); !ok || value.AsString() != "test" {

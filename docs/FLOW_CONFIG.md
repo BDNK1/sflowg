@@ -19,6 +19,8 @@ observability:
     max_payload_bytes: 10240
   tracing:
     enabled: false
+  metrics:
+    enabled: false
 
 properties:
   key: value
@@ -70,6 +72,14 @@ observability:
     masking:
       fields: [authorization, password, token]
       placeholder: "***"
+    export:
+      enabled: true
+      mode: [stdout, otlp]       # stdout | otlp | [stdout, otlp]
+      endpoint: localhost:4317   # required when otlp mode is enabled
+      insecure: true
+      attributes:
+        service.name: payment-api
+        deployment.environment: staging
   tracing:
     enabled: true
     endpoint: localhost:4317     # OTLP/gRPC collector
@@ -79,6 +89,19 @@ observability:
     attributes:
       service.name: payment-api
       deployment.environment: staging
+  metrics:
+    enabled: true
+    endpoint: localhost:4317     # OTLP/gRPC collector
+    insecure: true               # disable TLS for local collectors
+    export_interval_ms: 10000    # 1s - 60s, default: 10s
+    attributes:
+      service.name: payment-api
+      deployment.environment: staging
+    histogram_buckets:
+      http_request_ms: [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
+      flow_ms: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+      step_ms: [5, 10, 25, 50, 100, 250, 500, 1000, 2500]
+      plugin_ms: [5, 10, 25, 50, 100, 250, 500, 1000, 2500]
 ```
 
 **Logging Fields:**
@@ -91,6 +114,11 @@ observability:
 - `sources.user` - Optional override for DSL user log level
 - `masking.fields` - Optional list of field names to mask
 - `masking.placeholder` - Replacement string for masked values
+- `export.enabled` - Enables OTLP log export when `mode` includes `otlp`
+- `export.mode` - Output target(s); accepts a single value (`stdout` or `otlp`) or a list such as `[stdout, otlp]`
+- `export.endpoint` - OTLP/gRPC collector endpoint in `host:port` form; required when `mode` includes `otlp`
+- `export.insecure` - Disable TLS for OTLP/gRPC log export, useful for local collectors
+- `export.attributes` - Static resource attributes attached to exported OTLP logs
 
 **Tracing Fields:**
 - `enabled` - Enable OpenTelemetry tracing (default: `false`)
@@ -100,15 +128,30 @@ observability:
 - `sample_rate` - Sampling ratio from `0.0` to `1.0`; used by `trace_id_ratio` and `parent_based`
 - `attributes` - Static resource attributes attached to emitted traces
 
+**Metrics Fields:**
+- `enabled` - Enable OpenTelemetry metrics export (default: `false`)
+- `endpoint` - OTLP/gRPC collector endpoint in `host:port` form, required when metrics are enabled
+- `insecure` - Disable TLS for OTLP/gRPC export, useful for local collectors
+- `export_interval_ms` - Periodic export interval in milliseconds (default: `10000`)
+- `attributes` - Static resource attributes attached to emitted metrics
+- `histogram_buckets.http_request_ms` - Optional custom buckets for `sflowg.http.server.duration_ms`
+- `histogram_buckets.flow_ms` - Optional custom buckets for `sflowg.flow.duration_ms`
+- `histogram_buckets.step_ms` - Optional custom buckets for `sflowg.step.duration_ms`
+- `histogram_buckets.plugin_ms` - Optional custom buckets for `sflowg.plugin.duration_ms`
+
 **Notes:**
 - Masking is opt-in. There is no default masking list.
 - Payload truncation is enforced centrally for framework, plugin, and DSL logs.
 - Flow logs automatically include `execution_id` and `flow_id`.
 - Step-scoped logs also include `step_id`.
 - When tracing is enabled, logs emitted inside an active span also include `trace_id` and `span_id`.
+- If `logging.export.mode` is omitted, the effective default is `stdout`.
+- Use `logging.export.mode: [stdout, otlp]` to keep local terminal logs while also exporting to OTLP.
 - Incoming HTTP `traceparent` headers are continued automatically when present.
 - Each traced execution produces a flow span with child spans for executed steps and plugin calls.
 - When tracing is disabled, the runtime uses a noop tracer and flow code does not need to change.
+- When metrics are enabled, the runtime emits OTLP metrics for flows, steps, retries, plugin calls, and HTTP requests.
+- Metric attributes are runtime-owned and bounded. Raw `execution_id`, raw request paths, and arbitrary error text are not exported as metric labels.
 - `sample_rate` only matters for `trace_id_ratio` and `parent_based`.
 
 ### Global Properties
@@ -217,6 +260,14 @@ observability:
       user: debug
     masking:
       fields: [authorization, password, token]
+    export:
+      enabled: true
+      mode: [stdout, otlp]
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:localhost:4317}
+      insecure: true
+      attributes:
+        service.name: payment-system-integration
+        deployment.environment: dev
   tracing:
     enabled: true
     endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:localhost:4317}
@@ -226,6 +277,19 @@ observability:
     attributes:
       service.name: payment-system-integration
       deployment.environment: dev
+  metrics:
+    enabled: true
+    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:localhost:4317}
+    insecure: true
+    export_interval_ms: 10000
+    attributes:
+      service.name: payment-system-integration
+      deployment.environment: dev
+    histogram_buckets:
+      http_request_ms: [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
+      flow_ms: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+      step_ms: [5, 10, 25, 50, 100, 250, 500, 1000, 2500]
+      plugin_ms: [5, 10, 25, 50, 100, 250, 500, 1000, 2500]
 
 properties:
   # Service URLs (environment-specific)

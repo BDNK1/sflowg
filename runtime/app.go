@@ -22,18 +22,11 @@ type App struct {
 	evaluator        ExpressionEvaluator
 	stepExecutor     StepExecutor
 	newValueStore    func() ValueStore
-	observability    ObservabilityConfig
-	tracerShutdown   func(context.Context) error
 }
 
 // NewApp creates a new application with the given container and engine components.
 // The container must be initialized with a logger before calling NewApp.
-func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, newValueStore func() ValueStore, observability ...ObservabilityConfig) *App {
-	cfg := DefaultObservabilityConfig()
-	if len(observability) > 0 {
-		cfg = observability[0]
-		_ = ApplyObservabilityDefaults(&cfg)
-	}
+func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, newValueStore func() ValueStore, _ ...ObservabilityConfig) *App {
 	return &App{
 		Container:        container,
 		Flows:            make(map[string]Flow),
@@ -42,7 +35,6 @@ func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluat
 		evaluator:        evaluator,
 		stepExecutor:     stepExecutor,
 		newValueStore:    newValueStore,
-		observability:    cfg,
 	}
 }
 
@@ -61,21 +53,6 @@ func (a *App) SetGlobalProperties(props map[string]any) error {
 // Automatically handles: Initialize → LoadFlows → Gin setup → Signal handling → Graceful shutdown
 // Port should be in format ":8080" or "0.0.0.0:8080"
 func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
-	tracer, shutdownTracing, err := InitTracing(a.observability.Tracing)
-	if err != nil {
-		return fmt.Errorf("initialize tracing: %w", err)
-	}
-	a.Container.SetTracer(tracer)
-	a.tracerShutdown = shutdownTracing
-
-	cleanupTracing := true
-	defer func() {
-		if cleanupTracing && a.tracerShutdown != nil {
-			_ = a.tracerShutdown(context.Background())
-			a.tracerShutdown = nil
-		}
-	}()
-
 	// Initialize plugins
 	if err := a.initialize(ctx); err != nil {
 		return err
@@ -129,7 +106,7 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 	a.Container.Logger().Info("Server listening", "port", port)
 	a.Container.Logger().Info("Flows loaded", "count", len(a.Flows))
 
-	err = a.server.ListenAndServe()
+	err := a.server.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server error: %w", err)
 	}
@@ -139,7 +116,6 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 		return shutdownErr
 	}
 
-	cleanupTracing = false
 	return nil
 }
 
@@ -206,19 +182,14 @@ func (a *App) shutdown(ctx context.Context) error {
 		errors = append(errors, fmt.Errorf("container shutdown: %w", err))
 	}
 
-	if a.tracerShutdown != nil {
-		a.Container.Logger().Info("Shutting down tracing")
-		if err := a.tracerShutdown(ctx); err != nil {
-			errors = append(errors, fmt.Errorf("tracing shutdown: %w", err))
-		}
-		a.tracerShutdown = nil
+	a.Container.Logger().Info("Shutting down observability")
+	if err := a.Container.ShutdownObservability(ctx); err != nil {
+		errors = append(errors, fmt.Errorf("observability shutdown: %w", err))
 	}
 
 	if len(errors) > 0 {
 		return fmt.Errorf("shutdown errors: %v", errors)
 	}
-
-	a.Container.Logger().Info("Shutdown complete")
 	return nil
 }
 

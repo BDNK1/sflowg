@@ -24,7 +24,7 @@ type FlowConfig struct {
 type RuntimeConfig struct {
 	Port    string `yaml:"port"`              // Optional: HTTP server port, defaults to "8080"
 	Version string `yaml:"version,omitempty"` // Optional: runtime module version, defaults to "latest"
-	Engine  string `yaml:"engine,omitempty"`  // Optional: "yaml" (default) or "dsl"
+	Engine  string `yaml:"engine,omitempty"`  // Optional: only "dsl" is supported
 }
 
 type ObservabilityConfig = runtime.ObservabilityConfig
@@ -108,8 +108,8 @@ func (c *FlowConfig) Validate() error {
 		}
 	}
 
-	if c.Runtime.Engine != "" && c.Runtime.Engine != "yaml" && c.Runtime.Engine != "dsl" {
-		return fmt.Errorf("runtime.engine must be 'yaml' or 'dsl', got %q", c.Runtime.Engine)
+	if c.Runtime.Engine != "" && c.Runtime.Engine != "dsl" {
+		return fmt.Errorf("runtime.engine must be 'dsl', got %q", c.Runtime.Engine)
 	}
 
 	if err := runtime.ValidateObservabilityConfig(c.Observability); err != nil {
@@ -140,7 +140,7 @@ func (c *FlowConfig) ApplyDefaults(projectDir string) error {
 		c.Runtime.Version = "latest"
 	}
 	if c.Runtime.Engine == "" {
-		c.Runtime.Engine = "yaml"
+		c.Runtime.Engine = "dsl"
 	}
 
 	if err := runtime.ApplyObservabilityDefaults(&c.Observability); err != nil {
