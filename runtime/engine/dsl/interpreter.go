@@ -72,13 +72,13 @@ func wrapGoFunc(name string, fn any) *object.Builtin {
 	errType := reflect.TypeOf((*error)(nil)).Elem()
 
 	return object.NewBuiltin(name, func(ctx context.Context, args ...object.Object) (object.Object, error) {
-		goArgs := make([]reflect.Value, len(args))
-		for i, arg := range args {
-			goVal := arg.Interface()
-			if i < fnType.NumIn() {
-				goArgs[i] = convertArg(goVal, fnType.In(i))
+		numIn := fnType.NumIn()
+		goArgs := make([]reflect.Value, numIn)
+		for i := 0; i < numIn; i++ {
+			if i < len(args) {
+				goArgs[i] = convertArg(args[i].Interface(), fnType.In(i))
 			} else {
-				goArgs[i] = reflect.ValueOf(goVal)
+				goArgs[i] = reflect.Zero(fnType.In(i))
 			}
 		}
 

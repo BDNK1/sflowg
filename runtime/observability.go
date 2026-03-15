@@ -16,8 +16,9 @@ import (
 const defaultLogPayloadLimit = 10 * 1024
 
 type ObservabilityConfig struct {
-	Logging LoggingConfig `yaml:"logging"`
-	Tracing TracingConfig `yaml:"tracing"`
+	Logging LoggingConfig  `yaml:"logging"`
+	Tracing TracingConfig  `yaml:"tracing"`
+	Metrics []MetricConfig `yaml:"metrics,omitempty"`
 }
 
 type LoggingConfig struct {

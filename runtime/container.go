@@ -21,6 +21,7 @@ const (
 type Container struct {
 	Tasks              map[string]Task
 	ResponseHandlers   *ResponseHandlerRegistry
+	Metrics            map[string]MetricHandle
 	plugins            map[string]any   // Plugin instances (name -> plugin)
 	pluginsByInterface map[string][]any // Interface name -> plugins implementing that interface
 	pluginNameIndex    map[any]string   // Reverse lookup: plugin instance -> name
@@ -45,6 +46,7 @@ func NewContainer(logger Logger) *Container {
 	return &Container{
 		Tasks:              make(map[string]Task),
 		ResponseHandlers:   NewResponseHandlerRegistry(),
+		Metrics:            make(map[string]MetricHandle),
 		plugins:            make(map[string]any),
 		pluginsByInterface: make(map[string][]any),
 		pluginNameIndex:    make(map[any]string),

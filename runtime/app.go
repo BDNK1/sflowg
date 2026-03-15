@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel"
 )
 
 type App struct {
@@ -67,6 +68,15 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 	}
 	a.Container.SetTracer(tracer)
 	a.tracerShutdown = shutdownTracing
+
+	if len(a.observability.Metrics) > 0 {
+		meter := otel.GetMeterProvider().Meter("github.com/BDNK1/sflowg/runtime")
+		metrics, err := InitMetrics(a.observability.Metrics, meter)
+		if err != nil {
+			return fmt.Errorf("initialize metrics: %w", err)
+		}
+		a.Container.Metrics = metrics
+	}
 
 	cleanupTracing := true
 	defer func() {

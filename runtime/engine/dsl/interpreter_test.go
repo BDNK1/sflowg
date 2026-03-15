@@ -3,6 +3,9 @@ package dsl
 import (
 	"context"
 	"testing"
+
+	"github.com/BDNK1/sflowg/runtime"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
 func TestInterpreterEval_BasicTypes(t *testing.T) {
@@ -147,6 +150,114 @@ func TestInterpreterEval_MissingAttributeReturnsNil(t *testing.T) {
 	}
 	if result != int64(100) {
 		t.Errorf("expected 100, got %v", result)
+	}
+}
+
+func TestBuildMetricGlobals_CounterIncAdd(t *testing.T) {
+	meter := noop.NewMeterProvider().Meter("test")
+	handles, err := runtime.InitMetrics([]runtime.MetricConfig{
+		{Name: "checkout_attempts", Type: runtime.MetricTypeCounter},
+	}, meter)
+	if err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+
+	exec := &runtime.Execution{}
+	exec.Container = runtime.NewContainer(runtime.NewLogger(nil))
+	exec.Container.Metrics = handles
+
+	globals := BuildMetricGlobals(exec)
+	if globals == nil {
+		t.Fatal("BuildMetricGlobals returned nil")
+	}
+	if _, ok := globals["metric"]; !ok {
+		t.Fatal("expected 'metric' key in globals")
+	}
+
+	interp := &Interpreter{}
+	ctx := context.Background()
+
+	// inc() with no args
+	if _, err := interp.Eval(ctx, `metric.checkout_attempts.inc()`, globals); err != nil {
+		t.Fatalf("inc() failed: %v", err)
+	}
+	// add(n)
+	if _, err := interp.Eval(ctx, `metric.checkout_attempts.add(5)`, globals); err != nil {
+		t.Fatalf("add(5) failed: %v", err)
+	}
+}
+
+func TestBuildMetricGlobals_HistogramRecord(t *testing.T) {
+	meter := noop.NewMeterProvider().Meter("test")
+	handles, err := runtime.InitMetrics([]runtime.MetricConfig{
+		{Name: "checkout_amounts", Type: runtime.MetricTypeHistogram, Unit: "USD"},
+	}, meter)
+	if err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+
+	exec := &runtime.Execution{}
+	exec.Container = runtime.NewContainer(runtime.NewLogger(nil))
+	exec.Container.Metrics = handles
+
+	globals := BuildMetricGlobals(exec)
+	interp := &Interpreter{}
+
+	if _, err := interp.Eval(context.Background(), `metric.checkout_amounts.record(99.5)`, globals); err != nil {
+		t.Fatalf("record(99.5) failed: %v", err)
+	}
+}
+
+func TestBuildMetricGlobals_GaugeSet(t *testing.T) {
+	meter := noop.NewMeterProvider().Meter("test")
+	handles, err := runtime.InitMetrics([]runtime.MetricConfig{
+		{Name: "queue_depth", Type: runtime.MetricTypeGauge},
+	}, meter)
+	if err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+
+	exec := &runtime.Execution{}
+	exec.Container = runtime.NewContainer(runtime.NewLogger(nil))
+	exec.Container.Metrics = handles
+
+	globals := BuildMetricGlobals(exec)
+	interp := &Interpreter{}
+
+	if _, err := interp.Eval(context.Background(), `metric.queue_depth.set(3)`, globals); err != nil {
+		t.Fatalf("set(3) failed: %v", err)
+	}
+}
+
+func TestBuildMetricGlobals_Empty(t *testing.T) {
+	exec := &runtime.Execution{}
+	exec.Container = runtime.NewContainer(runtime.NewLogger(nil))
+
+	if got := BuildMetricGlobals(exec); got != nil {
+		t.Errorf("expected nil for empty metrics, got %v", got)
+	}
+}
+
+func TestWrapGoFunc_ExtraArgsIgnored(t *testing.T) {
+	interp := &Interpreter{}
+	ctx := context.Background()
+
+	called := false
+	// 0-param function called with an argument — must not panic
+	globals := map[string]any{
+		"container": map[string]any{
+			"noop": func() error {
+				called = true
+				return nil
+			},
+		},
+	}
+
+	if _, err := interp.Eval(ctx, `container.noop()`, globals); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("noop was not called")
 	}
 }
 

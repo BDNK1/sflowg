@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/BDNK1/sflowg/runtime"
+	"github.com/deepnoodle-ai/risor/v2/pkg/object"
 )
 
 // BuildPluginGlobals converts container tasks (e.g., "http.request", "postgres.get")
@@ -78,6 +79,51 @@ func BuildResponseGlobals(exec *runtime.Execution) map[string]any {
 
 	return map[string]any{
 		"response": responseMethods,
+	}
+}
+
+// BuildMetricGlobals exposes declared metrics to DSL code as metric.<name>.<method>().
+//
+// Counter  → inc(), add(n)
+// Histogram → record(v)
+// Gauge    → set(v)
+//
+// Access pattern: metric.checkout_attempts.inc(1)
+func BuildMetricGlobals(exec *runtime.Execution) map[string]any {
+	handles := exec.Container.Metrics
+	if len(handles) == 0 {
+		return nil
+	}
+
+	instances := make(map[string]object.Object, len(handles))
+	for name, handle := range handles {
+		h := handle
+		e := exec
+		methods := make(map[string]object.Object)
+
+		switch h.Type() {
+		case runtime.MetricTypeCounter:
+			methods["inc"] = wrapGoFunc("metric."+name+".inc", func() error {
+				return h.Add(e, 1.0)
+			})
+			methods["add"] = wrapGoFunc("metric."+name+".add", func(delta float64) error {
+				return h.Add(e, delta)
+			})
+		case runtime.MetricTypeHistogram:
+			methods["record"] = wrapGoFunc("metric."+name+".record", func(value float64) error {
+				return h.Record(e, value)
+			})
+		case runtime.MetricTypeGauge:
+			methods["set"] = wrapGoFunc("metric."+name+".set", func(value float64) error {
+				return h.Set(e, value)
+			})
+		}
+
+		instances[name] = object.NewBuiltinsModule(name, methods)
+	}
+
+	return map[string]any{
+		"metric": object.NewBuiltinsModule("metric", instances),
 	}
 }
 
