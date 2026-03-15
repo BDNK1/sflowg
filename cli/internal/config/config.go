@@ -31,6 +31,7 @@ type ObservabilityConfig = runtime.ObservabilityConfig
 type LoggingConfig = runtime.LoggingConfig
 type LogSourcesConfig = runtime.LogSourcesConfig
 type MaskingConfig = runtime.MaskingConfig
+type TracingConfig = runtime.TracingConfig
 
 // PluginConfig represents a single plugin configuration
 type PluginConfig struct {

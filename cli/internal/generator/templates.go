@@ -46,8 +46,7 @@ func main() {
 
 	ctx := context.Background()
 
-	// Create logger first so container and plugins have it from the start
-	logger := runtime.NewObservabilityLogger(runtime.ObservabilityConfig{
+	observabilityCfg := runtime.ObservabilityConfig{
 		Logging: runtime.LoggingConfig{
 			Level:           "{{.Observability.Logging.Level}}",
 			Format:          "{{.Observability.Logging.Format}}",
@@ -83,7 +82,24 @@ func main() {
 				Placeholder: "{{.Observability.Logging.Masking.Placeholder}}",
 			},
 		},
-	})
+		Tracing: runtime.TracingConfig{
+			Enabled:    {{.Observability.Tracing.Enabled}},
+			Endpoint:   "{{.Observability.Tracing.Endpoint}}",
+			Insecure:   {{.Observability.Tracing.Insecure}},
+			Sampler:    "{{.Observability.Tracing.Sampler}}",
+			SampleRate: {{printf "%g" .Observability.Tracing.SampleRate}},
+{{- if .Observability.Tracing.Attributes}}
+			Attributes: map[string]string{
+{{- range $key, $value := .Observability.Tracing.Attributes}}
+				"{{$key}}": {{printf "%q" $value}},
+{{- end}}
+			},
+{{- end}}
+		},
+	}
+
+	// Create logger first so container and plugins have it from the start
+	logger := runtime.NewObservabilityLogger(observabilityCfg)
 
 	// Create container with configured logger so plugins have it from registration
 	container := runtime.NewContainer(runtime.NewLogger(logger))
@@ -199,7 +215,7 @@ func main() {
 
 	// Create app and start server (runtime handles everything)
 	// Runtime will: Initialize plugins → LoadFlows → Setup Gin → Handle signals → Graceful shutdown
-	app := runtime.NewApp(container, loader, evaluator, stepExecutor, newValueStore)
+	app := runtime.NewApp(container, loader, evaluator, stepExecutor, newValueStore, observabilityCfg)
 
 {{- if .GlobalProperties}}
 	// Set global properties from flow-config.yaml
