@@ -34,6 +34,18 @@ observability:
     attributes:
       service.name: ecommerce-api
       deployment.environment: local
+    user:
+      declarations:
+        payment_attempts:
+          type: counter
+          description: "Payment attempts by provider and outcome"
+          labels:
+            provider:
+              type: enum
+              values: [stripe]
+            outcome:
+              type: enum
+              values: [success, error, queued]
 
 properties:
   app_name: "Ecommerce API"
