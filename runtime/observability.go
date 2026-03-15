@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/trace"
+	"gopkg.in/yaml.v3"
 )
 
 const defaultLogPayloadLimit = 10 * 1024
@@ -18,6 +19,7 @@ const defaultLogPayloadLimit = 10 * 1024
 type ObservabilityConfig struct {
 	Logging LoggingConfig `yaml:"logging"`
 	Tracing TracingConfig `yaml:"tracing"`
+	Metrics MetricsConfig `yaml:"metrics"`
 }
 
 type LoggingConfig struct {
@@ -27,6 +29,52 @@ type LoggingConfig struct {
 	Attributes      map[string]any   `yaml:"attributes,omitempty"`
 	Sources         LogSourcesConfig `yaml:"sources,omitempty"`
 	Masking         MaskingConfig    `yaml:"masking,omitempty"`
+	Export          LogExportConfig  `yaml:"export,omitempty"`
+}
+
+type LogExportConfig struct {
+	Enabled    bool              `yaml:"enabled" default:"false"`
+	Mode       LogExportModes    `yaml:"mode,omitempty"`
+	Endpoint   string            `yaml:"endpoint,omitempty" validate:"omitempty,hostname_port"`
+	Insecure   bool              `yaml:"insecure" default:"false"`
+	Attributes map[string]string `yaml:"attributes,omitempty"`
+}
+
+type LogExportModes []string
+
+const (
+	logExportModeStdout = "stdout"
+	logExportModeOTLP   = "otlp"
+)
+
+func (m *LogExportModes) UnmarshalYAML(node *yaml.Node) error {
+	if node == nil {
+		*m = nil
+		return nil
+	}
+
+	switch node.Kind {
+	case yaml.ScalarNode:
+		var value string
+		if err := node.Decode(&value); err != nil {
+			return err
+		}
+		if strings.TrimSpace(value) == "" {
+			*m = nil
+			return nil
+		}
+		*m = LogExportModes{value}
+		return nil
+	case yaml.SequenceNode:
+		var values []string
+		if err := node.Decode(&values); err != nil {
+			return err
+		}
+		*m = LogExportModes(values)
+		return nil
+	default:
+		return fmt.Errorf("log export mode must be a string or list of strings")
+	}
 }
 
 type LogSourcesConfig struct {
@@ -45,8 +93,26 @@ type TracingConfig struct {
 	Endpoint   string            `yaml:"endpoint,omitempty" validate:"omitempty,hostname_port"`
 	Insecure   bool              `yaml:"insecure" default:"false"`
 	Sampler    string            `yaml:"sampler" default:"always_on" validate:"omitempty,oneof=always_on always_off trace_id_ratio parent_based"`
-	SampleRate float64           `yaml:"sample_rate" default:"1.0" validate:"gte=0,lte=1"`
+	SampleRate float64           `yaml:"sample_rate" validate:"gte=0,lte=1"`
 	Attributes map[string]string `yaml:"attributes,omitempty"`
+
+	sampleRateSet bool `yaml:"-"`
+}
+
+type MetricsConfig struct {
+	Enabled          bool              `yaml:"enabled" default:"false"`
+	Endpoint         string            `yaml:"endpoint,omitempty" validate:"omitempty,hostname_port"`
+	Insecure         bool              `yaml:"insecure" default:"false"`
+	ExportIntervalMS int               `yaml:"export_interval_ms" default:"10000" validate:"omitempty,gte=1000,lte=60000"`
+	Attributes       map[string]string `yaml:"attributes,omitempty"`
+	HistogramBuckets HistogramBuckets  `yaml:"histogram_buckets,omitempty"`
+}
+
+type HistogramBuckets struct {
+	HTTPRequestMS []float64 `yaml:"http_request_ms,omitempty"`
+	FlowMS        []float64 `yaml:"flow_ms,omitempty"`
+	StepMS        []float64 `yaml:"step_ms,omitempty"`
+	PluginMS      []float64 `yaml:"plugin_ms,omitempty"`
 }
 
 type observabilityContext interface {
@@ -54,7 +120,14 @@ type observabilityContext interface {
 }
 
 func NewObservabilityLogger(cfg ObservabilityConfig) *slog.Logger {
-	return NewObservabilityLoggerWithWriter(os.Stdout, cfg)
+	logger, _, err := InitObservabilityLoggerWithWriter(os.Stdout, cfg)
+	if err == nil {
+		return logger
+	}
+	fmt.Fprintf(os.Stderr, "sflowg: failed to initialize log export, falling back to stdout-only: %v\n", err)
+	fallback := cfg
+	fallback.Logging.Export = LogExportConfig{}
+	return NewObservabilityLoggerWithWriter(os.Stdout, fallback)
 }
 
 func NewObservabilityLoggerWithWriter(w io.Writer, cfg ObservabilityConfig) *slog.Logger {
@@ -70,6 +143,28 @@ func NewObservabilityLoggerWithWriter(w io.Writer, cfg ObservabilityConfig) *slo
 	return logger
 }
 
+func InitObservabilityLogger(cfg ObservabilityConfig) (*slog.Logger, func(context.Context) error, error) {
+	return InitObservabilityLoggerWithWriter(os.Stdout, cfg)
+}
+
+func InitObservabilityLoggerWithWriter(w io.Writer, cfg ObservabilityConfig) (*slog.Logger, func(context.Context) error, error) {
+	handler, shutdown, err := newObservabilityHandlerWithShutdown(w, cfg.Logging, "framework")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	logger := slog.New(handler)
+	if len(cfg.Logging.Attributes) > 0 {
+		attrs := make([]any, 0, len(cfg.Logging.Attributes)*2)
+		for key, value := range cfg.Logging.Attributes {
+			attrs = append(attrs, key, value)
+		}
+		logger = logger.With(attrs...)
+	}
+
+	return logger, shutdown, nil
+}
+
 func DefaultObservabilityConfig() ObservabilityConfig {
 	cfg := ObservabilityConfig{}
 	_ = ApplyObservabilityDefaults(&cfg)
@@ -77,7 +172,27 @@ func DefaultObservabilityConfig() ObservabilityConfig {
 }
 
 func ApplyObservabilityDefaults(cfg *ObservabilityConfig) error {
-	return ApplyDefaults(cfg)
+	if err := ApplyDefaults(cfg); err != nil {
+		return err
+	}
+	if !cfg.Tracing.sampleRateSet && cfg.Tracing.SampleRate == 0 {
+		cfg.Tracing.SampleRate = 1.0
+	}
+	cfg.Logging.Export.Mode = normalizeLogExportModes(cfg.Logging.Export.Mode)
+	return nil
+}
+
+func (c *TracingConfig) UnmarshalYAML(node *yaml.Node) error {
+	type rawTracingConfig TracingConfig
+
+	var raw rawTracingConfig
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+
+	*c = TracingConfig(raw)
+	c.sampleRateSet = yamlMappingHasKey(node, "sample_rate")
+	return nil
 }
 
 func ValidateObservabilityConfig(cfg ObservabilityConfig) error {
@@ -98,6 +213,94 @@ func ValidateObservabilityConfig(cfg ObservabilityConfig) error {
 		return fmt.Errorf("config validation failed:\n  - field 'SampleRate' is only used with trace_id_ratio or parent_based samplers")
 	}
 
+	metrics := cfg.Metrics
+	if metrics.Enabled && strings.TrimSpace(metrics.Endpoint) == "" {
+		return fmt.Errorf("config validation failed:\n  - field 'Endpoint' is required when metrics is enabled")
+	}
+	if err := validateIncreasingBuckets("HTTPRequestMS", metrics.HistogramBuckets.HTTPRequestMS); err != nil {
+		return err
+	}
+	if err := validateIncreasingBuckets("FlowMS", metrics.HistogramBuckets.FlowMS); err != nil {
+		return err
+	}
+	if err := validateIncreasingBuckets("StepMS", metrics.HistogramBuckets.StepMS); err != nil {
+		return err
+	}
+	if err := validateIncreasingBuckets("PluginMS", metrics.HistogramBuckets.PluginMS); err != nil {
+		return err
+	}
+
+	logExport := cfg.Logging.Export
+	modes := normalizeLogExportModes(logExport.Mode)
+	if err := validateLogExportModes(modes); err != nil {
+		return err
+	}
+	if slices.Contains(modes, logExportModeOTLP) {
+		if !logExport.Enabled {
+			return fmt.Errorf("config validation failed:\n  - field 'Enabled' must be true when logging.export.mode includes otlp")
+		}
+		if strings.TrimSpace(logExport.Endpoint) == "" {
+			return fmt.Errorf("config validation failed:\n  - field 'Endpoint' is required when logging.export.mode includes otlp")
+		}
+	}
+
+	return nil
+}
+
+func normalizeLogExportModes(modes LogExportModes) LogExportModes {
+	if len(modes) == 0 {
+		return LogExportModes{logExportModeStdout}
+	}
+
+	normalized := make(LogExportModes, 0, len(modes))
+	seen := make(map[string]struct{}, len(modes))
+	for _, mode := range modes {
+		value := strings.ToLower(strings.TrimSpace(mode))
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	if len(normalized) == 0 {
+		return LogExportModes{logExportModeStdout}
+	}
+	return normalized
+}
+
+func yamlMappingHasKey(node *yaml.Node, key string) bool {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return false
+	}
+
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return true
+		}
+	}
+	return false
+}
+
+func validateLogExportModes(modes LogExportModes) error {
+	for _, mode := range modes {
+		switch mode {
+		case logExportModeStdout, logExportModeOTLP:
+		default:
+			return fmt.Errorf("config validation failed:\n  - field 'Mode' must contain only stdout or otlp")
+		}
+	}
+	return nil
+}
+
+func validateIncreasingBuckets(field string, values []float64) error {
+	for i := 1; i < len(values); i++ {
+		if values[i] <= values[i-1] {
+			return fmt.Errorf("config validation failed:\n  - field '%s' must be strictly increasing", field)
+		}
+	}
 	return nil
 }
 
@@ -129,9 +332,25 @@ type observabilityHandler struct {
 }
 
 func newObservabilityHandler(w io.Writer, cfg LoggingConfig, source string) slog.Handler {
+	handler, _, err := newObservabilityHandlerWithShutdown(w, cfg, source)
+	if err == nil {
+		return handler
+	}
+
 	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
 	base := slog.NewJSONHandler(w, opts)
+	return newObservabilityHandlerWithBase(base, cfg, source)
+}
 
+func newObservabilityHandlerWithShutdown(w io.Writer, cfg LoggingConfig, source string) (slog.Handler, func(context.Context) error, error) {
+	base, shutdown, err := newObservabilityBaseHandler(w, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return newObservabilityHandlerWithBase(base, cfg, source), shutdown, nil
+}
+
+func newObservabilityHandlerWithBase(base slog.Handler, cfg LoggingConfig, source string) slog.Handler {
 	maxPayloadBytes := cfg.MaxPayloadBytes
 	if maxPayloadBytes == 0 {
 		maxPayloadBytes = defaultLogPayloadLimit
@@ -348,10 +567,12 @@ func (h *observabilityHandler) sanitizeAnyValue(key string, value any) (any, boo
 }
 
 func (h *observabilityHandler) shouldMask(key string) bool {
-	if len(h.maskFields) == 0 {
-		return false
+	for _, field := range h.maskFields {
+		if strings.EqualFold(field, key) {
+			return true
+		}
 	}
-	return slices.Contains(h.maskFields, strings.ToLower(key))
+	return false
 }
 
 func normalizeMaskFields(fields []string) []string {
@@ -375,7 +596,7 @@ func truncateString(value string, maxBytes int) string {
 		return suffix
 	}
 
-	for limit > 0 && !utf8.ValidString(value[:limit]) {
+	for limit > 0 && !utf8.RuneStart(value[limit]) {
 		limit--
 	}
 	if limit <= 0 {

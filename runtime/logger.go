@@ -57,15 +57,16 @@ func (l Logger) Slog() *slog.Logger {
 	return l.slog()
 }
 
-// ForPlugin returns a logger with source=plugin baked into the handler and
-// plugin=name added as a bound attr. Uses withSource to avoid duplicate source keys.
+// ForPlugin returns a logger with source=plugin baked into the handler.
+// Plugin task logs get their plugin name from the execution scope, while
+// plugin lifecycle logs can add the plugin attr explicitly at the call site.
 // Preserves any context already bound to the logger.
 func (l Logger) ForPlugin(name string) Logger {
 	if h, ok := l.slog().Handler().(*observabilityHandler); ok {
-		return Logger{base: slog.New(h.withSource("plugin")).With("plugin", name), ctx: l.ctx}
+		return Logger{base: slog.New(h.withSource("plugin")), ctx: l.ctx}
 	}
 	// Fallback for non-observability handlers (e.g. tests using slog.Default).
-	return Logger{base: l.slog().With("source", "plugin", "plugin", name), ctx: l.ctx}
+	return Logger{base: l.slog().With("source", "plugin"), ctx: l.ctx}
 }
 
 // ForUser returns a logger with source=user baked into the handler.

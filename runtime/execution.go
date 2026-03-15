@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var _ context.Context = &Execution{}
@@ -48,6 +49,8 @@ type Execution struct {
 	activeStepID       string
 	activePlugin       string
 	ctx                context.Context // real context carrying deadline/cancellation
+	cachedLogger       *Logger         // cached to avoid re-creating handler chain per call
+	cachedPlugin       string          // activePlugin when logger was cached
 }
 
 // context.Context implementation — delegates to the embedded ctx so that real
@@ -95,15 +98,7 @@ func (e *Execution) WithContext(ctx context.Context) *Execution {
 // deadlines/cancellation to propagate to plugins that use exec as context.Context.
 // Execution is single-threaded, so temporary ctx mutation is safe here.
 func (e *Execution) WithScopedContext(ctx context.Context, fn func()) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	prev := e.ctx
-	e.ctx = ctx
-	defer func() {
-		e.ctx = prev
-	}()
-	fn()
+	e.withScope(executionScope{ctx: ctx, setCtx: true}, fn)
 }
 
 func (e *Execution) AddValue(k string, v any) {
@@ -111,6 +106,9 @@ func (e *Execution) AddValue(k string, v any) {
 }
 
 func (e *Execution) Logger() Logger {
+	if e.cachedLogger != nil && e.cachedPlugin == e.activePlugin {
+		return *e.cachedLogger
+	}
 	if e.Container == nil {
 		return NewLogger(nil).WithContext(e)
 	}
@@ -118,25 +116,73 @@ func (e *Execution) Logger() Logger {
 	if e.activePlugin != "" {
 		base = base.ForPlugin(e.activePlugin)
 	}
-	return base.WithContext(e)
+	l := base.WithContext(e)
+	e.cachedLogger = &l
+	e.cachedPlugin = e.activePlugin
+	return l
+}
+
+func (e *Execution) Tracer() trace.Tracer {
+	if e.Container == nil {
+		return newNoopTracer()
+	}
+	return e.Container.Tracer()
+}
+
+func (e *Execution) Metrics() *Metrics {
+	if e.Container == nil {
+		return NewNoopMetrics()
+	}
+	return e.Container.Metrics()
+}
+
+type executionScope struct {
+	ctx        context.Context
+	setCtx     bool
+	stepID     string
+	setStepID  bool
+	pluginName string
+	setPlugin  bool
+}
+
+func (e *Execution) withScope(scope executionScope, fn func()) {
+	prevCtx := e.ctx
+	prevStepID := e.activeStepID
+	prevPlugin := e.activePlugin
+	prevLogger := e.cachedLogger
+	prevCachedPlugin := e.cachedPlugin
+
+	if scope.setCtx {
+		if scope.ctx == nil {
+			scope.ctx = context.Background()
+		}
+		e.ctx = scope.ctx
+	}
+	if scope.setStepID {
+		e.activeStepID = scope.stepID
+	}
+	if scope.setPlugin {
+		e.activePlugin = scope.pluginName
+		e.cachedLogger = nil
+	}
+
+	defer func() {
+		e.ctx = prevCtx
+		e.activeStepID = prevStepID
+		e.activePlugin = prevPlugin
+		e.cachedLogger = prevLogger
+		e.cachedPlugin = prevCachedPlugin
+	}()
+
+	fn()
 }
 
 func (e *Execution) WithActiveStep(stepID string, fn func()) {
-	prev := e.activeStepID
-	e.activeStepID = stepID
-	defer func() {
-		e.activeStepID = prev
-	}()
-	fn()
+	e.withScope(executionScope{stepID: stepID, setStepID: true}, fn)
 }
 
 func (e *Execution) WithActivePlugin(pluginName string, fn func()) {
-	prev := e.activePlugin
-	e.activePlugin = pluginName
-	defer func() {
-		e.activePlugin = prev
-	}()
-	fn()
+	e.withScope(executionScope{pluginName: pluginName, setPlugin: true}, fn)
 }
 
 // Values returns the full context map for expression evaluation.

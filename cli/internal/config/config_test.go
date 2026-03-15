@@ -26,6 +26,9 @@ func TestFlowConfigApplyDefaults_UsesRuntimeObservabilityDefaults(t *testing.T) 
 	if cfg.Observability.Logging.Masking.Placeholder != "***" {
 		t.Fatalf("expected default masking placeholder, got %q", cfg.Observability.Logging.Masking.Placeholder)
 	}
+	if cfg.Runtime.Engine != "dsl" {
+		t.Fatalf("expected default runtime engine dsl, got %q", cfg.Runtime.Engine)
+	}
 }
 
 func TestFlowConfigValidate_UsesRuntimeObservabilityValidation(t *testing.T) {
@@ -46,5 +49,20 @@ func TestFlowConfigValidate_UsesRuntimeObservabilityValidation(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid observability config") {
 		t.Fatalf("expected observability validation error, got %v", err)
+	}
+}
+
+func TestFlowConfigValidate_RejectsRemovedYAMLEngine(t *testing.T) {
+	cfg := FlowConfig{
+		Plugins: []PluginConfig{{Source: "core://http"}},
+		Runtime: RuntimeConfig{Engine: "yaml"},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected runtime.engine validation error")
+	}
+	if !strings.Contains(err.Error(), "runtime.engine must be 'dsl'") {
+		t.Fatalf("expected dsl-only engine validation, got %v", err)
 	}
 }

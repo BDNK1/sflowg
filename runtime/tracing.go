@@ -15,10 +15,10 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 )
 
-const tracerName = "github.com/BDNK1/sflowg/runtime"
+const instrumentationName = "github.com/BDNK1/sflowg/runtime"
 
 func newNoopTracer() trace.Tracer {
-	return noop.NewTracerProvider().Tracer(tracerName)
+	return noop.NewTracerProvider().Tracer(instrumentationName)
 }
 
 // InitTracing creates the OTel TracerProvider from config.
@@ -45,7 +45,7 @@ func InitTracing(cfg TracingConfig) (trace.Tracer, func(context.Context) error, 
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithSampler(tracingSampler(cfg)),
 	}
-	if res, err := tracingResource(cfg.Attributes); err != nil {
+	if res, err := otelResource(cfg.Attributes); err != nil {
 		return nil, nil, fmt.Errorf("build tracing resource: %w", err)
 	} else if res != nil {
 		options = append(options, sdktrace.WithResource(res))
@@ -55,7 +55,7 @@ func InitTracing(cfg TracingConfig) (trace.Tracer, func(context.Context) error, 
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	otel.SetTracerProvider(provider)
 
-	return provider.Tracer(tracerName), provider.Shutdown, nil
+	return provider.Tracer(instrumentationName), provider.Shutdown, nil
 }
 
 func tracingSampler(cfg TracingConfig) sdktrace.Sampler {
@@ -73,7 +73,7 @@ func tracingSampler(cfg TracingConfig) sdktrace.Sampler {
 	}
 }
 
-func tracingAttributes(values map[string]string) []attribute.KeyValue {
+func otelAttributes(values map[string]string) []attribute.KeyValue {
 	if len(values) == 0 {
 		return nil
 	}
@@ -91,8 +91,8 @@ func tracingAttributes(values map[string]string) []attribute.KeyValue {
 	return attrs
 }
 
-func tracingResource(values map[string]string) (*resource.Resource, error) {
-	attrs := tracingAttributes(values)
+func otelResource(values map[string]string) (*resource.Resource, error) {
+	attrs := otelAttributes(values)
 	if len(attrs) == 0 {
 		return nil, nil
 	}
