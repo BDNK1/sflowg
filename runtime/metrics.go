@@ -44,6 +44,8 @@ type Metrics struct {
 	pluginDurationMS otelmetric.Float64Histogram
 	httpRequests     otelmetric.Int64Counter
 	httpDurationMS   otelmetric.Float64Histogram
+
+	userMetricsState
 }
 
 func InitMetrics(cfg MetricsConfig) (*Metrics, func(context.Context) error, error) {
@@ -76,6 +78,12 @@ func InitMetrics(cfg MetricsConfig) (*Metrics, func(context.Context) error, erro
 		return nil, nil, err
 	}
 
+	// Initialize predeclared user metrics if configured.
+	if err := metrics.InitUserMetrics(cfg.User.Declarations); err != nil {
+		_ = provider.Shutdown(context.Background())
+		return nil, nil, fmt.Errorf("initialize user metrics: %w", err)
+	}
+
 	otel.SetMeterProvider(provider)
 	return metrics, provider.Shutdown, nil
 }
@@ -100,6 +108,12 @@ func newMeterProvider(cfg MetricsConfig, reader sdkmetric.Reader) (*sdkmetric.Me
 		newHistogramView("sflowg.flow.duration_ms", resolveHistogramBuckets(cfg.HistogramBuckets.FlowMS, defaultFlowBuckets)),
 		newHistogramView("sflowg.step.duration_ms", resolveHistogramBuckets(cfg.HistogramBuckets.StepMS, defaultStepBuckets)),
 		newHistogramView("sflowg.plugin.duration_ms", resolveHistogramBuckets(cfg.HistogramBuckets.PluginMS, defaultPluginBuckets)),
+	}
+	// Register custom bucket views for predeclared user histograms.
+	for name, decl := range cfg.User.Declarations {
+		if decl.Type == "histogram" && len(decl.Buckets) > 0 {
+			views = append(views, newHistogramView(userMetricPrefix+name, decl.Buckets))
+		}
 	}
 	options = append(options, sdkmetric.WithView(views...))
 
@@ -187,6 +201,9 @@ func newMetrics(provider otelmetric.MeterProvider) (*Metrics, error) {
 		pluginDurationMS: pluginDurationMS,
 		httpRequests:     httpRequests,
 		httpDurationMS:   httpDurationMS,
+		userMetricsState: userMetricsState{
+			meter: meter,
+		},
 	}, nil
 }
 

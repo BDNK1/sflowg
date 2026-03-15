@@ -210,8 +210,10 @@ attemptLoop:
 
 		var err error
 		execution.WithScopedContext(stepCtx, func() {
-			execution.WithActiveStep(step.ID, func() {
-				_, err = e.stepExecutor.ExecuteStep(stepCtx, execution, step)
+			execution.WithActivePath(path, func() {
+				execution.WithActiveStep(step.ID, func() {
+					_, err = e.stepExecutor.ExecuteStep(stepCtx, execution, step)
+				})
 			})
 		})
 		if err == nil {

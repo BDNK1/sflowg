@@ -53,10 +53,13 @@ func containsFunc(m map[string]any) bool {
 func mapToModule(name string, m map[string]any) *object.Module {
 	contents := make(map[string]object.Object, len(m))
 	for k, v := range m {
+		qualifiedName := fmt.Sprintf("%s.%s", name, k)
 		if v == nil {
 			contents[k] = object.Nil
 		} else if reflect.TypeOf(v).Kind() == reflect.Func {
-			contents[k] = wrapGoFunc(fmt.Sprintf("%s.%s", name, k), v)
+			contents[k] = wrapGoFunc(qualifiedName, v)
+		} else if nm, ok := v.(map[string]any); ok && containsFunc(nm) {
+			contents[k] = mapToModule(qualifiedName, nm)
 		} else {
 			contents[k] = anyToObject(v)
 		}

@@ -102,6 +102,32 @@ observability:
       flow_ms: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
       step_ms: [5, 10, 25, 50, 100, 250, 500, 1000, 2500]
       plugin_ms: [5, 10, 25, 50, 100, 250, 500, 1000, 2500]
+    user:
+      declarations:
+        payment_attempts:
+          type: counter
+          description: "Number of payment attempts"
+          labels:
+            provider:
+              type: enum
+              values: [stripe, paypal, adyen]
+        active_checkouts:
+          type: updowncounter
+          description: "Currently active checkout sessions"
+        payment_duration_ms:
+          type: histogram
+          description: "Payment provider latency in milliseconds"
+          buckets: [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000]
+          labels:
+            provider:
+              type: enum
+              values: [stripe, paypal, adyen]
+            currency:
+              type: enum
+              values: [USD, EUR, GBP]
+        cart_total:
+          type: gauge
+          description: "Current cart total value"
 ```
 
 **Logging Fields:**
@@ -138,6 +164,11 @@ observability:
 - `histogram_buckets.flow_ms` - Optional custom buckets for `sflowg.flow.duration_ms`
 - `histogram_buckets.step_ms` - Optional custom buckets for `sflowg.step.duration_ms`
 - `histogram_buckets.plugin_ms` - Optional custom buckets for `sflowg.plugin.duration_ms`
+- `user.declarations.<name>.type` - Instrument type: `counter`, `updowncounter`, `histogram`, or `gauge`
+- `user.declarations.<name>.description` - Human-readable description of the metric
+- `user.declarations.<name>.buckets` - Custom histogram buckets (only for `histogram` type)
+- `user.declarations.<name>.labels.<label>.type` - Label type; currently only `enum` is supported
+- `user.declarations.<name>.labels.<label>.values` - Allowed values for an `enum` label
 
 **Notes:**
 - Masking is opt-in. There is no default masking list.
@@ -153,6 +184,10 @@ observability:
 - When metrics are enabled, the runtime emits OTLP metrics for flows, steps, retries, plugin calls, and HTTP requests.
 - Metric attributes are runtime-owned and bounded. Raw `execution_id`, raw request paths, and arbitrary error text are not exported as metric labels.
 - `sample_rate` only matters for `trace_id_ratio` and `parent_based`.
+- User metric declarations are optional. The dynamic `metric.counter(...)` API works without declarations, but predeclared handles provide compile-time validation and label enforcement.
+- All user metric names are prefixed with `sflowg.user.` in OTel output.
+- Observable (callback-based) metric primitives are out of scope for user-defined metrics.
+- Invalid metric calls at runtime are dropped and logged; they never fail the step.
 
 ### Global Properties
 
@@ -176,6 +211,30 @@ properties:
 - Support environment variable substitution: `${VAR:default}`
 - Flow-level properties override global properties
 - Accessible in flows as `properties.{name}`
+
+#### Metric Context Properties
+
+Use `properties.observability.metrics.context` at the flow level to attach bounded context attributes to all user metrics emitted by the flow. These are auto-attached alongside the runtime attributes (`flow.id`, `step.id`, `path`).
+
+```yaml
+# flows/checkout_flow.yaml
+properties:
+  observability:
+    metrics:
+      context:
+        region: us-east-1
+        tier: premium
+
+# flows/inventory_flow.yaml
+properties:
+  observability:
+    metrics:
+      context:
+        region: eu-west-1
+        tier: standard
+```
+
+Context values must be string literals. Every user metric emitted within the flow will carry these attributes. This is useful for adding bounded dimensions (region, tier, environment) without repeating labels in each `metric.*` call.
 
 ### Plugins
 
@@ -290,6 +349,23 @@ observability:
       flow_ms: [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
       step_ms: [5, 10, 25, 50, 100, 250, 500, 1000, 2500]
       plugin_ms: [5, 10, 25, 50, 100, 250, 500, 1000, 2500]
+    user:
+      declarations:
+        payment_attempts:
+          type: counter
+          description: "Number of payment attempts"
+          labels:
+            provider:
+              type: enum
+              values: [stripe, paypal]
+        payment_duration_ms:
+          type: histogram
+          description: "Payment provider latency"
+          buckets: [10, 50, 100, 250, 500, 1000, 5000]
+          labels:
+            provider:
+              type: enum
+              values: [stripe, paypal]
 
 properties:
   # Service URLs (environment-specific)
