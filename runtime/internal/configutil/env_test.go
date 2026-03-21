@@ -1,15 +1,13 @@
-package runtime
+package configutil
 
-import (
-	"testing"
-)
+import "testing"
 
 func TestResolvePropertyMap_PassthroughPlainValues(t *testing.T) {
 	input := map[string]any{
 		"host": "localhost",
 		"port": "8080",
 	}
-	result, err := resolvePropertyMap(input)
+	result, err := ResolvePropertyMap(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -26,7 +24,7 @@ func TestResolvePropertyMap_ResolvesEnvVar(t *testing.T) {
 	input := map[string]any{
 		"key": "${TEST_RESOLVE_VAR}",
 	}
-	result, err := resolvePropertyMap(input)
+	result, err := ResolvePropertyMap(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,7 +37,7 @@ func TestResolvePropertyMap_DefaultValue(t *testing.T) {
 	input := map[string]any{
 		"key": "${UNSET_VAR_WITH_DEFAULT:fallback}",
 	}
-	result, err := resolvePropertyMap(input)
+	result, err := ResolvePropertyMap(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -52,7 +50,7 @@ func TestResolvePropertyMap_ErrorOnMissingRequired(t *testing.T) {
 	input := map[string]any{
 		"key": "${MISSING_REQUIRED_VAR}",
 	}
-	_, err := resolvePropertyMap(input)
+	_, err := ResolvePropertyMap(input)
 	if err == nil {
 		t.Fatal("expected error for missing required env var")
 	}
@@ -63,7 +61,7 @@ func TestResolvePropertyMap_NonStringPassthrough(t *testing.T) {
 		"count":   42,
 		"enabled": true,
 	}
-	result, err := resolvePropertyMap(input)
+	result, err := ResolvePropertyMap(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -76,7 +74,7 @@ func TestResolvePropertyMap_NonStringPassthrough(t *testing.T) {
 }
 
 func TestResolvePropertyMap_EmptyMap(t *testing.T) {
-	result, err := resolvePropertyMap(map[string]any{})
+	result, err := ResolvePropertyMap(map[string]any{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BDNK1/sflowg/runtime/internal/configutil"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -433,7 +434,7 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 
 		// Step 1: Convert map → struct
 		inputPtr := reflect.New(w.inputType)
-		if err := mapToStruct(args, inputPtr.Interface()); err != nil {
+		if err := configutil.MapToStruct(args, inputPtr.Interface()); err != nil {
 			log.Error("Task input conversion failed",
 				"task", w.method.Name,
 				"args", args,
@@ -442,7 +443,7 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 		}
 
 		// Step 2: Validate input struct
-		if err := validateConfig(inputPtr.Interface()); err != nil {
+		if err := configutil.ValidateStruct(inputPtr.Interface()); err != nil {
 			log.Error("Task input validation failed",
 				"task", w.method.Name,
 				"args", args,
@@ -471,7 +472,7 @@ func (w *typedTaskWrapper) Execute(exec *Execution, args map[string]any) (map[st
 		}
 
 		// Step 4: Convert struct → map
-		resultMap, convertErr := structToMap(output)
+		resultMap, convertErr := configutil.StructToMap(output)
 		if convertErr != nil {
 			log.Error("Task output conversion failed",
 				"task", w.method.Name,

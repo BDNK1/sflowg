@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BDNK1/sflowg/runtime/internal/configutil"
 	"github.com/gin-gonic/gin"
 )
 
@@ -41,7 +42,7 @@ func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluat
 // SetGlobalProperties sets global properties that will be merged with flow properties.
 // Flow properties override global properties.
 func (a *App) SetGlobalProperties(props map[string]any) error {
-	resolved, err := resolvePropertyMap(props)
+	resolved, err := configutil.ResolvePropertyMap(props)
 	if err != nil {
 		return fmt.Errorf("invalid global properties: %w", err)
 	}
@@ -149,7 +150,7 @@ func (a *App) loadFlows(flowsDir string) error {
 		if err != nil {
 			return fmt.Errorf("error loading flow from %s: %w", file, err)
 		}
-		resolvedProps, err := resolvePropertyMap(flow.Properties)
+		resolvedProps, err := configutil.ResolvePropertyMap(flow.Properties)
 		if err != nil {
 			return fmt.Errorf("error resolving properties for flow %s: %w", flow.ID, err)
 		}

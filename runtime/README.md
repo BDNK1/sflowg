@@ -28,15 +28,14 @@ HTTP Request → HttpHandler → NewExecution → Executor.ExecuteSteps → toRe
 runtime/
 ├── app.go           # Application lifecycle (start, shutdown)
 ├── container.go     # Plugin registry, task discovery via reflection
+├── config.go        # Public config bootstrap facade
 ├── executor.go      # Step execution (assign, switch, tasks)
 ├── execution.go     # Request context, values storage
 ├── http_handler.go  # Gin routing, request/response handling
 ├── components.go    # Flow YAML struct definitions
-├── config.go        # Plugin config: defaults, validation
-├── expression.go    # expr-lang wrapper
-├── converter.go     # Map ↔ struct conversion
-├── format.go        # Key normalization (dots/hyphens → underscores)
-└── plugin/          # Public SDK types for plugin developers
+├── observability.go # Logging, tracing, metrics setup
+├── plugin/          # Public SDK types for plugin developers
+└── internal/        # Internal helpers (config, conversion, env resolution)
 ```
 
 ## Key Logic
@@ -49,7 +48,7 @@ func (p *Plugin) TaskName(exec *Execution, args map[string]any) (map[string]any,
 ```
 Task name: `pluginname.methodname` (lowercase)
 
-Also supports typed signatures with struct input/output - automatically converts via `mapToStruct`/`structToMap`.
+Also supports typed signatures with struct input/output via internal config/conversion helpers.
 
 ### Step Execution (`executor.go`)
 

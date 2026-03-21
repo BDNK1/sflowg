@@ -1,12 +1,10 @@
-package runtime
+package configutil
 
 import (
 	"strings"
 	"testing"
 	"time"
 )
-
-// Test configs for various scenarios
 
 type BasicConfig struct {
 	Name    string `default:"default-name"`
@@ -55,8 +53,6 @@ type URLValidatorConfig struct {
 type DSNValidatorConfig struct {
 	DSN string `validate:"dsn"`
 }
-
-// Tests for ApplyDefaults
 
 func TestApplyDefaults_BasicTypes(t *testing.T) {
 	config := BasicConfig{}
@@ -108,14 +104,12 @@ func TestApplyDefaults_NonZeroValuesUnchanged(t *testing.T) {
 		t.Fatalf("ApplyDefaults failed: %v", err)
 	}
 
-	// Non-zero values should remain unchanged
 	if config.Name != "custom-name" {
 		t.Errorf("Expected Name='custom-name', got '%s'", config.Name)
 	}
 	if config.Port != 9000 {
 		t.Errorf("Expected Port=9000, got %d", config.Port)
 	}
-	// Note: false is zero value for bool, so default would apply
 }
 
 func TestApplyDefaults_NilConfig(t *testing.T) {
@@ -125,19 +119,15 @@ func TestApplyDefaults_NilConfig(t *testing.T) {
 	}
 }
 
-// Tests for validateConfig
-
 func TestValidateConfig_RequiredField(t *testing.T) {
-	// Valid config
 	config := RequiredFieldConfig{Required: "value"}
-	err := validateConfig(config)
+	err := ValidateStruct(config)
 	if err != nil {
-		t.Errorf("validateConfig failed for valid config: %v", err)
+		t.Errorf("ValidateStruct failed for valid config: %v", err)
 	}
 
-	// Invalid config (missing required field)
 	invalidConfig := RequiredFieldConfig{}
-	err = validateConfig(invalidConfig)
+	err = ValidateStruct(invalidConfig)
 	if err == nil {
 		t.Error("Expected validation error for missing required field, got nil")
 	}
@@ -161,10 +151,8 @@ func TestValidateConfig_NumericRange(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := PortValidationConfig{
-				Port: tt.port,
-			}
-			err := validateConfig(config)
+			config := PortValidationConfig{Port: tt.port}
+			err := ValidateStruct(config)
 			if tt.shouldErr && err == nil {
 				t.Errorf("Expected validation error for port %d, got nil", tt.port)
 			}
@@ -190,10 +178,8 @@ func TestValidateConfig_EmailFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := EmailValidationConfig{
-				Email: tt.email,
-			}
-			err := validateConfig(config)
+			config := EmailValidationConfig{Email: tt.email}
+			err := ValidateStruct(config)
 			if tt.shouldErr && err == nil {
 				t.Errorf("Expected validation error for email '%s', got nil", tt.email)
 			}
@@ -207,33 +193,26 @@ func TestValidateConfig_EmailFormat(t *testing.T) {
 func TestValidateConfig_OneOf(t *testing.T) {
 	validLevels := []string{"debug", "info", "warn", "error"}
 	for _, level := range validLevels {
-		config := LevelValidationConfig{
-			Level: level,
-		}
-		err := validateConfig(config)
+		config := LevelValidationConfig{Level: level}
+		err := ValidateStruct(config)
 		if err != nil {
 			t.Errorf("Expected no error for level '%s', got: %v", level, err)
 		}
 	}
 
-	// Invalid level
-	config := LevelValidationConfig{
-		Level: "invalid",
-	}
-	err := validateConfig(config)
+	config := LevelValidationConfig{Level: "invalid"}
+	err := ValidateStruct(config)
 	if err == nil {
 		t.Error("Expected validation error for invalid level, got nil")
 	}
 }
 
 func TestValidateConfig_NilConfig(t *testing.T) {
-	err := validateConfig(nil)
+	err := ValidateStruct(nil)
 	if err == nil {
 		t.Error("Expected error for nil config, got nil")
 	}
 }
-
-// Tests for custom validators
 
 func TestCustomValidator_HostnamePort(t *testing.T) {
 	tests := []struct {
@@ -252,10 +231,8 @@ func TestCustomValidator_HostnamePort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := HostnamePortValidatorConfig{
-				HostPort: tt.hostPort,
-			}
-			err := validateConfig(config)
+			config := HostnamePortValidatorConfig{HostPort: tt.hostPort}
+			err := ValidateStruct(config)
 			if tt.shouldErr && err == nil {
 				t.Errorf("Expected validation error for '%s', got nil", tt.hostPort)
 			}
@@ -283,10 +260,8 @@ func TestCustomValidator_URLFormat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := URLValidatorConfig{
-				URL: tt.url,
-			}
-			err := validateConfig(config)
+			config := URLValidatorConfig{URL: tt.url}
+			err := ValidateStruct(config)
 			if tt.shouldErr && err == nil {
 				t.Errorf("Expected validation error for '%s', got nil", tt.url)
 			}
@@ -313,10 +288,8 @@ func TestCustomValidator_DSN(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config := DSNValidatorConfig{
-				DSN: tt.dsn,
-			}
-			err := validateConfig(config)
+			config := DSNValidatorConfig{DSN: tt.dsn}
+			err := ValidateStruct(config)
 			if tt.shouldErr && err == nil {
 				t.Errorf("Expected validation error for '%s', got nil", tt.dsn)
 			}
@@ -327,17 +300,14 @@ func TestCustomValidator_DSN(t *testing.T) {
 	}
 }
 
-// Tests for prepareConfig
-
-func TestPrepareConfig_Success(t *testing.T) {
+func TestPrepare_Success(t *testing.T) {
 	config := ComplexConfig{}
 
-	err := prepareConfig(&config)
+	err := Prepare(&config, nil)
 	if err != nil {
-		t.Fatalf("prepareConfig failed: %v", err)
+		t.Fatalf("Prepare failed: %v", err)
 	}
 
-	// Check defaults were applied
 	if config.Addr != "localhost:6379" {
 		t.Errorf("Expected Addr='localhost:6379', got '%s'", config.Addr)
 	}
@@ -350,56 +320,46 @@ func TestPrepareConfig_Success(t *testing.T) {
 	if config.Timeout != 30*time.Second {
 		t.Errorf("Expected Timeout=30s, got %v", config.Timeout)
 	}
-
-	// All fields should pass validation
 }
 
-func TestPrepareConfig_ValidationFailsAfterDefaults(t *testing.T) {
+func TestPrepare_ValidationFailsAfterDefaults(t *testing.T) {
 	config := ComplexConfig{
-		Addr:     "invalid-format", // Will fail hostname_port validation
-		PoolSize: 5000,             // Will fail gte/lte validation
+		Addr:     "invalid-format",
+		PoolSize: 5000,
 	}
 
-	err := prepareConfig(&config)
+	err := Prepare(&config, nil)
 	if err == nil {
-		t.Error("Expected prepareConfig to fail validation, got nil")
+		t.Error("Expected Prepare to fail validation, got nil")
 	}
 
-	// Should mention validation failure
 	if !strings.Contains(err.Error(), "validation") {
 		t.Errorf("Expected error to mention 'validation', got: %v", err)
 	}
 }
 
-func TestPrepareConfig_NilConfig(t *testing.T) {
-	err := prepareConfig(nil)
+func TestPrepare_NilConfig(t *testing.T) {
+	err := Prepare(nil, nil)
 	if err == nil {
 		t.Error("Expected error for nil config, got nil")
 	}
 }
 
-// Tests for complex scenarios
-
 func TestComplexConfig_FullFlow(t *testing.T) {
-	// Simulate CLI-generated code flow
 	config := ComplexConfig{}
 
-	// Step 1: Prepare (defaults + validation)
-	if err := prepareConfig(&config); err != nil {
-		t.Fatalf("prepareConfig failed: %v", err)
+	if err := Prepare(&config, nil); err != nil {
+		t.Fatalf("Prepare failed: %v", err)
 	}
 
-	// Step 2: Apply overrides (simulating environment variables or YAML literals)
 	config.Addr = "redis.prod.com:6379"
 	config.Password = "secret123"
 	config.PoolSize = 20
 
-	// Step 3: Validate again after overrides
-	if err := validateConfig(config); err != nil {
-		t.Fatalf("validateConfig failed after overrides: %v", err)
+	if err := ValidateStruct(config); err != nil {
+		t.Fatalf("ValidateStruct failed after overrides: %v", err)
 	}
 
-	// Verify final values
 	if config.Addr != "redis.prod.com:6379" {
 		t.Errorf("Expected overridden Addr, got '%s'", config.Addr)
 	}
@@ -409,13 +369,10 @@ func TestComplexConfig_FullFlow(t *testing.T) {
 	if config.PoolSize != 20 {
 		t.Errorf("Expected overridden PoolSize, got %d", config.PoolSize)
 	}
-	// DB should still have default
 	if config.DB != 0 {
 		t.Errorf("Expected default DB=0, got %d", config.DB)
 	}
 }
-
-// Benchmark tests
 
 func BenchmarkApplyDefaults(b *testing.B) {
 	for i := 0; i < b.N; i++ {
@@ -434,13 +391,13 @@ func BenchmarkValidateConfig(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		validateConfig(config)
+		ValidateStruct(config)
 	}
 }
 
 func BenchmarkPrepareConfig(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		config := ComplexConfig{}
-		prepareConfig(&config)
+		Prepare(&config, nil)
 	}
 }

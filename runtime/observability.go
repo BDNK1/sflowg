@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/BDNK1/sflowg/runtime/internal/configutil"
 	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/yaml.v3"
 )
@@ -196,7 +197,7 @@ func DefaultObservabilityConfig() ObservabilityConfig {
 }
 
 func ApplyObservabilityDefaults(cfg *ObservabilityConfig) error {
-	if err := ApplyDefaults(cfg); err != nil {
+	if err := configutil.ApplyDefaults(cfg); err != nil {
 		return err
 	}
 	if !cfg.Tracing.sampleRateSet && cfg.Tracing.SampleRate == 0 {
@@ -220,7 +221,7 @@ func (c *TracingConfig) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func ValidateObservabilityConfig(cfg ObservabilityConfig) error {
-	if err := validateConfig(cfg); err != nil {
+	if err := configutil.ValidateStruct(cfg); err != nil {
 		return err
 	}
 
