@@ -436,5 +436,4 @@ $ export TAXRATE=0.20  # Would override if using ${TAXRATE:...} syntax
 
 - [CLI.md](./CLI.md) - Build commands and CLI usage
 - [FLOW_SYNTAX.md](./FLOW_SYNTAX.md) - Flow YAML syntax reference
-- [TRACING.md](./TRACING.md) - Tracing configuration and architecture
 - [PLUGIN_DEVELOPMENT.md](./PLUGIN_DEVELOPMENT.md) - Creating custom plugins
