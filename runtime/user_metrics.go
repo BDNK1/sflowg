@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
@@ -10,14 +9,14 @@ import (
 )
 
 const (
-	userMetricPrefix     = "sflowg.user."
-	maxLabelKeyLen       = 64
-	maxLabelValueLen     = 256
-	maxLabelsPerMetric   = 10
+	userMetricPrefix   = "sflowg.user."
+	maxLabelKeyLen     = 64
+	maxLabelValueLen   = 256
+	maxLabelsPerMetric = 10
 )
 
 // userMetricsState holds the user metrics registries and config.
-// Embedded in Metrics to extend it without modifying the platform metric struct fields.
+// Stored as the named field Metrics.user to make the boundary with platform metrics explicit.
 type userMetricsState struct {
 	meter otelmetric.Meter // stored from init for lazy dynamic creation
 
@@ -41,28 +40,28 @@ type userMetricsState struct {
 
 // UserDeclarations returns the predeclared user metric declarations.
 func (m *Metrics) UserDeclarations() map[string]UserMetricDecl {
-	if m.userDecls == nil {
+	if m.user.userDecls == nil {
 		return nil
 	}
-	return m.userDecls
+	return m.user.userDecls
 }
 
 // SetUserMetricContext configures the property-based auto-attached context.
 func (m *Metrics) SetUserMetricContext(ctx map[string]string) {
-	m.userMetricContext = ctx
+	m.user.userMetricContext = ctx
 }
 
 // InitUserMetrics creates predeclared instruments from config declarations.
 // Must be called during startup after the meter is available.
 func (m *Metrics) InitUserMetrics(decls map[string]UserMetricDecl) error {
-	if m.meter == nil {
+	if m.user.meter == nil {
 		return nil
 	}
-	m.userDecls = decls
-	m.predeclaredCounters = make(map[string]otelmetric.Float64Counter)
-	m.predeclaredUpDownCounters = make(map[string]otelmetric.Float64UpDownCounter)
-	m.predeclaredHistograms = make(map[string]otelmetric.Float64Histogram)
-	m.predeclaredGauges = make(map[string]otelmetric.Float64Gauge)
+	m.user.userDecls = decls
+	m.user.predeclaredCounters = make(map[string]otelmetric.Float64Counter)
+	m.user.predeclaredUpDownCounters = make(map[string]otelmetric.Float64UpDownCounter)
+	m.user.predeclaredHistograms = make(map[string]otelmetric.Float64Histogram)
+	m.user.predeclaredGauges = make(map[string]otelmetric.Float64Gauge)
 
 	for name, decl := range decls {
 		if err := m.createPredeclaredInstrument(name, decl); err != nil {
@@ -74,69 +73,85 @@ func (m *Metrics) InitUserMetrics(decls map[string]UserMetricDecl) error {
 
 func (m *Metrics) createPredeclaredInstrument(name string, decl UserMetricDecl) error {
 	otelName := userMetricPrefix + name
-	opts := []otelmetric.Float64CounterOption{}
-	if decl.Description != "" {
-		opts = append(opts, otelmetric.WithDescription(decl.Description))
-	}
-	if decl.Unit != "" {
-		opts = append(opts, otelmetric.WithUnit(decl.Unit))
-	}
 
 	switch decl.Type {
 	case "counter":
-		inst, err := m.meter.Float64Counter(otelName, opts...)
+		inst, err := m.newCounterInstrument(otelName, decl.Description, decl.Unit)
 		if err != nil {
 			return err
 		}
-		m.predeclaredCounters[name] = inst
+		m.user.predeclaredCounters[name] = inst
 	case "updowncounter":
-		udOpts := make([]otelmetric.Float64UpDownCounterOption, 0, len(opts))
-		if decl.Description != "" {
-			udOpts = append(udOpts, otelmetric.WithDescription(decl.Description))
-		}
-		if decl.Unit != "" {
-			udOpts = append(udOpts, otelmetric.WithUnit(decl.Unit))
-		}
-		inst, err := m.meter.Float64UpDownCounter(otelName, udOpts...)
+		inst, err := m.newUpDownCounterInstrument(otelName, decl.Description, decl.Unit)
 		if err != nil {
 			return err
 		}
-		m.predeclaredUpDownCounters[name] = inst
+		m.user.predeclaredUpDownCounters[name] = inst
 	case "histogram":
-		hOpts := make([]otelmetric.Float64HistogramOption, 0, 3)
-		if decl.Description != "" {
-			hOpts = append(hOpts, otelmetric.WithDescription(decl.Description))
-		}
-		if decl.Unit != "" {
-			hOpts = append(hOpts, otelmetric.WithUnit(decl.Unit))
-		}
-		inst, err := m.meter.Float64Histogram(otelName, hOpts...)
+		inst, err := m.newHistogramInstrument(otelName, decl.Description, decl.Unit)
 		if err != nil {
 			return err
 		}
-		m.predeclaredHistograms[name] = inst
+		m.user.predeclaredHistograms[name] = inst
 	case "gauge":
-		gOpts := make([]otelmetric.Float64GaugeOption, 0, 2)
-		if decl.Description != "" {
-			gOpts = append(gOpts, otelmetric.WithDescription(decl.Description))
-		}
-		if decl.Unit != "" {
-			gOpts = append(gOpts, otelmetric.WithUnit(decl.Unit))
-		}
-		inst, err := m.meter.Float64Gauge(otelName, gOpts...)
+		inst, err := m.newGaugeInstrument(otelName, decl.Description, decl.Unit)
 		if err != nil {
 			return err
 		}
-		m.predeclaredGauges[name] = inst
+		m.user.predeclaredGauges[name] = inst
 	default:
 		return fmt.Errorf("unknown metric type %q", decl.Type)
 	}
 	return nil
 }
 
+func (m *Metrics) newCounterInstrument(name, description, unit string) (otelmetric.Float64Counter, error) {
+	opts := []otelmetric.Float64CounterOption{}
+	if description != "" {
+		opts = append(opts, otelmetric.WithDescription(description))
+	}
+	if unit != "" {
+		opts = append(opts, otelmetric.WithUnit(unit))
+	}
+	return m.user.meter.Float64Counter(name, opts...)
+}
+
+func (m *Metrics) newUpDownCounterInstrument(name, description, unit string) (otelmetric.Float64UpDownCounter, error) {
+	opts := []otelmetric.Float64UpDownCounterOption{}
+	if description != "" {
+		opts = append(opts, otelmetric.WithDescription(description))
+	}
+	if unit != "" {
+		opts = append(opts, otelmetric.WithUnit(unit))
+	}
+	return m.user.meter.Float64UpDownCounter(name, opts...)
+}
+
+func (m *Metrics) newHistogramInstrument(name, description, unit string) (otelmetric.Float64Histogram, error) {
+	opts := []otelmetric.Float64HistogramOption{}
+	if description != "" {
+		opts = append(opts, otelmetric.WithDescription(description))
+	}
+	if unit != "" {
+		opts = append(opts, otelmetric.WithUnit(unit))
+	}
+	return m.user.meter.Float64Histogram(name, opts...)
+}
+
+func (m *Metrics) newGaugeInstrument(name, description, unit string) (otelmetric.Float64Gauge, error) {
+	opts := []otelmetric.Float64GaugeOption{}
+	if description != "" {
+		opts = append(opts, otelmetric.WithDescription(description))
+	}
+	if unit != "" {
+		opts = append(opts, otelmetric.WithUnit(unit))
+	}
+	return m.user.meter.Float64Gauge(name, opts...)
+}
+
 // RecordUserCounter records a user-defined counter metric.
-func (m *Metrics) RecordUserCounter(ctx context.Context, exec *Execution, name string, value float64, labels map[string]any) {
-	if m.meter == nil {
+func (m *Metrics) RecordUserCounter(exec *Execution, name string, value float64, labels map[string]any) {
+	if m.user.meter == nil {
 		return
 	}
 	logger := userMetricLogger(exec)
@@ -152,22 +167,27 @@ func (m *Metrics) RecordUserCounter(ctx context.Context, exec *Execution, name s
 		return
 	}
 
-	// Check predeclared first.
-	if inst, found := m.predeclaredCounters[name]; found {
-		inst.Add(ctx, value, otelmetric.WithAttributes(attrs...))
+	ok = m.resolvePredeclaredMetricType(name, "counter", logger)
+	if !ok {
 		return
 	}
 
-	inst := m.getOrCreateDynamicCounter(name, logger)
-	if inst == nil {
+	// Check predeclared first.
+	if inst, found := m.user.predeclaredCounters[name]; found {
+		inst.Add(exec, value, otelmetric.WithAttributes(attrs...))
 		return
 	}
-	inst.Add(ctx, value, otelmetric.WithAttributes(attrs...))
+
+	inst, ok := m.getOrCreateDynamicCounter(name, logger)
+	if !ok {
+		return
+	}
+	inst.Add(exec, value, otelmetric.WithAttributes(attrs...))
 }
 
 // RecordUserUpDownCounter records a user-defined up-down counter metric.
-func (m *Metrics) RecordUserUpDownCounter(ctx context.Context, exec *Execution, name string, value float64, labels map[string]any) {
-	if m.meter == nil {
+func (m *Metrics) RecordUserUpDownCounter(exec *Execution, name string, value float64, labels map[string]any) {
+	if m.user.meter == nil {
 		return
 	}
 	logger := userMetricLogger(exec)
@@ -176,21 +196,26 @@ func (m *Metrics) RecordUserUpDownCounter(ctx context.Context, exec *Execution, 
 		return
 	}
 
-	if inst, found := m.predeclaredUpDownCounters[name]; found {
-		inst.Add(ctx, value, otelmetric.WithAttributes(attrs...))
+	ok = m.resolvePredeclaredMetricType(name, "updowncounter", logger)
+	if !ok {
 		return
 	}
 
-	inst := m.getOrCreateDynamicUpDownCounter(name, logger)
-	if inst == nil {
+	if inst, found := m.user.predeclaredUpDownCounters[name]; found {
+		inst.Add(exec, value, otelmetric.WithAttributes(attrs...))
 		return
 	}
-	inst.Add(ctx, value, otelmetric.WithAttributes(attrs...))
+
+	inst, ok := m.getOrCreateDynamicUpDownCounter(name, logger)
+	if !ok {
+		return
+	}
+	inst.Add(exec, value, otelmetric.WithAttributes(attrs...))
 }
 
 // RecordUserHistogram records a user-defined histogram metric.
-func (m *Metrics) RecordUserHistogram(ctx context.Context, exec *Execution, name string, value float64, labels map[string]any) {
-	if m.meter == nil {
+func (m *Metrics) RecordUserHistogram(exec *Execution, name string, value float64, labels map[string]any) {
+	if m.user.meter == nil {
 		return
 	}
 	logger := userMetricLogger(exec)
@@ -199,21 +224,26 @@ func (m *Metrics) RecordUserHistogram(ctx context.Context, exec *Execution, name
 		return
 	}
 
-	if inst, found := m.predeclaredHistograms[name]; found {
-		inst.Record(ctx, value, otelmetric.WithAttributes(attrs...))
+	ok = m.resolvePredeclaredMetricType(name, "histogram", logger)
+	if !ok {
 		return
 	}
 
-	inst := m.getOrCreateDynamicHistogram(name, logger)
-	if inst == nil {
+	if inst, found := m.user.predeclaredHistograms[name]; found {
+		inst.Record(exec, value, otelmetric.WithAttributes(attrs...))
 		return
 	}
-	inst.Record(ctx, value, otelmetric.WithAttributes(attrs...))
+
+	inst, ok := m.getOrCreateDynamicHistogram(name, logger)
+	if !ok {
+		return
+	}
+	inst.Record(exec, value, otelmetric.WithAttributes(attrs...))
 }
 
 // RecordUserGauge records a user-defined gauge metric.
-func (m *Metrics) RecordUserGauge(ctx context.Context, exec *Execution, name string, value float64, labels map[string]any) {
-	if m.meter == nil {
+func (m *Metrics) RecordUserGauge(exec *Execution, name string, value float64, labels map[string]any) {
+	if m.user.meter == nil {
 		return
 	}
 	logger := userMetricLogger(exec)
@@ -222,92 +252,111 @@ func (m *Metrics) RecordUserGauge(ctx context.Context, exec *Execution, name str
 		return
 	}
 
-	if inst, found := m.predeclaredGauges[name]; found {
-		inst.Record(ctx, value, otelmetric.WithAttributes(attrs...))
+	ok = m.resolvePredeclaredMetricType(name, "gauge", logger)
+	if !ok {
 		return
 	}
 
-	inst := m.getOrCreateDynamicGauge(name, logger)
-	if inst == nil {
+	if inst, found := m.user.predeclaredGauges[name]; found {
+		inst.Record(exec, value, otelmetric.WithAttributes(attrs...))
 		return
 	}
-	inst.Record(ctx, value, otelmetric.WithAttributes(attrs...))
+
+	inst, ok := m.getOrCreateDynamicGauge(name, logger)
+	if !ok {
+		return
+	}
+	inst.Record(exec, value, otelmetric.WithAttributes(attrs...))
 }
 
 // --- Dynamic instrument creation (sync.Map) ---
 
-func (m *Metrics) getOrCreateDynamicCounter(name string, logger Logger) otelmetric.Float64Counter {
-	if existing, ok := m.dynamicCounters.Load(name); ok {
-		return existing.(otelmetric.Float64Counter)
+func (m *Metrics) getOrCreateDynamicCounter(name string, logger Logger) (otelmetric.Float64Counter, bool) {
+	if existing, ok := m.user.dynamicCounters.Load(name); ok {
+		return existing.(otelmetric.Float64Counter), true
 	}
 	if !m.checkDynamicTypeConflict(name, "counter", logger) {
-		return nil
+		return nil, false
 	}
-	inst, err := m.meter.Float64Counter(userMetricPrefix + name)
+	inst, err := m.newCounterInstrument(userMetricPrefix+name, "", "")
 	if err != nil {
 		logger.Warn("failed to create dynamic counter", "metric", name, "error", err)
-		return nil
+		return nil, false
 	}
-	actual, _ := m.dynamicCounters.LoadOrStore(name, inst)
-	return actual.(otelmetric.Float64Counter)
+	actual, _ := m.user.dynamicCounters.LoadOrStore(name, inst)
+	return actual.(otelmetric.Float64Counter), true
 }
 
-func (m *Metrics) getOrCreateDynamicUpDownCounter(name string, logger Logger) otelmetric.Float64UpDownCounter {
-	if existing, ok := m.dynamicUpDownCounters.Load(name); ok {
-		return existing.(otelmetric.Float64UpDownCounter)
+func (m *Metrics) getOrCreateDynamicUpDownCounter(name string, logger Logger) (otelmetric.Float64UpDownCounter, bool) {
+	if existing, ok := m.user.dynamicUpDownCounters.Load(name); ok {
+		return existing.(otelmetric.Float64UpDownCounter), true
 	}
 	if !m.checkDynamicTypeConflict(name, "updowncounter", logger) {
-		return nil
+		return nil, false
 	}
-	inst, err := m.meter.Float64UpDownCounter(userMetricPrefix + name)
+	inst, err := m.newUpDownCounterInstrument(userMetricPrefix+name, "", "")
 	if err != nil {
 		logger.Warn("failed to create dynamic updowncounter", "metric", name, "error", err)
-		return nil
+		return nil, false
 	}
-	actual, _ := m.dynamicUpDownCounters.LoadOrStore(name, inst)
-	return actual.(otelmetric.Float64UpDownCounter)
+	actual, _ := m.user.dynamicUpDownCounters.LoadOrStore(name, inst)
+	return actual.(otelmetric.Float64UpDownCounter), true
 }
 
-func (m *Metrics) getOrCreateDynamicHistogram(name string, logger Logger) otelmetric.Float64Histogram {
-	if existing, ok := m.dynamicHistograms.Load(name); ok {
-		return existing.(otelmetric.Float64Histogram)
+func (m *Metrics) getOrCreateDynamicHistogram(name string, logger Logger) (otelmetric.Float64Histogram, bool) {
+	if existing, ok := m.user.dynamicHistograms.Load(name); ok {
+		return existing.(otelmetric.Float64Histogram), true
 	}
 	if !m.checkDynamicTypeConflict(name, "histogram", logger) {
-		return nil
+		return nil, false
 	}
-	inst, err := m.meter.Float64Histogram(userMetricPrefix + name)
+	inst, err := m.newHistogramInstrument(userMetricPrefix+name, "", "")
 	if err != nil {
 		logger.Warn("failed to create dynamic histogram", "metric", name, "error", err)
-		return nil
+		return nil, false
 	}
-	actual, _ := m.dynamicHistograms.LoadOrStore(name, inst)
-	return actual.(otelmetric.Float64Histogram)
+	actual, _ := m.user.dynamicHistograms.LoadOrStore(name, inst)
+	return actual.(otelmetric.Float64Histogram), true
 }
 
-func (m *Metrics) getOrCreateDynamicGauge(name string, logger Logger) otelmetric.Float64Gauge {
-	if existing, ok := m.dynamicGauges.Load(name); ok {
-		return existing.(otelmetric.Float64Gauge)
+func (m *Metrics) getOrCreateDynamicGauge(name string, logger Logger) (otelmetric.Float64Gauge, bool) {
+	if existing, ok := m.user.dynamicGauges.Load(name); ok {
+		return existing.(otelmetric.Float64Gauge), true
 	}
 	if !m.checkDynamicTypeConflict(name, "gauge", logger) {
-		return nil
+		return nil, false
 	}
-	inst, err := m.meter.Float64Gauge(userMetricPrefix + name)
+	inst, err := m.newGaugeInstrument(userMetricPrefix+name, "", "")
 	if err != nil {
 		logger.Warn("failed to create dynamic gauge", "metric", name, "error", err)
-		return nil
+		return nil, false
 	}
-	actual, _ := m.dynamicGauges.LoadOrStore(name, inst)
-	return actual.(otelmetric.Float64Gauge)
+	actual, _ := m.user.dynamicGauges.LoadOrStore(name, inst)
+	return actual.(otelmetric.Float64Gauge), true
 }
 
 func (m *Metrics) checkDynamicTypeConflict(name, metricType string, logger Logger) bool {
-	existing, loaded := m.dynamicTypes.LoadOrStore(name, metricType)
-	if loaded && existing.(string) != metricType {
+	descriptor := metricType
+	existing, loaded := m.user.dynamicTypes.LoadOrStore(name, descriptor)
+	if loaded && existing.(string) != descriptor {
 		logger.Warn("dropping metric: type conflict",
 			"metric", name,
-			"existing_type", existing,
+			"existing_type", existing.(string),
 			"requested_type", metricType)
 		return false
+	}
+	return true
+}
+
+func (m *Metrics) resolvePredeclaredMetricType(name, metricType string, logger Logger) bool {
+	if decl, ok := m.user.userDecls[name]; ok {
+		if decl.Type != metricType {
+			logger.Warn("dropping metric: type does not match predeclared declaration",
+				"metric", name,
+				"existing_type", decl.Type,
+				"requested_type", metricType)
+			return false
+		}
 	}
 	return true
 }
@@ -336,21 +385,21 @@ func (m *Metrics) buildUserMetricAttrs(exec *Execution, name, metricType string,
 	}
 
 	// Auto-attached property-based context.
-	for k, v := range m.userMetricContext {
+	for k, v := range m.user.userMetricContext {
 		attrs = append(attrs, attribute.String(k, v))
 	}
 
 	// Build reserved key set including property-based context keys.
-	reserved := make(map[string]bool, len(reservedUserMetricKeys)+len(m.userMetricContext))
+	reserved := make(map[string]bool, len(reservedUserMetricKeys)+len(m.user.userMetricContext))
 	for k := range reservedUserMetricKeys {
 		reserved[k] = true
 	}
-	for k := range m.userMetricContext {
+	for k := range m.user.userMetricContext {
 		reserved[k] = true
 	}
 
 	// Validate and add user-provided labels.
-	decl, isPredeclared := m.userDecls[name]
+	decl, isPredeclared := m.user.userDecls[name]
 	labelCount := 0
 	for k, v := range labels {
 		if reserved[k] {
@@ -473,4 +522,3 @@ func ResolveUserMetricContext(ctx map[string]any) map[string]string {
 	}
 	return result
 }
-

@@ -98,6 +98,41 @@ func TestDSLMetricCounter_WithValueAndLabels(t *testing.T) {
 	}
 }
 
+func TestDSLMetricCounter_DropsExtraNonMapArgument(t *testing.T) {
+	metrics, reader := newDSLTestMetrics(t, nil)
+	container := runtime.NewContainer(runtime.NewLogger(nil))
+	container.SetMetrics(metrics)
+
+	flow := &runtime.Flow{ID: "test_flow"}
+	exec := runtime.NewExecution(flow, container, nil, runtime.NewFlatValueStore())
+
+	interp := &Interpreter{}
+	globals := make(map[string]any)
+
+	metricGlobals := BuildMetricGlobals(&exec)
+	for k, v := range metricGlobals {
+		globals[k] = v
+	}
+
+	_, err := interp.Eval(context.Background(), `metric.counter("checkout", 5, {"provider": "stripe"}, "int64")`, globals)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == "sflowg.user.checkout" {
+				t.Fatal("expected metric with extra non-map argument to be dropped")
+			}
+		}
+	}
+}
+
 func TestDSLMetricHistogram(t *testing.T) {
 	metrics, reader := newDSLTestMetrics(t, nil)
 	container := runtime.NewContainer(runtime.NewLogger(nil))

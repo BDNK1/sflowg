@@ -337,6 +337,17 @@ var validUserMetricTypes = map[string]bool{
 	"gauge":         true,
 }
 
+// reservedUserMetricDSLNames are the names used by the dynamic metric API
+// (metric.counter, metric.histogram, etc.). Predeclared metric declarations
+// must not use these names or they would overwrite the API functions in the
+// DSL metric module, silently breaking metric.counter(...) and siblings.
+var reservedUserMetricDSLNames = map[string]bool{
+	"counter":       true,
+	"updowncounter": true,
+	"histogram":     true,
+	"gauge":         true,
+}
+
 func validateUserMetricsConfig(cfg UserMetricsConfig) error {
 	for name, decl := range cfg.Declarations {
 		if err := validateUserMetricDecl(name, decl); err != nil {
@@ -355,6 +366,9 @@ func validateUserMetricDecl(name string, decl UserMetricDecl) error {
 	}
 	if !validMetricNamePattern.MatchString(name) {
 		return fmt.Errorf("config validation failed:\n  - user metric name %q contains invalid characters", name)
+	}
+	if reservedUserMetricDSLNames[name] {
+		return fmt.Errorf("config validation failed:\n  - user metric name %q is reserved by the DSL metric API", name)
 	}
 	if !validUserMetricTypes[decl.Type] {
 		return fmt.Errorf("config validation failed:\n  - user metric %q has invalid type %q, must be one of: counter, updowncounter, histogram, gauge", name, decl.Type)

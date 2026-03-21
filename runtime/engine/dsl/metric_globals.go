@@ -43,22 +43,12 @@ func makeCounterFn(exec *runtime.Execution, metrics *runtime.Metrics, logger run
 			return nil
 		}
 
-		value := 1.0
-		var labels map[string]any
-
-		if len(args) >= 2 {
-			v, ok := asFloat64(args[1])
-			if !ok {
-				logger.Warn("metric.counter: value must be numeric", "metric", name, "got", fmt.Sprintf("%T", args[1]))
-				return nil
-			}
-			value = v
-		}
-		if len(args) >= 3 {
-			labels = asLabels(args[2])
+		value, labels, ok := parseCounterArgs(name, args[1:], logger)
+		if !ok {
+			return nil
 		}
 
-		metrics.RecordUserCounter(exec, exec, name, value, labels)
+		metrics.RecordUserCounter(exec, name, value, labels)
 		return nil
 	}
 }
@@ -77,18 +67,12 @@ func makeUpDownCounterFn(exec *runtime.Execution, metrics *runtime.Metrics, logg
 			return nil
 		}
 
-		value, ok := asFloat64(args[1])
+		value, labels, ok := parseMetricValueArgs("metric.updowncounter", name, args[1:], logger)
 		if !ok {
-			logger.Warn("metric.updowncounter: value must be numeric", "metric", name, "got", fmt.Sprintf("%T", args[1]))
 			return nil
 		}
 
-		var labels map[string]any
-		if len(args) >= 3 {
-			labels = asLabels(args[2])
-		}
-
-		metrics.RecordUserUpDownCounter(exec, exec, name, value, labels)
+		metrics.RecordUserUpDownCounter(exec, name, value, labels)
 		return nil
 	}
 }
@@ -107,18 +91,12 @@ func makeHistogramFn(exec *runtime.Execution, metrics *runtime.Metrics, logger r
 			return nil
 		}
 
-		value, ok := asFloat64(args[1])
+		value, labels, ok := parseMetricValueArgs("metric.histogram", name, args[1:], logger)
 		if !ok {
-			logger.Warn("metric.histogram: value must be numeric", "metric", name, "got", fmt.Sprintf("%T", args[1]))
 			return nil
 		}
 
-		var labels map[string]any
-		if len(args) >= 3 {
-			labels = asLabels(args[2])
-		}
-
-		metrics.RecordUserHistogram(exec, exec, name, value, labels)
+		metrics.RecordUserHistogram(exec, name, value, labels)
 		return nil
 	}
 }
@@ -137,18 +115,12 @@ func makeGaugeFn(exec *runtime.Execution, metrics *runtime.Metrics, logger runti
 			return nil
 		}
 
-		value, ok := asFloat64(args[1])
+		value, labels, ok := parseMetricValueArgs("metric.gauge", name, args[1:], logger)
 		if !ok {
-			logger.Warn("metric.gauge: value must be numeric", "metric", name, "got", fmt.Sprintf("%T", args[1]))
 			return nil
 		}
 
-		var labels map[string]any
-		if len(args) >= 3 {
-			labels = asLabels(args[2])
-		}
-
-		metrics.RecordUserGauge(exec, exec, name, value, labels)
+		metrics.RecordUserGauge(exec, name, value, labels)
 		return nil
 	}
 }
@@ -174,7 +146,7 @@ func buildPredeclaredHandle(exec *runtime.Execution, metrics *runtime.Metrics, n
 				if len(args) >= 2 {
 					labels = asLabels(args[1])
 				}
-				metrics.RecordUserCounter(exec, exec, name, value, labels)
+				metrics.RecordUserCounter(exec, name, value, labels)
 				return nil
 			},
 		}
@@ -194,7 +166,7 @@ func buildPredeclaredHandle(exec *runtime.Execution, metrics *runtime.Metrics, n
 				if len(args) >= 2 {
 					labels = asLabels(args[1])
 				}
-				metrics.RecordUserUpDownCounter(exec, exec, name, value, labels)
+				metrics.RecordUserUpDownCounter(exec, name, value, labels)
 				return nil
 			},
 		}
@@ -214,7 +186,7 @@ func buildPredeclaredHandle(exec *runtime.Execution, metrics *runtime.Metrics, n
 				if len(args) >= 2 {
 					labels = asLabels(args[1])
 				}
-				metrics.RecordUserHistogram(exec, exec, name, value, labels)
+				metrics.RecordUserHistogram(exec, name, value, labels)
 				return nil
 			},
 		}
@@ -234,7 +206,7 @@ func buildPredeclaredHandle(exec *runtime.Execution, metrics *runtime.Metrics, n
 				if len(args) >= 2 {
 					labels = asLabels(args[1])
 				}
-				metrics.RecordUserGauge(exec, exec, name, value, labels)
+				metrics.RecordUserGauge(exec, name, value, labels)
 				return nil
 			},
 		}
@@ -272,4 +244,59 @@ func asLabels(v any) map[string]any {
 		return m
 	}
 	return nil
+}
+
+func parseCounterArgs(name string, args []any, logger runtime.Logger) (float64, map[string]any, bool) {
+	value := 1.0
+	remaining := args
+	if len(remaining) > 0 {
+		if v, ok := asFloat64(remaining[0]); ok {
+			value = v
+			remaining = remaining[1:]
+		}
+	}
+
+	labels, ok := parseMetricTailArgs("metric.counter", name, remaining, logger)
+	if !ok {
+		return 0, nil, false
+	}
+	return value, labels, true
+}
+
+func parseMetricValueArgs(method, name string, args []any, logger runtime.Logger) (float64, map[string]any, bool) {
+	if len(args) == 0 {
+		logger.Warn(method+": value must be numeric", "metric", name)
+		return 0, nil, false
+	}
+
+	value, ok := asFloat64(args[0])
+	if !ok {
+		logger.Warn(method+": value must be numeric", "metric", name, "got", fmt.Sprintf("%T", args[0]))
+		return 0, nil, false
+	}
+
+	labels, ok := parseMetricTailArgs(method, name, args[1:], logger)
+	if !ok {
+		return 0, nil, false
+	}
+	return value, labels, true
+}
+
+func parseMetricTailArgs(method, name string, args []any, logger runtime.Logger) (map[string]any, bool) {
+	var labels map[string]any
+
+	for _, arg := range args {
+		if labels == nil {
+			if parsed := asLabels(arg); parsed != nil {
+				labels = parsed
+				continue
+			}
+		}
+
+		logger.Warn(method+": trailing arguments must be a labels map",
+			"metric", name, "got", fmt.Sprintf("%T", arg))
+		return nil, false
+	}
+
+	return labels, true
 }

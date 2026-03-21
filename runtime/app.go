@@ -58,6 +58,11 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 		return err
 	}
 
+	// Wire metric context from properties.observability.metrics.context.
+	if err := a.applyMetricContext(); err != nil {
+		return err
+	}
+
 	// Load flows at startup (runtime resolution)
 	if err := a.loadFlows(flowsDir); err != nil {
 		return err
@@ -195,4 +200,41 @@ func (a *App) shutdown(ctx context.Context) error {
 
 func (a *App) registerFlow(flow Flow) {
 	a.Flows[flow.ID] = flow
+}
+
+// applyMetricContext reads properties.observability.metrics.context from
+// GlobalProperties and wires it into the metrics singleton so those labels
+// are auto-attached to all user-defined DSL metrics.
+func (a *App) applyMetricContext() error {
+	raw, err := extractNestedMap(a.GlobalProperties, "observability", "metrics", "context")
+	if err != nil {
+		return fmt.Errorf("properties.observability.metrics.context: %w", err)
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	if err := ValidateUserMetricContext(raw); err != nil {
+		return err
+	}
+	a.Container.Metrics().SetUserMetricContext(ResolveUserMetricContext(raw))
+	return nil
+}
+
+// extractNestedMap navigates a chain of string keys through nested map[string]any values.
+// Returns nil, nil if any key is absent. Returns an error if a key exists but its value
+// is not a map[string]any.
+func extractNestedMap(m map[string]any, keys ...string) (map[string]any, error) {
+	current := m
+	for _, key := range keys {
+		val, ok := current[key]
+		if !ok {
+			return nil, nil
+		}
+		next, ok := val.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%q must be a map", key)
+		}
+		current = next
+	}
+	return current, nil
 }

@@ -85,6 +85,7 @@ Example:
 ```sflowg
 step charge_card {
     metric.counter("payment_attempts")
+    metric.counter("queued_jobs", 1, {"queue": "payments"})
 
     result := http.request({
         method: "POST",

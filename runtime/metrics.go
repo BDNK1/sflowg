@@ -45,7 +45,7 @@ type Metrics struct {
 	httpRequests     otelmetric.Int64Counter
 	httpDurationMS   otelmetric.Float64Histogram
 
-	userMetricsState
+	user userMetricsState
 }
 
 func InitMetrics(cfg MetricsConfig) (*Metrics, func(context.Context) error, error) {
@@ -201,7 +201,7 @@ func newMetrics(provider otelmetric.MeterProvider) (*Metrics, error) {
 		pluginDurationMS: pluginDurationMS,
 		httpRequests:     httpRequests,
 		httpDurationMS:   httpDurationMS,
-		userMetricsState: userMetricsState{
+		user: userMetricsState{
 			meter: meter,
 		},
 	}, nil

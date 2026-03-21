@@ -154,6 +154,23 @@ func TestValidateUserMetricsConfig_InvalidMetricName(t *testing.T) {
 	}
 }
 
+func TestValidateUserMetricsConfig_RejectsReservedDSLNames(t *testing.T) {
+	for _, name := range []string{"counter", "updowncounter", "histogram", "gauge"} {
+		cfg := UserMetricsConfig{
+			Declarations: map[string]UserMetricDecl{
+				name: {Type: "counter"},
+			},
+		}
+		err := validateUserMetricsConfig(cfg)
+		if err == nil {
+			t.Fatalf("expected validation error for reserved DSL name %q", name)
+		}
+		if !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("expected 'reserved' in error for name %q, got %v", name, err)
+		}
+	}
+}
+
 func TestValidateUserMetricContext_ValidScalars(t *testing.T) {
 	ctx := map[string]any{
 		"channel": "web",
@@ -226,7 +243,7 @@ func TestRecordUserCounter_DynamicEmitsDatapoint(t *testing.T) {
 
 	execution.WithActivePath(SuccessPathPrimary, func() {
 		execution.WithActiveStep("charge", func() {
-			metrics.RecordUserCounter(context.Background(), &execution, "checkout_attempts", 1, map[string]any{
+			metrics.RecordUserCounter(&execution, "checkout_attempts", 1, map[string]any{
 				"provider": "stripe",
 			})
 		})
@@ -249,7 +266,7 @@ func TestRecordUserCounter_DropsNegativeValue(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserCounter(context.Background(), &execution, "bad_counter", -1, nil)
+	metrics.RecordUserCounter(&execution, "bad_counter", -1, nil)
 
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
@@ -273,7 +290,7 @@ func TestRecordUserCounter_DropsZeroValue(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserCounter(context.Background(), &execution, "zero_counter", 0, nil)
+	metrics.RecordUserCounter(&execution, "zero_counter", 0, nil)
 
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
@@ -296,7 +313,7 @@ func TestRecordUserUpDownCounter_SupportsNegativeDelta(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserUpDownCounter(context.Background(), &execution, "active_sessions", -1, nil)
+	metrics.RecordUserUpDownCounter(&execution, "active_sessions", -1, nil)
 
 	rm := collectMetrics(t, reader)
 	got := findFloat64SumValue(t, rm, "sflowg.user.active_sessions", map[string]string{
@@ -315,7 +332,7 @@ func TestRecordUserHistogram_EmitsDatapoint(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserHistogram(context.Background(), &execution, "payment_latency_ms", 127.5, nil)
+	metrics.RecordUserHistogram(&execution, "payment_latency_ms", 127.5, nil)
 
 	rm := collectMetrics(t, reader)
 	findHistogramCount(t, rm, "sflowg.user.payment_latency_ms", map[string]string{
@@ -331,7 +348,7 @@ func TestRecordUserGauge_EmitsDatapoint(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserGauge(context.Background(), &execution, "queue_depth", 42, nil)
+	metrics.RecordUserGauge(&execution, "queue_depth", 42, nil)
 
 	rm := collectMetrics(t, reader)
 	findFloat64GaugeValue(t, rm, "sflowg.user.queue_depth", map[string]string{
@@ -348,9 +365,9 @@ func TestRecordUserCounter_DynamicTypeConflict(t *testing.T) {
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
 	// First call creates a counter.
-	metrics.RecordUserCounter(context.Background(), &execution, "my_metric", 1, nil)
+	metrics.RecordUserCounter(&execution, "my_metric", 1, nil)
 	// Second call with different type should be dropped.
-	metrics.RecordUserHistogram(context.Background(), &execution, "my_metric", 100, nil)
+	metrics.RecordUserHistogram(&execution, "my_metric", 100, nil)
 
 	rm := collectMetrics(t, reader)
 	// Should find the counter but not a histogram.
@@ -368,7 +385,7 @@ func TestRecordUserCounter_DropsReservedLabelKey(t *testing.T) {
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
 	// Using reserved key "flow.id" in labels should drop the entire datapoint.
-	metrics.RecordUserCounter(context.Background(), &execution, "bad_labels", 1, map[string]any{
+	metrics.RecordUserCounter(&execution, "bad_labels", 1, map[string]any{
 		"flow.id": "override",
 	})
 
@@ -402,7 +419,7 @@ func TestRecordUserCounter_PredeclaredEnforcesEnum(t *testing.T) {
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
 	// Valid enum value should work.
-	metrics.RecordUserCounter(context.Background(), &execution, "checkout_attempts", 1, map[string]any{
+	metrics.RecordUserCounter(&execution, "checkout_attempts", 1, map[string]any{
 		"provider": "stripe",
 	})
 
@@ -426,7 +443,7 @@ func TestRecordUserMetrics_AutoAttachesPropertyContext(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserCounter(context.Background(), &execution, "checkout_attempts", 1, nil)
+	metrics.RecordUserCounter(&execution, "checkout_attempts", 1, nil)
 
 	rm := collectMetrics(t, reader)
 	findFloat64SumValue(t, rm, "sflowg.user.checkout_attempts", map[string]string{
@@ -446,7 +463,7 @@ func TestRecordUserMetrics_FallbackPath(t *testing.T) {
 
 	execution.WithActivePath(SuccessPathFallback, func() {
 		execution.WithActiveStep("charge", func() {
-			metrics.RecordUserCounter(context.Background(), &execution, "checkout_attempts", 1, nil)
+			metrics.RecordUserCounter(&execution, "checkout_attempts", 1, nil)
 		})
 	})
 
