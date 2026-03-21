@@ -73,3 +73,66 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerate_IncludesUserMetricsDeclarations(t *testing.T) {
+	gen := NewMainGoGenerator(
+		"github.com/example/ecom",
+		"8080",
+		false,
+		nil,
+		config.ObservabilityConfig{
+			Metrics: runtime.MetricsConfig{
+				Enabled:  true,
+				Endpoint: "localhost:4317",
+				User: runtime.UserMetricsConfig{
+					Declarations: map[string]runtime.UserMetricDecl{
+						"payment_attempts": {
+							Type:        "counter",
+							Description: "Payment attempts by provider and outcome",
+							Labels: map[string]runtime.UserMetricLabel{
+								"provider": {Type: "enum", Values: []string{"stripe"}},
+								"outcome":  {Type: "enum", Values: []string{"success", "error", "queued"}},
+							},
+						},
+						"latency": {
+							Type:    "histogram",
+							Unit:    "ms",
+							Buckets: []float64{10, 50, 100, 500},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	content, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	checks := []string{
+		"User: runtime.UserMetricsConfig{",
+		"Declarations: map[string]runtime.UserMetricDecl{",
+		`"payment_attempts"`,
+		`Type:        "counter"`,
+		`Description: "Payment attempts by provider and outcome"`,
+		"Labels: map[string]runtime.UserMetricLabel{",
+		`"provider"`,
+		`Type: "enum"`,
+		`"stripe"`,
+		`"outcome"`,
+		`"success"`,
+		`"error"`,
+		`"queued"`,
+		`"latency"`,
+		`Type:        "histogram"`,
+		`Unit:        "ms"`,
+		"Buckets: []float64{",
+	}
+
+	for _, check := range checks {
+		if !strings.Contains(content, check) {
+			t.Fatalf("generated main.go missing %q\n\nGenerated content:\n%s", check, content)
+		}
+	}
+}

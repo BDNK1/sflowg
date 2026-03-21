@@ -156,6 +156,46 @@ func main() {
 {{- end}}
 			},
 {{- end}}
+{{- if .Observability.Metrics.User.Declarations}}
+			User: runtime.UserMetricsConfig{
+				Declarations: map[string]runtime.UserMetricDecl{
+{{- range $name, $decl := .Observability.Metrics.User.Declarations}}
+					"{{$name}}": {
+						Type:        "{{$decl.Type}}",
+{{- if $decl.Unit}}
+						Unit:        "{{$decl.Unit}}",
+{{- end}}
+{{- if $decl.Description}}
+						Description: "{{$decl.Description}}",
+{{- end}}
+{{- if $decl.Buckets}}
+						Buckets: []float64{
+{{- range $decl.Buckets}}
+							{{printf "%g" .}},
+{{- end}}
+						},
+{{- end}}
+{{- if $decl.Labels}}
+						Labels: map[string]runtime.UserMetricLabel{
+{{- range $labelName, $label := $decl.Labels}}
+							"{{$labelName}}": {
+								Type: "{{$label.Type}}",
+{{- if $label.Values}}
+								Values: []string{
+{{- range $label.Values}}
+									{{printf "%q" .}},
+{{- end}}
+								},
+{{- end}}
+							},
+{{- end}}
+						},
+{{- end}}
+					},
+{{- end}}
+				},
+			},
+{{- end}}
 		},
 	}
 

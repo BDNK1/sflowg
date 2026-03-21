@@ -173,3 +173,64 @@ func TestInterpreterEval_GoFunctionCall(t *testing.T) {
 		t.Errorf("got %v, want 42", result)
 	}
 }
+
+func TestInterpreterEval_NestedFunctionMapCallable(t *testing.T) {
+	interp := &Interpreter{}
+	ctx := context.Background()
+
+	var innerCalled bool
+	globals := map[string]any{
+		"module": map[string]any{
+			"top_func": func() error { return nil },
+			"nested_handle": map[string]any{
+				"inner_func": func(x int64) (int64, error) {
+					innerCalled = true
+					return x * 3, nil
+				},
+			},
+		},
+	}
+
+	result, err := interp.Eval(ctx, `module.nested_handle.inner_func(7)`, globals)
+	if err != nil {
+		t.Fatalf("unexpected error calling nested function: %v", err)
+	}
+	if !innerCalled {
+		t.Error("nested Go function was not called")
+	}
+	if result != int64(21) {
+		t.Errorf("got %v, want 21", result)
+	}
+}
+
+func TestInterpreterEval_NestedNonFuncMapRemainsLenient(t *testing.T) {
+	interp := &Interpreter{}
+	ctx := context.Background()
+
+	// A module containing a nested map without functions should remain a lenientMap.
+	globals := map[string]any{
+		"module": map[string]any{
+			"some_func": func() error { return nil },
+			"data": map[string]any{
+				"key": "value",
+			},
+		},
+	}
+
+	result, err := interp.Eval(ctx, `module.data.key`, globals)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "value" {
+		t.Errorf("got %v, want value", result)
+	}
+
+	// Missing key should return nil (lenient behavior).
+	result, err = interp.Eval(ctx, `module.data.missing == nil`, globals)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != true {
+		t.Errorf("expected true for missing key == nil, got %v", result)
+	}
+}

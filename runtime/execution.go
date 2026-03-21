@@ -47,6 +47,7 @@ type Execution struct {
 	ResponseDescriptor *ResponseDescriptor
 	CompensationStack  []CompensationEntry
 	activeStepID       string
+	activePath         SuccessPath
 	activePlugin       string
 	ctx                context.Context // real context carrying deadline/cancellation
 	cachedLogger       *Logger         // cached to avoid re-creating handler chain per call
@@ -141,6 +142,8 @@ type executionScope struct {
 	setCtx     bool
 	stepID     string
 	setStepID  bool
+	path       SuccessPath
+	setPath    bool
 	pluginName string
 	setPlugin  bool
 }
@@ -148,6 +151,7 @@ type executionScope struct {
 func (e *Execution) withScope(scope executionScope, fn func()) {
 	prevCtx := e.ctx
 	prevStepID := e.activeStepID
+	prevPath := e.activePath
 	prevPlugin := e.activePlugin
 	prevLogger := e.cachedLogger
 	prevCachedPlugin := e.cachedPlugin
@@ -161,6 +165,9 @@ func (e *Execution) withScope(scope executionScope, fn func()) {
 	if scope.setStepID {
 		e.activeStepID = scope.stepID
 	}
+	if scope.setPath {
+		e.activePath = scope.path
+	}
 	if scope.setPlugin {
 		e.activePlugin = scope.pluginName
 		e.cachedLogger = nil
@@ -169,6 +176,7 @@ func (e *Execution) withScope(scope executionScope, fn func()) {
 	defer func() {
 		e.ctx = prevCtx
 		e.activeStepID = prevStepID
+		e.activePath = prevPath
 		e.activePlugin = prevPlugin
 		e.cachedLogger = prevLogger
 		e.cachedPlugin = prevCachedPlugin
@@ -181,8 +189,22 @@ func (e *Execution) WithActiveStep(stepID string, fn func()) {
 	e.withScope(executionScope{stepID: stepID, setStepID: true}, fn)
 }
 
+func (e *Execution) WithActivePath(path SuccessPath, fn func()) {
+	e.withScope(executionScope{path: path, setPath: true}, fn)
+}
+
 func (e *Execution) WithActivePlugin(pluginName string, fn func()) {
 	e.withScope(executionScope{pluginName: pluginName, setPlugin: true}, fn)
+}
+
+// ActiveStepID returns the current step ID, if inside a step scope.
+func (e *Execution) ActiveStepID() string {
+	return e.activeStepID
+}
+
+// ActivePath returns the current execution path (primary/fallback), if set.
+func (e *Execution) ActivePath() SuccessPath {
+	return e.activePath
 }
 
 // Values returns the full context map for expression evaluation.

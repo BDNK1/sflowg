@@ -67,6 +67,90 @@ User logs are emitted with:
 
 Structured payloads are allowed, but large string-like values are truncated using the runtime logging limit.
 
+## DSL Metrics
+
+DSL flows can emit custom user metrics from step bodies with the built-in `metric` module.
+
+### Dynamic Metric API
+
+Create and record metrics inline without prior declaration:
+
+- `metric.counter(name, value?, labels?)` - Monotonic counter. Value defaults to `1` when omitted.
+- `metric.updowncounter(name, value, labels?)` - Counter that can increase or decrease.
+- `metric.histogram(name, value, labels?)` - Records a value into a distribution.
+- `metric.gauge(name, value, labels?)` - Records an instantaneous value.
+
+Example:
+
+```sflowg
+step charge_card {
+    metric.counter("payment_attempts")
+    metric.counter("queued_jobs", 1, {"queue": "payments"})
+
+    result := http.request({
+        method: "POST",
+        url: properties.paymentProviderURL,
+        body: request.body
+    })
+
+    metric.histogram("payment_duration_ms", result.duration_ms, {
+        provider: "stripe",
+        currency: request.body.currency,
+    })
+
+    if result.status_code != 200 {
+        metric.counter("payment_failures", 1, {
+            status_code: result.status_code,
+        })
+    }
+}
+```
+
+### Predeclared Handle API
+
+When metrics are declared in `flow-config.yaml` under `observability.metrics.user.declarations`, they are available as predeclared handles on the `metric` object. Each handle exposes a method matching its instrument type:
+
+- `metric.<name>.inc(value?, labels?)` - Increment a counter. Value defaults to `1` when omitted.
+- `metric.<name>.add(value, labels?)` - Add to an up-down counter.
+- `metric.<name>.observe(value, labels?)` - Record a histogram observation.
+- `metric.<name>.set(value, labels?)` - Set a gauge value.
+
+Example:
+
+```sflowg
+step charge_card {
+    metric.payment_attempts.inc()
+
+    result := http.request({
+        method: "POST",
+        url: properties.paymentProviderURL,
+        body: request.body
+    })
+
+    metric.payment_duration_ms.observe(result.duration_ms, {
+        provider: "stripe",
+    })
+}
+```
+
+### Auto-Attached Attributes
+
+All user metrics automatically include the following attributes:
+
+- `flow.id` - The ID of the flow emitting the metric
+- `step.id` - The ID of the step emitting the metric
+- `path` - The entrypoint path of the flow
+
+These attributes are added by the runtime and do not need to be specified in `labels`.
+
+### OTel Output Prefix
+
+All user metric names are prefixed with `sflowg.user.` in OpenTelemetry output. For example, a metric named `payment_attempts` is exported as `sflowg.user.payment_attempts`.
+
+### Error Handling
+
+Invalid metric calls (unknown handle, wrong argument types, invalid label values) are dropped and logged as warnings. They never fail the step or abort flow execution.
+
 ## Entrypoint
 
 Defines how the flow is triggered. Currently supports HTTP entrypoints.

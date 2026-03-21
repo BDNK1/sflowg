@@ -32,7 +32,7 @@
       },
       "id": 1,
       "options": {
-        "content": "## SFlowG OTLP Overview\nThis dashboard is provisioned for the ecommerce example and covers every OTLP signal the framework currently emits here.\n\n### Metrics shown here\n- Flow counters and latency histograms\n- Step counters, latency histograms, and retries\n- Plugin call counters and latency histograms\n- HTTP request counters and latency histograms\n\n### Logs\nLogs are exported through `observability.logging.export` to Loki. The logs panel below defaults to `service_name=\"ecommerce-api\"`, and logs preserve runtime correlation fields such as `trace_id`, `span_id`, `execution_id`, and `flow_id`.\n\n### Traces\nTracing is enabled for this example and exported to Tempo through the bundled collector.\n\nOpen **Explore**, select the **Tempo** datasource, and start with queries like:\n- `{ resource.service.name = \"ecommerce-api\" }`\n- `{ name = \"flow create_order\" }`\n- `{ name = \"step pay_order\" }`\n- `{ name = \"plugin http.request\" }`\n\nSpan names follow the framework runtime model:\n- `flow <flow-id>`\n- `step <step-id>`\n- `plugin <plugin-name>.<method>`",
+        "content": "## SFlowG OTLP Overview\nThis dashboard is provisioned for the ecommerce example and covers every OTLP signal the framework currently emits here.\n\n### Metrics shown here\n- Flow counters and latency histograms\n- Step counters, latency histograms, and retries\n- Plugin call counters and latency histograms\n- HTTP request counters and latency histograms\n- User/business metrics (orders created, payment attempts)\n\n### Logs\nLogs are exported through `observability.logging.export` to Loki. The logs panel below defaults to `service_name=\"ecommerce-api\"`, and logs preserve runtime correlation fields such as `trace_id`, `span_id`, `execution_id`, and `flow_id`.\n\n### Traces\nTracing is enabled for this example and exported to Tempo through the bundled collector.\n\nOpen **Explore**, select the **Tempo** datasource, and start with queries like:\n- `{ resource.service.name = \"ecommerce-api\" }`\n- `{ name = \"flow create_order\" }`\n- `{ name = \"step pay_order\" }`\n- `{ name = \"plugin http.request\" }`\n\nSpan names follow the framework runtime model:\n- `flow <flow-id>`\n- `step <step-id>`\n- `plugin <plugin-name>.<method>`",
         "mode": "markdown"
       },
       "pluginVersion": "12.0.0",
@@ -45,7 +45,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 59
       },
       "id": 14,
       "options": {
@@ -846,6 +846,146 @@
         }
       ],
       "title": "Plugin Duration p95 by Method",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 51
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (currency) (increase(sflowg_user_orders_created_total[$__interval]))",
+          "legendFormat": "{{currency}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Orders Created by Currency (dynamic)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "pointSize": 4,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 51
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (provider, outcome) (increase(sflowg_user_payment_attempts_total[$__interval]))",
+          "legendFormat": "{{provider}} {{outcome}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Payment Attempts by Provider & Outcome (predeclared)",
       "type": "timeseries"
     }
   ],

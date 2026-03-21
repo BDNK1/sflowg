@@ -127,6 +127,11 @@ func (e *StepExecutor) buildEnv(execution *runtime.Execution) map[string]any {
 		globals[k] = v
 	}
 
+	metricGlobals := BuildMetricGlobals(execution)
+	for k, v := range metricGlobals {
+		globals[k] = v
+	}
+
 	globals["sprintf"] = fmt.Sprintf
 	globals["base64_encode"] = func(v any) string {
 		return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%v", v)))
