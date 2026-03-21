@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -125,5 +126,23 @@ func TestContainerRegisterPlugin_RegistersResponseHandler(t *testing.T) {
 	}
 	if got := recorder.Header().Get("X-Plugin-Message"); got != "ok" {
 		t.Fatalf("expected plugin response handler to run, got header %q", got)
+	}
+}
+
+func TestContainerRangeTasks_IteratesRegisteredTasks(t *testing.T) {
+	container := NewContainer(NewLogger(nil))
+	if err := container.RegisterPlugin("greeting", &greetingPlugin{}); err != nil {
+		t.Fatalf("RegisterPlugin failed: %v", err)
+	}
+
+	var taskNames []string
+	container.RangeTasks(func(name string, _ Task) {
+		taskNames = append(taskNames, name)
+	})
+	slices.Sort(taskNames)
+
+	expected := []string{"greeting.greet"}
+	if !slices.Equal(taskNames, expected) {
+		t.Fatalf("expected tasks %v, got %v", expected, taskNames)
 	}
 }

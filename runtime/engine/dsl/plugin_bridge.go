@@ -22,10 +22,10 @@ import (
 func BuildPluginGlobals(exec *runtime.Execution) map[string]any {
 	grouped := make(map[string]map[string]any)
 
-	for taskName, task := range exec.Container.Tasks {
+	exec.Container.RangeTasks(func(taskName string, task runtime.Task) {
 		parts := strings.SplitN(taskName, ".", 2)
 		if len(parts) != 2 {
-			continue
+			return
 		}
 		pluginName := parts[0]
 		methodName := parts[1]
@@ -40,7 +40,7 @@ func BuildPluginGlobals(exec *runtime.Execution) map[string]any {
 		grouped[pluginName][methodName] = func(args map[string]any) (map[string]any, error) {
 			return t.Execute(e, args)
 		}
-	}
+	})
 
 	result := make(map[string]any, len(grouped))
 	for k, v := range grouped {
