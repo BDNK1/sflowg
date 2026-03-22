@@ -29,8 +29,12 @@ func (s *flatValueStore) SetNested(prefix string, value any) {
 	s.values[prefix] = value
 }
 
-func (s *flatValueStore) All() map[string]any {
-	return s.values
+func (s *flatValueStore) Snapshot() map[string]any {
+	out := make(map[string]any, len(s.values))
+	for k, v := range s.values {
+		out[k] = v
+	}
+	return out
 }
 
 // NewTestMetricsWithReader creates a Metrics instance backed by a ManualReader

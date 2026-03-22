@@ -75,10 +75,8 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 
 		if fe == nil {
 			// Primary succeeded.
-			// Propagate any results stored in the step-scoped execution back
-			// to the parent (WithContext creates a shallow copy sharing the Store).
 			if s.CompensateBody != "" {
-				execution.CompensationStack = append(execution.CompensationStack, CompensationEntry{
+				execution.State().AppendCompensation(CompensationEntry{
 					StepID: s.ID,
 					Body:   s.CompensateBody,
 					Path:   SuccessPathPrimary,
@@ -97,7 +95,7 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 					// Fallback succeeded — store its result under the original step ID
 					// so downstream steps and compensation code use a stable key.
 					if s.CompensateBody != "" {
-						execution.CompensationStack = append(execution.CompensationStack, CompensationEntry{
+						execution.State().AppendCompensation(CompensationEntry{
 							StepID: s.ID,
 							Body:   s.CompensateBody,
 							Path:   SuccessPathFallback,
@@ -116,7 +114,7 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 		}
 
 		// Early exit if a step set a response.
-		if execution.ResponseDescriptor != nil {
+		if execution.State().Response() != nil {
 			log.Info(fmt.Sprintf("Response produced at step: %s", s.ID))
 			break
 		}
@@ -209,13 +207,8 @@ attemptLoop:
 		}
 
 		var err error
-		execution.WithScopedContext(stepCtx, func() {
-			execution.WithActivePath(path, func() {
-				execution.WithActiveStep(step.ID, func() {
-					_, err = e.stepExecutor.ExecuteStep(stepCtx, execution, step)
-				})
-			})
-		})
+		stepExec := execution.WithContext(stepCtx).WithActivePath(path).WithActiveStep(step.ID)
+		_, err = e.stepExecutor.ExecuteStep(stepCtx, stepExec, step)
 		if err == nil {
 			lastFE = nil
 			return nil
@@ -274,9 +267,9 @@ func (e *Executor) shouldRetry(execution *Execution, step Step, fe *FlowError) b
 
 	// If a `when` expression is set, evaluate it with `error` injected into the store.
 	if retry.When != "" {
-		execution.Store.Set("error", fe.ToMap())
+		execution.State().Store().Set("error", fe.ToMap())
 		result, err := e.evaluator.Eval(execution, retry.When)
-		execution.Store.Set("error", nil) // clean up regardless of result
+		execution.State().Store().Set("error", nil) // clean up regardless of result
 		if err != nil {
 			execution.Logger().Error("error evaluating retry when expression", "error", err)
 			return false
@@ -331,7 +324,7 @@ func (e *Executor) runCompensations(execution *Execution) {
 
 	safeExec := execution.WithContext(context.WithoutCancel(execution))
 	log := safeExec.Logger()
-	stack := execution.CompensationStack
+	stack := execution.State().CompensationSnapshot()
 	for i := len(stack) - 1; i >= 0; i-- {
 		entry := stack[i]
 		log.Info(fmt.Sprintf("Running compensation for step %s (path: %s)", entry.StepID, entry.Path))
@@ -357,13 +350,12 @@ func (e *Executor) runOnErrorHandler(execution *Execution, fe *FlowError) (handl
 	safeCtx := context.WithoutCancel(execution)
 	log := execution.Logger()
 	log.Info("Running flow-level on_error handler", "error_code", fe.Code)
+	safeExec := execution.WithContext(safeCtx)
 	var err error
-	execution.WithScopedContext(safeCtx, func() {
-		err = oee.ExecuteOnErrorHandler(execution, execution.Flow.OnErrorBody, fe)
-		if err != nil {
-			log.Error("on_error handler itself failed", "error", err)
-		}
-	})
+	err = oee.ExecuteOnErrorHandler(safeExec, execution.Flow.OnErrorBody, fe)
+	if err != nil {
+		log.Error("on_error handler itself failed", "error", err)
+	}
 	if err == nil {
 		return true, nil
 	}

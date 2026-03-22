@@ -21,7 +21,7 @@ type ValueStore interface {
 	Set(key string, value any)
 	Get(key string) (any, bool)
 	SetNested(prefix string, value any)
-	All() map[string]any
+	Snapshot() map[string]any // safe copy for external consumers
 }
 
 // StepExecutor executes a single flow step.

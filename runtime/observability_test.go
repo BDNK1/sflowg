@@ -129,9 +129,8 @@ func TestExecutionPluginLogs_DoNotDuplicatePluginAttr(t *testing.T) {
 	})))
 	exec := NewExecution(&Flow{ID: "payments"}, container, nil, &testValueStore{values: make(map[string]any)})
 
-	exec.WithActivePlugin("stripe", func() {
-		exec.Logger().Info("charged")
-	})
+	pluginExec := exec.WithActivePlugin("stripe")
+	pluginExec.Logger().Info("charged")
 
 	output := buf.String()
 	if count := strings.Count(output, `"plugin":"stripe"`); count != 1 {

@@ -34,7 +34,7 @@ type responseDescriptorStepExecutor struct {
 }
 
 func (s responseDescriptorStepExecutor) ExecuteStep(ctx context.Context, execution *Execution, step Step) (string, error) {
-	execution.ResponseDescriptor = s.descriptor
+	execution.State().SetResponse(s.descriptor)
 	return "", nil
 }
 
@@ -59,8 +59,12 @@ func (s *testValueStore) SetNested(prefix string, value any) {
 	s.values[prefix] = value
 }
 
-func (s *testValueStore) All() map[string]any {
-	return s.values
+func (s *testValueStore) Snapshot() map[string]any {
+	out := make(map[string]any, len(s.values))
+	for k, v := range s.values {
+		out[k] = v
+	}
+	return out
 }
 
 func TestHandleRequest_LogsCompletedRequests(t *testing.T) {

@@ -356,7 +356,7 @@ func TestExecuteSteps_RecordsRetryMetrics(t *testing.T) {
 	stepExecutor := &retryMetricStepExecutor{}
 	executor := NewExecutor(noopEvaluator{}, stepExecutor)
 
-	if err := executor.ExecuteSteps(&execution); err != nil {
+	if err := executor.ExecuteSteps(execution); err != nil {
 		t.Fatalf("expected retrying step to succeed, got %v", err)
 	}
 
@@ -394,7 +394,7 @@ func TestExecuteSteps_RecordsFallbackMetrics(t *testing.T) {
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 	executor := NewExecutor(noopEvaluator{}, fallbackMetricStepExecutor{})
 
-	if err := executor.ExecuteSteps(&execution); err != nil {
+	if err := executor.ExecuteSteps(execution); err != nil {
 		t.Fatalf("expected fallback execution to succeed, got %v", err)
 	}
 
@@ -432,10 +432,9 @@ func TestContainerTask_RecordsPluginMetrics(t *testing.T) {
 	}
 
 	execution := NewExecution(&Flow{ID: "payments"}, container, nil, newTestValueStore())
+	stepExec := execution.WithActiveStep("charge")
 	var err error
-	execution.WithActiveStep("charge", func() {
-		_, err = task.Execute(&execution, map[string]any{})
-	})
+	_, err = task.Execute(stepExec, map[string]any{})
 	if err != nil {
 		t.Fatalf("expected plugin task to succeed, got %v", err)
 	}

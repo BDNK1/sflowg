@@ -19,21 +19,17 @@ func TestBuildLogGlobals_UsesExecutionContext(t *testing.T) {
 
 	container := runtime.NewContainer(runtime.NewLogger(logger))
 
-	exec := &runtime.Execution{
-		ID:        "exec-123",
-		Flow:      &runtime.Flow{ID: "payment_flow"},
-		Container: container,
-	}
+	exec := runtime.NewExecution(&runtime.Flow{ID: "payment_flow"}, container, nil, runtime.NewValueStore())
+	exec.ID = "exec-123"
+	stepExec := exec.WithActiveStep("charge_card")
 
-	globals := BuildLogGlobals(exec)
+	globals := BuildLogGlobals(stepExec)
 	logModule := globals["log"].(map[string]any)
 	info := logModule["info"].(func(args ...any) error)
 
-	exec.WithActiveStep("charge_card", func() {
-		if err := info("payment started", map[string]any{"status": "pending"}); err != nil {
-			t.Fatalf("info() returned error: %v", err)
-		}
-	})
+	if err := info("payment started", map[string]any{"status": "pending"}); err != nil {
+		t.Fatalf("info() returned error: %v", err)
+	}
 
 	output := buf.String()
 	for _, want := range []string{`"source":"user"`, `"execution_id":"exec-123"`, `"flow_id":"payment_flow"`, `"step_id":"charge_card"`, `"payment started"`} {

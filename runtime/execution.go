@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,19 +36,67 @@ type CompensationEntry struct {
 	Path   SuccessPath
 }
 
+// RunState holds the shared mutable state for a flow execution.
+// It is created once per request and referenced by pointer in all derived Execution copies,
+// so all scoped views (WithContext, WithActiveStep, etc.) read and write the same state.
+type RunState struct {
+	mu        sync.RWMutex
+	store     ValueStore
+	response  *ResponseDescriptor
+	compStack []CompensationEntry
+}
+
+// Store returns the underlying ValueStore.
+func (s *RunState) Store() ValueStore {
+	return s.store
+}
+
+// SetResponse records the response produced by a step. Thread-safe.
+func (s *RunState) SetResponse(r *ResponseDescriptor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.response = r
+}
+
+// Response returns the current response descriptor, or nil. Thread-safe.
+func (s *RunState) Response() *ResponseDescriptor {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.response
+}
+
+// AppendCompensation adds a compensation entry. Thread-safe.
+func (s *RunState) AppendCompensation(entry CompensationEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.compStack = append(s.compStack, entry)
+}
+
+// CompensationSnapshot returns a copy of the compensation stack in current order.
+// The copy is safe to iterate while other code may still append. Thread-safe.
+func (s *RunState) CompensationSnapshot() []CompensationEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]CompensationEntry, len(s.compStack))
+	copy(out, s.compStack)
+	return out
+}
+
+// Execution is a lightweight, copyable scoped view of a running flow.
+// It carries per-scope metadata (active step, plugin, path) and a context for
+// deadline/cancellation. Shared mutable state lives in RunState, accessed via State().
+//
+// Derived copies are cheap — use WithContext / WithActiveStep / WithActivePath /
+// WithActivePlugin to create a new scope without mutating the parent.
 type Execution struct {
-	ID                 string
-	Store              ValueStore
-	Flow               *Flow
-	Container          *Container
-	ResponseDescriptor *ResponseDescriptor
-	CompensationStack  []CompensationEntry
-	activeStepID       string
-	activePath         SuccessPath
-	activePlugin       string
-	ctx                context.Context // real context carrying deadline/cancellation
-	cachedLogger       *Logger         // cached to avoid re-creating handler chain per call
-	cachedPlugin       string          // activePlugin when logger was cached
+	ID           string
+	Flow         *Flow
+	Container    *Container
+	ctx          context.Context // real context carrying deadline/cancellation
+	activeStepID string
+	activePath   SuccessPath
+	activePlugin string
+	state        *RunState // shared across all derived copies within one request
 }
 
 // context.Context implementation — delegates to the embedded ctx so that real
@@ -71,18 +120,23 @@ func (e *Execution) Value(key any) any {
 	}
 
 	k, ok := key.(string)
-	if !ok || e.Store == nil {
+	if !ok || e.state == nil || e.state.store == nil {
 		return e.ctx.Value(key)
 	}
 
-	if v, found := e.Store.Get(k); found {
+	if v, found := e.state.store.Get(k); found {
 		return v
 	}
 	return e.ctx.Value(key)
 }
 
-// WithContext returns a shallow copy of the Execution with a new embedded
-// context. Use this to apply a per-step timeout without mutating the parent.
+// State returns the shared mutable state for this execution.
+func (e *Execution) State() *RunState {
+	return e.state
+}
+
+// WithContext returns a shallow copy of the Execution with a new embedded context.
+// Use this to apply a per-step timeout without mutating the parent.
 // Mirrors the http.Request.WithContext pattern.
 func (e *Execution) WithContext(ctx context.Context) *Execution {
 	copy := *e
@@ -90,22 +144,35 @@ func (e *Execution) WithContext(ctx context.Context) *Execution {
 	return &copy
 }
 
-// WithScopedContext temporarily swaps the execution context while fn runs.
-// This keeps execution state on a single object while allowing step-scoped
-// deadlines/cancellation to propagate to plugins that use exec as context.Context.
-// Execution is single-threaded, so temporary ctx mutation is safe here.
-func (e *Execution) WithScopedContext(ctx context.Context, fn func()) {
-	e.withScope(executionScope{ctx: ctx, setCtx: true}, fn)
+// WithActiveStep returns a shallow copy with the given step ID in scope.
+// Replaces the previous callback-based WithActiveStep(stepID, fn) pattern.
+func (e *Execution) WithActiveStep(stepID string) *Execution {
+	copy := *e
+	copy.activeStepID = stepID
+	return &copy
+}
+
+// WithActivePath returns a shallow copy with the given execution path in scope.
+// Replaces the previous callback-based WithActivePath(path, fn) pattern.
+func (e *Execution) WithActivePath(path SuccessPath) *Execution {
+	copy := *e
+	copy.activePath = path
+	return &copy
+}
+
+// WithActivePlugin returns a shallow copy with the given plugin name in scope.
+// Replaces the previous callback-based WithActivePlugin(pluginName, fn) pattern.
+func (e *Execution) WithActivePlugin(pluginName string) *Execution {
+	copy := *e
+	copy.activePlugin = pluginName
+	return &copy
 }
 
 func (e *Execution) AddValue(k string, v any) {
-	e.Store.Set(k, v)
+	e.state.store.Set(k, v)
 }
 
 func (e *Execution) Logger() Logger {
-	if e.cachedLogger != nil && e.cachedPlugin == e.activePlugin {
-		return *e.cachedLogger
-	}
 	if e.Container == nil {
 		return NewLogger(nil).WithContext(e)
 	}
@@ -113,10 +180,7 @@ func (e *Execution) Logger() Logger {
 	if e.activePlugin != "" {
 		base = base.ForPlugin(e.activePlugin)
 	}
-	l := base.WithContext(e)
-	e.cachedLogger = &l
-	e.cachedPlugin = e.activePlugin
-	return l
+	return base.WithContext(e)
 }
 
 func (e *Execution) Tracer() trace.Tracer {
@@ -133,66 +197,6 @@ func (e *Execution) Metrics() *Metrics {
 	return e.Container.Metrics()
 }
 
-type executionScope struct {
-	ctx        context.Context
-	setCtx     bool
-	stepID     string
-	setStepID  bool
-	path       SuccessPath
-	setPath    bool
-	pluginName string
-	setPlugin  bool
-}
-
-func (e *Execution) withScope(scope executionScope, fn func()) {
-	prevCtx := e.ctx
-	prevStepID := e.activeStepID
-	prevPath := e.activePath
-	prevPlugin := e.activePlugin
-	prevLogger := e.cachedLogger
-	prevCachedPlugin := e.cachedPlugin
-
-	if scope.setCtx {
-		if scope.ctx == nil {
-			scope.ctx = context.Background()
-		}
-		e.ctx = scope.ctx
-	}
-	if scope.setStepID {
-		e.activeStepID = scope.stepID
-	}
-	if scope.setPath {
-		e.activePath = scope.path
-	}
-	if scope.setPlugin {
-		e.activePlugin = scope.pluginName
-		e.cachedLogger = nil
-	}
-
-	defer func() {
-		e.ctx = prevCtx
-		e.activeStepID = prevStepID
-		e.activePath = prevPath
-		e.activePlugin = prevPlugin
-		e.cachedLogger = prevLogger
-		e.cachedPlugin = prevCachedPlugin
-	}()
-
-	fn()
-}
-
-func (e *Execution) WithActiveStep(stepID string, fn func()) {
-	e.withScope(executionScope{stepID: stepID, setStepID: true}, fn)
-}
-
-func (e *Execution) WithActivePath(path SuccessPath, fn func()) {
-	e.withScope(executionScope{path: path, setPath: true}, fn)
-}
-
-func (e *Execution) WithActivePlugin(pluginName string, fn func()) {
-	e.withScope(executionScope{pluginName: pluginName, setPlugin: true}, fn)
-}
-
 // ActiveStepID returns the current step ID, if inside a step scope.
 func (e *Execution) ActiveStepID() string {
 	return e.activeStepID
@@ -205,7 +209,7 @@ func (e *Execution) ActivePath() SuccessPath {
 
 // Values returns the full context map for expression evaluation.
 func (e *Execution) Values() map[string]any {
-	return e.Store.All()
+	return e.state.store.Snapshot()
 }
 
 func (e *Execution) observabilityAttrs() []slog.Attr {
@@ -224,14 +228,17 @@ func (e *Execution) observabilityAttrs() []slog.Attr {
 	return attrs
 }
 
-func NewExecution(flow *Flow, container *Container, globalProperties map[string]any, store ValueStore) Execution {
+// NewExecution creates a new execution for the given flow.
+// Returns a pointer — all derived copies (WithContext, WithActiveStep, etc.) share
+// the same RunState so state mutations are visible across all scopes.
+func NewExecution(flow *Flow, container *Container, globalProperties map[string]any, store ValueStore) *Execution {
 	id := uuid.New().String()
-	exec := Execution{
+	exec := &Execution{
 		ID:        id,
-		Store:     store,
 		Flow:      flow,
 		Container: container,
 		ctx:       context.Background(),
+		state:     &RunState{store: store},
 	}
 
 	// Merge properties: global properties first, then flow properties (flow overrides).

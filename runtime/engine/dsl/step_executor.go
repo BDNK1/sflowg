@@ -71,11 +71,11 @@ func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execu
 
 	// Store the step result under the step ID, but skip if a response
 	// descriptor was set (the step produced a response, not a stored value).
-	if result != nil && execution.ResponseDescriptor == nil {
+	if result != nil && execution.State().Response() == nil {
 		if m, ok := result.(map[string]any); ok {
-			execution.Store.SetNested(step.ID, m)
+			execution.State().Store().SetNested(step.ID, m)
 		} else {
-			execution.Store.Set(step.ID, result)
+			execution.State().Store().Set(step.ID, result)
 		}
 	}
 
@@ -108,7 +108,7 @@ func (e *StepExecutor) ExecuteCompensation(execution *runtime.Execution, body st
 func (e *StepExecutor) buildEnv(execution *runtime.Execution) map[string]any {
 	globals := make(map[string]any)
 
-	for k, v := range execution.Store.All() {
+	for k, v := range execution.State().Store().Snapshot() {
 		globals[k] = v
 	}
 
