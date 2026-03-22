@@ -45,11 +45,8 @@ func (w *pluginTaskWrapper) Execute(exec *Execution, args map[string]any) (map[s
 
 	var result map[string]any
 	var err error
-	exec.WithScopedContext(spanCtx, func() {
-		exec.WithActivePlugin(w.binding.PluginName, func() {
-			result, err = pluginexec.CallTask(w.binding, exec, args)
-		})
-	})
+	pluginExec := exec.WithContext(spanCtx).WithActivePlugin(w.binding.PluginName)
+	result, err = pluginexec.CallTask(w.binding, pluginExec, args)
 
 	if err != nil {
 		span.RecordError(err)

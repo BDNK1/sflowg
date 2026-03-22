@@ -30,7 +30,7 @@ func TestDSLMetricCounter_DefaultValue(t *testing.T) {
 	interp := &Interpreter{}
 	globals := make(map[string]any)
 
-	metricGlobals := BuildMetricGlobals(&exec)
+	metricGlobals := BuildMetricGlobals(exec)
 	for k, v := range metricGlobals {
 		globals[k] = v
 	}
@@ -70,7 +70,7 @@ func TestDSLMetricCounter_WithValueAndLabels(t *testing.T) {
 	interp := &Interpreter{}
 	globals := make(map[string]any)
 
-	metricGlobals := BuildMetricGlobals(&exec)
+	metricGlobals := BuildMetricGlobals(exec)
 	for k, v := range metricGlobals {
 		globals[k] = v
 	}
@@ -109,7 +109,7 @@ func TestDSLMetricCounter_DropsExtraNonMapArgument(t *testing.T) {
 	interp := &Interpreter{}
 	globals := make(map[string]any)
 
-	metricGlobals := BuildMetricGlobals(&exec)
+	metricGlobals := BuildMetricGlobals(exec)
 	for k, v := range metricGlobals {
 		globals[k] = v
 	}
@@ -144,7 +144,7 @@ func TestDSLMetricHistogram(t *testing.T) {
 	interp := &Interpreter{}
 	globals := make(map[string]any)
 
-	metricGlobals := BuildMetricGlobals(&exec)
+	metricGlobals := BuildMetricGlobals(exec)
 	for k, v := range metricGlobals {
 		globals[k] = v
 	}
@@ -183,7 +183,7 @@ func TestDSLMetricGauge(t *testing.T) {
 	interp := &Interpreter{}
 	globals := make(map[string]any)
 
-	metricGlobals := BuildMetricGlobals(&exec)
+	metricGlobals := BuildMetricGlobals(exec)
 	for k, v := range metricGlobals {
 		globals[k] = v
 	}
@@ -222,7 +222,7 @@ func TestDSLMetricInvalidCall_DoesNotFail(t *testing.T) {
 	interp := &Interpreter{}
 	globals := make(map[string]any)
 
-	metricGlobals := BuildMetricGlobals(&exec)
+	metricGlobals := BuildMetricGlobals(exec)
 	for k, v := range metricGlobals {
 		globals[k] = v
 	}
@@ -259,7 +259,7 @@ func TestDSLPredeclaredHandle_Counter(t *testing.T) {
 	interp := &Interpreter{}
 	globals := make(map[string]any)
 
-	metricGlobals := BuildMetricGlobals(&exec)
+	metricGlobals := BuildMetricGlobals(exec)
 	for k, v := range metricGlobals {
 		globals[k] = v
 	}

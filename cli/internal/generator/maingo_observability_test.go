@@ -74,6 +74,29 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 	}
 }
 
+func TestGenerate_UsesRuntimeValueStoreConstructor(t *testing.T) {
+	gen := NewMainGoGenerator(
+		"github.com/example/ecom",
+		"8080",
+		false,
+		nil,
+		config.ObservabilityConfig{},
+	)
+
+	content, err := gen.Generate()
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if !strings.Contains(content, "newValueStore := func() runtime.ValueStore { return runtime.NewValueStore() }") {
+		t.Fatalf("generated main.go missing runtime value store constructor\n%s", content)
+	}
+
+	if strings.Contains(content, "dslengine.NewValueStore()") {
+		t.Fatalf("generated main.go still references removed dslengine.NewValueStore constructor\n%s", content)
+	}
+}
+
 func TestGenerate_IncludesUserMetricsDeclarations(t *testing.T) {
 	gen := NewMainGoGenerator(
 		"github.com/example/ecom",

@@ -312,7 +312,7 @@ func main() {
 	loader := dslengine.NewFlowLoader()
 	evaluator := dslengine.NewExpressionEvaluator()
 	stepExecutor := dslengine.NewStepExecutor()
-	newValueStore := func() runtime.ValueStore { return dslengine.NewValueStore() }
+	newValueStore := func() runtime.ValueStore { return runtime.NewValueStore() }
 
 	// Create app and start server (runtime handles everything)
 	// Runtime will: Initialize plugins → LoadFlows → Setup Gin → Handle signals → Graceful shutdown

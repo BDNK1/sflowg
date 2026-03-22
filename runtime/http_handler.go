@@ -60,10 +60,10 @@ func beginRequestScope(c *gin.Context, flow *Flow, route string, execution *Exec
 	cancel := func() {}
 	if flow.Timeout > 0 {
 		ctx, timeoutCancel := context.WithTimeout(spanCtx, time.Duration(flow.Timeout)*time.Millisecond)
-		*execution = *execution.WithContext(ctx)
+		execution = execution.WithContext(ctx)
 		cancel = timeoutCancel
 	} else {
-		*execution = *execution.WithContext(spanCtx)
+		execution = execution.WithContext(spanCtx)
 	}
 
 	return &requestScope{
@@ -119,15 +119,18 @@ func handleRequest(flow *Flow, route string, container *Container, executor *Exe
 		e := NewExecution(flow, container, globalProperties, newValueStore())
 		var requestErr error
 		var flowErr error
-		scope := beginRequestScope(c, flow, route, &e)
+		scope := beginRequestScope(c, flow, route, e)
+		// beginRequestScope derives a new *Execution with the span/timeout context.
+		// Use scope.execution so ExecuteSteps and response dispatch run with the right ctx.
+		e = scope.execution
 		defer func() {
 			scope.finish(c, requestErr)
 		}()
 		log := scope.log
 
-		extractRequestData(c, flow, &e, withBody)
+		extractRequestData(c, flow, e, withBody)
 
-		flowErr = executor.ExecuteSteps(&e)
+		flowErr = executor.ExecuteSteps(e)
 		if flowErr != nil {
 			requestErr = flowErr
 			scope.span.RecordError(flowErr)
@@ -137,8 +140,8 @@ func handleRequest(flow *Flow, route string, container *Container, executor *Exe
 				"method", c.Request.Method,
 				"error", flowErr)
 			// on_error handler may have set a response descriptor despite execution failure.
-			if e.ResponseDescriptor != nil {
-				if err := dispatchResponse(c, &e); err != nil {
+			if e.State().Response() != nil {
+				if err := dispatchResponse(c, e); err != nil {
 					requestErr = err
 					scope.span.RecordError(err)
 					scope.span.SetStatus(codes.Error, err.Error())
@@ -151,7 +154,7 @@ func handleRequest(flow *Flow, route string, container *Container, executor *Exe
 			return
 		}
 
-		if err := dispatchResponse(c, &e); err != nil {
+		if err := dispatchResponse(c, e); err != nil {
 			requestErr = err
 			scope.span.RecordError(err)
 			scope.span.SetStatus(codes.Error, err.Error())
@@ -159,20 +162,21 @@ func handleRequest(flow *Flow, route string, container *Container, executor *Exe
 	}
 }
 
-// dispatchResponse handles the HTTP response dispatch based on the execution's ResponseDescriptor.
+// dispatchResponse handles the HTTP response dispatch based on the execution's RunState response.
 // If no descriptor was set by any step, returns a default 200 OK.
 func dispatchResponse(c *gin.Context, execution *Execution) error {
 	log := execution.Logger()
-	if execution.ResponseDescriptor == nil {
+	rd := execution.State().Response()
+	if rd == nil {
 		c.JSON(http.StatusOK, gin.H{"status": "success"})
 		return nil
 	}
 
-	handler, ok := execution.Container.ResponseHandlers.Get(execution.ResponseDescriptor.HandlerName)
+	handler, ok := execution.Container.ResponseHandlers.Get(rd.HandlerName)
 	if !ok {
-		err := fmt.Errorf("unknown response handler: %s", execution.ResponseDescriptor.HandlerName)
+		err := fmt.Errorf("unknown response handler: %s", rd.HandlerName)
 		log.Error("Unknown response handler",
-			"handler", execution.ResponseDescriptor.HandlerName,
+			"handler", rd.HandlerName,
 			"error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"message": err.Error(),
@@ -180,9 +184,9 @@ func dispatchResponse(c *gin.Context, execution *Execution) error {
 		return err
 	}
 
-	if err := handler.Handle(c, execution, execution.ResponseDescriptor.Args); err != nil {
+	if err := handler.Handle(c, execution, rd.Args); err != nil {
 		log.Error("Response handler execution failed",
-			"handler", execution.ResponseDescriptor.HandlerName,
+			"handler", rd.HandlerName,
 			"error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"message": "Error generating response: " + err.Error(),
@@ -265,5 +269,5 @@ func extractJsonBody(c *gin.Context, e *Execution) {
 		return
 	}
 
-	e.Store.SetNested(RequestBodyPrefix, parsed)
+	e.State().Store().SetNested(RequestBodyPrefix, parsed)
 }

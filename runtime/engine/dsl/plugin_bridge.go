@@ -68,10 +68,10 @@ func BuildResponseGlobals(exec *runtime.Execution) map[string]any {
 			if err != nil {
 				return err
 			}
-			exec.ResponseDescriptor = &runtime.ResponseDescriptor{
+			exec.State().SetResponse(&runtime.ResponseDescriptor{
 				HandlerName: hn,
 				Args:        argsMap,
-			}
+			})
 			return nil
 		}
 	}

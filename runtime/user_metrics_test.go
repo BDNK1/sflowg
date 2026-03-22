@@ -241,12 +241,9 @@ func TestRecordUserCounter_DynamicEmitsDatapoint(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	execution.WithActivePath(SuccessPathPrimary, func() {
-		execution.WithActiveStep("charge", func() {
-			metrics.RecordUserCounter(&execution, "checkout_attempts", 1, map[string]any{
-				"provider": "stripe",
-			})
-		})
+	stepExec := execution.WithActivePath(SuccessPathPrimary).WithActiveStep("charge")
+	metrics.RecordUserCounter(stepExec, "checkout_attempts", 1, map[string]any{
+		"provider": "stripe",
 	})
 
 	rm := collectMetrics(t, reader)
@@ -266,7 +263,7 @@ func TestRecordUserCounter_DropsNegativeValue(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserCounter(&execution, "bad_counter", -1, nil)
+	metrics.RecordUserCounter(execution, "bad_counter", -1, nil)
 
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
@@ -290,7 +287,7 @@ func TestRecordUserCounter_DropsZeroValue(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserCounter(&execution, "zero_counter", 0, nil)
+	metrics.RecordUserCounter(execution, "zero_counter", 0, nil)
 
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
@@ -313,7 +310,7 @@ func TestRecordUserUpDownCounter_SupportsNegativeDelta(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserUpDownCounter(&execution, "active_sessions", -1, nil)
+	metrics.RecordUserUpDownCounter(execution, "active_sessions", -1, nil)
 
 	rm := collectMetrics(t, reader)
 	got := findFloat64SumValue(t, rm, "sflowg.user.active_sessions", map[string]string{
@@ -332,7 +329,7 @@ func TestRecordUserHistogram_EmitsDatapoint(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserHistogram(&execution, "payment_latency_ms", 127.5, nil)
+	metrics.RecordUserHistogram(execution, "payment_latency_ms", 127.5, nil)
 
 	rm := collectMetrics(t, reader)
 	findHistogramCount(t, rm, "sflowg.user.payment_latency_ms", map[string]string{
@@ -348,7 +345,7 @@ func TestRecordUserGauge_EmitsDatapoint(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserGauge(&execution, "queue_depth", 42, nil)
+	metrics.RecordUserGauge(execution, "queue_depth", 42, nil)
 
 	rm := collectMetrics(t, reader)
 	findFloat64GaugeValue(t, rm, "sflowg.user.queue_depth", map[string]string{
@@ -365,9 +362,9 @@ func TestRecordUserCounter_DynamicTypeConflict(t *testing.T) {
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
 	// First call creates a counter.
-	metrics.RecordUserCounter(&execution, "my_metric", 1, nil)
+	metrics.RecordUserCounter(execution, "my_metric", 1, nil)
 	// Second call with different type should be dropped.
-	metrics.RecordUserHistogram(&execution, "my_metric", 100, nil)
+	metrics.RecordUserHistogram(execution, "my_metric", 100, nil)
 
 	rm := collectMetrics(t, reader)
 	// Should find the counter but not a histogram.
@@ -385,7 +382,7 @@ func TestRecordUserCounter_DropsReservedLabelKey(t *testing.T) {
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
 	// Using reserved key "flow.id" in labels should drop the entire datapoint.
-	metrics.RecordUserCounter(&execution, "bad_labels", 1, map[string]any{
+	metrics.RecordUserCounter(execution, "bad_labels", 1, map[string]any{
 		"flow.id": "override",
 	})
 
@@ -419,7 +416,7 @@ func TestRecordUserCounter_PredeclaredEnforcesEnum(t *testing.T) {
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
 	// Valid enum value should work.
-	metrics.RecordUserCounter(&execution, "checkout_attempts", 1, map[string]any{
+	metrics.RecordUserCounter(execution, "checkout_attempts", 1, map[string]any{
 		"provider": "stripe",
 	})
 
@@ -443,7 +440,7 @@ func TestRecordUserMetrics_AutoAttachesPropertyContext(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	metrics.RecordUserCounter(&execution, "checkout_attempts", 1, nil)
+	metrics.RecordUserCounter(execution, "checkout_attempts", 1, nil)
 
 	rm := collectMetrics(t, reader)
 	findFloat64SumValue(t, rm, "sflowg.user.checkout_attempts", map[string]string{
@@ -461,11 +458,8 @@ func TestRecordUserMetrics_FallbackPath(t *testing.T) {
 	flow := &Flow{ID: "payments"}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 
-	execution.WithActivePath(SuccessPathFallback, func() {
-		execution.WithActiveStep("charge", func() {
-			metrics.RecordUserCounter(&execution, "checkout_attempts", 1, nil)
-		})
-	})
+	stepExec := execution.WithActivePath(SuccessPathFallback).WithActiveStep("charge")
+	metrics.RecordUserCounter(stepExec, "checkout_attempts", 1, nil)
 
 	rm := collectMetrics(t, reader)
 	findFloat64SumValue(t, rm, "sflowg.user.checkout_attempts", map[string]string{
@@ -482,16 +476,14 @@ func TestWithActivePath_ScopesAndRestores(t *testing.T) {
 		t.Fatalf("expected empty path before scope, got %q", exec.ActivePath())
 	}
 
-	var insidePath SuccessPath
-	exec.WithActivePath(SuccessPathPrimary, func() {
-		insidePath = exec.ActivePath()
-	})
+	// WithActivePath returns a derived copy — the original is never mutated.
+	scopedExec := exec.WithActivePath(SuccessPathPrimary)
 
-	if insidePath != SuccessPathPrimary {
-		t.Fatalf("expected primary path inside scope, got %q", insidePath)
+	if scopedExec.ActivePath() != SuccessPathPrimary {
+		t.Fatalf("expected primary path in scoped copy, got %q", scopedExec.ActivePath())
 	}
 	if exec.ActivePath() != "" {
-		t.Fatalf("expected empty path after scope, got %q", exec.ActivePath())
+		t.Fatalf("expected original to remain unmodified after WithActivePath, got %q", exec.ActivePath())
 	}
 }
 

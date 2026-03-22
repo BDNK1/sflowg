@@ -1,4 +1,4 @@
-package dsl
+package runtime
 
 import (
 	"testing"
@@ -107,14 +107,14 @@ func TestValueStore_Get_NotFound(t *testing.T) {
 	}
 }
 
-func TestValueStore_All_ReturnsNestedMap(t *testing.T) {
+func TestValueStore_Snapshot_ReturnsNestedMap(t *testing.T) {
 	s := NewValueStore()
 
 	s.Set("step1.result", "val1")
 	s.Set("step2.result", "val2")
 
-	all := s.All()
-	step1, ok := all["step1"].(map[string]any)
+	snapshot := s.Snapshot()
+	step1, ok := snapshot["step1"].(map[string]any)
 	if !ok {
 		t.Fatal("step1 is not a map")
 	}
@@ -122,7 +122,7 @@ func TestValueStore_All_ReturnsNestedMap(t *testing.T) {
 		t.Errorf("step1.result = %v, want val1", step1["result"])
 	}
 
-	step2, ok := all["step2"].(map[string]any)
+	step2, ok := snapshot["step2"].(map[string]any)
 	if !ok {
 		t.Fatal("step2 is not a map")
 	}
@@ -140,5 +140,56 @@ func TestValueStore_OverwriteValue(t *testing.T) {
 	v, ok := s.Get("key")
 	if !ok || v != "second" {
 		t.Errorf("Get(key) = %v, want second", v)
+	}
+}
+
+func TestValueStore_Snapshot_DeepCopiesNestedMaps(t *testing.T) {
+	s := NewValueStore()
+
+	s.SetNested("response", map[string]any{
+		"body": map[string]any{
+			"id": "xyz",
+		},
+	})
+
+	snapshot := s.Snapshot()
+	response := snapshot["response"].(map[string]any)
+	body := response["body"].(map[string]any)
+	body["id"] = "mutated"
+
+	v, ok := s.Get("response.body.id")
+	if !ok || v != "xyz" {
+		t.Fatalf("store was mutated through snapshot: got %v, %v; want xyz, true", v, ok)
+	}
+}
+
+func TestValueStore_Snapshot_DeepCopiesSlices(t *testing.T) {
+	s := NewValueStore()
+
+	s.SetNested("response", map[string]any{
+		"items": []any{
+			map[string]any{"id": "a"},
+		},
+	})
+
+	snapshot := s.Snapshot()
+	response := snapshot["response"].(map[string]any)
+	items := response["items"].([]any)
+	items[0].(map[string]any)["id"] = "mutated"
+
+	v, ok := s.Get("response.items")
+	if !ok {
+		t.Fatal("response.items not found")
+	}
+	gotItems, ok := v.([]any)
+	if !ok {
+		t.Fatalf("response.items is %T, want []any", v)
+	}
+	gotFirst, ok := gotItems[0].(map[string]any)
+	if !ok {
+		t.Fatalf("response.items[0] is %T, want map[string]any", gotItems[0])
+	}
+	if gotFirst["id"] != "a" {
+		t.Fatalf("store slice element was mutated through snapshot: got %v, want a", gotFirst["id"])
 	}
 }

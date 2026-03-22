@@ -46,10 +46,10 @@ func TestExecuteSteps_TracingContextDoesNotRecurse(t *testing.T) {
 		Steps: []Step{{ID: "resolve_currency"}},
 	}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
-	execution = *execution.WithContext(context.Background())
+	execution = execution.WithContext(context.Background())
 
 	executor := NewExecutor(noopEvaluator{}, doneTouchStepExecutor{})
-	if err := executor.ExecuteSteps(&execution); err != nil {
+	if err := executor.ExecuteSteps(execution); err != nil {
 		t.Fatalf("expected ExecuteSteps to succeed, got %v", err)
 	}
 }
@@ -72,9 +72,9 @@ func TestPluginTask_TracingContextDoesNotRecurse(t *testing.T) {
 	}
 
 	execution := NewExecution(&Flow{ID: "payments"}, container, nil, newTestValueStore())
-	execution = *execution.WithContext(context.Background())
+	execution = execution.WithContext(context.Background())
 
-	result, err := task.Execute(&execution, map[string]any{})
+	result, err := task.Execute(execution, map[string]any{})
 	if err != nil {
 		t.Fatalf("expected task execution to succeed, got %v", err)
 	}
