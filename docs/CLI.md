@@ -1,6 +1,6 @@
 # SFlowG CLI
 
-The SFlowG CLI (`sflowg`) compiles YAML-based workflow definitions into standalone Go executables.
+The SFlowG CLI (`sflowg`) compiles flow definitions into standalone Go executables.
 
 ## Installation
 
@@ -82,8 +82,8 @@ sflowg build . --embed-flows
 my-project/
 ├── flow-config.yaml     # Project configuration (see FLOW_CONFIG.md)
 ├── flows/               # Flow definitions (see FLOW_SYNTAX.md)
-│   ├── auth.yaml
-│   └── payment.yaml
+│   ├── auth.flow
+│   └── payment.flow
 ├── plugins/             # Local plugins (optional)
 │   └── custom/
 │       ├── go.mod
@@ -127,6 +127,25 @@ Flags:
 ./my-app --flows ./flows --port 3000
 ```
 
+### Flow File Resolution
+
+In development mode, the generated binary resolves flow files in this order:
+1. `--flows <path>`
+2. `FLOWS_PATH`
+3. `flows/` next to the binary
+
+Notes:
+- Runtime flow loading currently reads `*.flow` files from the resolved directory.
+- The binary does not scan its own directory as a fallback.
+- On startup, the binary logs the resolved flows directory and its source (`flag`, `env`, `adjacent_flows_dir`, or `embedded`).
+
+Examples:
+```bash
+./my-app --flows ./flows
+FLOWS_PATH=/srv/my-app/flows ./my-app
+./my-app                     # uses ./flows next to the binary if present
+```
+
 ## Development Workflow
 
 ### 1. Create Project
@@ -143,23 +162,19 @@ plugins:
   - source: http
 ```
 
-Create `flows/hello.yaml`:
-```yaml
-id: hello_flow
-entrypoint:
-  type: http
-  config:
-    method: get
+Create `flows/hello.flow`:
+```sflowg
+entrypoint.http {
+    method: GET
     path: /hello
-steps:
-  - id: respond
-    type: assign
-    args:
-      message: "Hello, World!"
-return:
-  type: json
-  args:
-    message: respond.message
+}
+
+return response.json({
+    status: 200,
+    body: {
+        message: "Hello, World!"
+    }
+})
 ```
 
 ### 2. Build
@@ -187,114 +202,6 @@ curl http://localhost:8080/hello
 # {"message":"Hello, World!"}
 ```
 
-## Common Workflows
-
-### Multi-Environment Deployment
-
-Use environment variables for environment-specific configuration (see [FLOW_CONFIG.md](./FLOW_CONFIG.md#environment-variable-syntax)).
-
-```bash
-# Development (uses defaults)
-./my-app
-
-# Staging
-API_BASE_URL=https://staging-api.example.com ./my-app
-
-# Production
-API_BASE_URL=https://api.example.com ./my-app
-```
-
-### CI/CD Pipeline
-
-```bash
-#!/bin/bash
-set -e
-
-# Install CLI
-go install github.com/BDNK1/sflowg/cli@latest
-
-# Build production binary
-sflowg build . --embed-flows
-
-# Smoke test
-./my-app --port 8080 &
-sleep 2
-curl http://localhost:8080/health || exit 1
-kill $!
-
-# Deploy
-./deploy.sh ./my-app
-```
-
-## Troubleshooting
-
-### "plugin not found"
-
-**Cause:** Plugin source is not accessible.
-
-**Solutions:**
-- Core plugins: Verify plugin name exists (`http`)
-- Local plugins: Check path is correct and relative (`./plugins/custom`)
-- Remote plugins: Verify import path and network access
-
-### "required environment variable not set"
-
-**Cause:** Environment variable without default value is missing.
-
-**Solution:**
-```bash
-export VAR_NAME=value
-sflowg build .
-```
-
-See [FLOW_CONFIG.md](./FLOW_CONFIG.md#environment-variable-syntax) for syntax.
-
-### "flows not found" at runtime
-
-**Cause:** Binary can't locate flow files.
-
-**Solutions:**
-- Development mode: Provide `--flows` flag
-  ```bash
-  ./my-app --flows ./flows
-  ```
-- Production mode: Rebuild with `--embed-flows`
-  ```bash
-  sflowg build . --embed-flows
-  ```
-
-### Build is slow
-
-**Cause:** First build downloads Go dependencies.
-
-**Solutions:**
-- Subsequent builds use cached dependencies
-- Use local development mode:
-  ```bash
-  sflowg build . --runtime-path ../runtime --core-plugins-path ../plugins
-  ```
-
-## Best Practices
-
-1. **Lock plugin versions in production**
-   ```yaml
-   plugins:
-     - source: github.com/user/plugin
-       version: v1.2.3
-   ```
-
-2. **Use `--embed-flows` for production** - Single binary, immutable deployment
-
-3. **Use environment variables for secrets** - Never commit secrets to flow-config.yaml
-
-4. **Test locally before deploying**
-   ```bash
-   sflowg build .
-   ./my-app --flows ./flows
-   # verify it works
-   sflowg build . --embed-flows
-   ```
-
 ## Quick Reference
 
 ```bash
@@ -320,6 +227,6 @@ sflowg build --help
 ## Related Documentation
 
 - [FLOW_CONFIG.md](./FLOW_CONFIG.md) - Project configuration reference
-- [FLOW_SYNTAX.md](./FLOW_SYNTAX.md) - Flow YAML syntax reference
+- [FLOW_SYNTAX.md](./FLOW_SYNTAX.md) - Flow DSL syntax reference
 - [PLUGIN_DEVELOPMENT.md](./PLUGIN_DEVELOPMENT.md) - Creating custom plugins
 - [CLI Technical Docs](../cli/README.md) - CLI internals for contributors

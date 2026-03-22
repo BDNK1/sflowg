@@ -299,14 +299,17 @@ func main() {
 	if err != nil {
 		panic(fmt.Sprintf("Failed to extract embedded flows: %v", err))
 	}
+	flowsSource := "embedded"
 	defer os.RemoveAll(flowsDir) // Cleanup temp directory on exit
 {{- else}}
 	// Runtime mode: detect flows location at startup
-	flowsDir, err := findFlowsPath(*flowsPath)
+	flowsDir, flowsSource, err := findFlowsPath(*flowsPath)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to locate flows directory: %v\nUse --flows flag to specify location explicitly", err))
 	}
 {{- end}}
+
+	container.Logger().Info("Resolved flows directory", "path", flowsDir, "source", flowsSource)
 
 	// Create engine components
 	loader := dslengine.NewFlowLoader()
@@ -385,22 +388,22 @@ func extractEmbeddedFlows(fsys embed.FS, dir string) (string, error) {
 }
 {{- else}}
 
-// findFlowsPath locates the flows directory using smart detection
-func findFlowsPath(flagPath string) (string, error) {
+// findFlowsPath locates the flows directory using smart detection.
+func findFlowsPath(flagPath string) (string, string, error) {
 	// Priority 1: Use flag if provided
 	if flagPath != "" {
 		if _, err := os.Stat(flagPath); err == nil {
-			return flagPath, nil
+			return flagPath, "flag", nil
 		}
-		return "", fmt.Errorf("flows path from --flows flag does not exist: %s", flagPath)
+		return "", "", fmt.Errorf("flows path from --flows flag does not exist: %s", flagPath)
 	}
 
 	// Priority 2: Environment variable
 	if envPath := os.Getenv("FLOWS_PATH"); envPath != "" {
 		if _, err := os.Stat(envPath); err == nil {
-			return envPath, nil
+			return envPath, "env", nil
 		}
-		return "", fmt.Errorf("FLOWS_PATH environment variable points to non-existent path: %s", envPath)
+		return "", "", fmt.Errorf("FLOWS_PATH environment variable points to non-existent path: %s", envPath)
 	}
 
 	// Priority 3: Relative to binary location (flows/ subdirectory)
@@ -409,16 +412,11 @@ func findFlowsPath(flagPath string) (string, error) {
 		binaryDir := filepath.Dir(exe)
 		flowsPath := filepath.Join(binaryDir, "flows")
 		if _, err := os.Stat(flowsPath); err == nil {
-			return flowsPath, nil
-		}
-
-		// Priority 4: Same directory as binary
-		if _, err := os.Stat(binaryDir); err == nil {
-			return binaryDir, nil
+			return flowsPath, "adjacent_flows_dir", nil
 		}
 	}
 
-	return "", fmt.Errorf("flows directory not found at expected location\n\nOptions:\n  1. Place flows/ directory next to binary\n  2. Set FLOWS_PATH environment variable\n  3. Use --flows flag\n  4. Place flow files in same directory as binary\n\nExample:\n  FLOWS_PATH=/data/flows ./myapp\n  ./myapp --flows /data/flows")
+	return "", "", fmt.Errorf("flows directory not found at expected location\n\nResolution order:\n  1. --flows <path>\n  2. FLOWS_PATH environment variable\n  3. flows/ next to the binary\n\nExample:\n  FLOWS_PATH=/data/flows ./myapp\n  ./myapp --flows /data/flows")
 }
 {{- end}}
 
