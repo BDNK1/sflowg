@@ -137,7 +137,8 @@ func TestHandleRequest_EmitsSuccessMetrics(t *testing.T) {
 		},
 		Steps: []Step{{ID: "charge"}},
 	}
-	executor := NewExecutor(noopEvaluator{}, noopStepExecutor{})
+	stepExecutor := noopStepExecutor{}
+	executor := NewExecutor(noopEvaluator{}, stepExecutor, newIsolatedTestStepRunner(stepExecutor))
 	NewHttpHandler(flow, container, executor, nil, newTestValueStore, router)
 
 	req := httptest.NewRequest(http.MethodGet, "/payments", nil)
@@ -198,14 +199,15 @@ func TestHandleRequest_EmitsErrorMetrics(t *testing.T) {
 		},
 		Steps: []Step{{ID: "charge"}},
 	}
-	executor := NewExecutor(noopEvaluator{}, failingMetricStepExecutor{
+	stepExecutor := failingMetricStepExecutor{
 		err: &FlowError{
 			Type:    ErrorTypePermanent,
 			Code:    "DECLINED",
 			Message: "declined",
 			Step:    "charge",
 		},
-	})
+	}
+	executor := NewExecutor(noopEvaluator{}, stepExecutor, newIsolatedTestStepRunner(stepExecutor))
 	NewHttpHandler(flow, container, executor, nil, newTestValueStore, router)
 
 	req := httptest.NewRequest(http.MethodGet, "/payments", nil)
@@ -261,7 +263,8 @@ func TestHandleRequest_EmitsTimeoutMetrics(t *testing.T) {
 		},
 		Steps: []Step{{ID: "charge"}},
 	}
-	executor := NewExecutor(noopEvaluator{}, timeoutMetricStepExecutor{})
+	stepExecutor := timeoutMetricStepExecutor{}
+	executor := NewExecutor(noopEvaluator{}, stepExecutor, newIsolatedTestStepRunner(stepExecutor))
 	NewHttpHandler(flow, container, executor, nil, newTestValueStore, router)
 
 	req := httptest.NewRequest(http.MethodGet, "/payments", nil)
@@ -308,9 +311,10 @@ func TestHandleRequest_EmitsErrorFlowMetricWhenResponseDispatchFails(t *testing.
 		},
 		Steps: []Step{{ID: "respond", Type: "assign"}},
 	}
-	executor := NewExecutor(noopEvaluator{}, responseDescriptorStepExecutor{
+	stepExecutor := responseDescriptorStepExecutor{
 		descriptor: &ResponseDescriptor{HandlerName: "missing.handler"},
-	})
+	}
+	executor := NewExecutor(noopEvaluator{}, stepExecutor, newIsolatedTestStepRunner(stepExecutor))
 	NewHttpHandler(flow, container, executor, nil, newTestValueStore, router)
 
 	req := httptest.NewRequest(http.MethodGet, "/payments", nil)
@@ -354,7 +358,7 @@ func TestExecuteSteps_RecordsRetryMetrics(t *testing.T) {
 	}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 	stepExecutor := &retryMetricStepExecutor{}
-	executor := NewExecutor(noopEvaluator{}, stepExecutor)
+	executor := NewExecutor(noopEvaluator{}, stepExecutor, newIsolatedTestStepRunner(stepExecutor))
 
 	if err := executor.ExecuteSteps(execution); err != nil {
 		t.Fatalf("expected retrying step to succeed, got %v", err)
@@ -392,7 +396,8 @@ func TestExecuteSteps_RecordsFallbackMetrics(t *testing.T) {
 		}},
 	}
 	execution := NewExecution(flow, container, nil, newTestValueStore())
-	executor := NewExecutor(noopEvaluator{}, fallbackMetricStepExecutor{})
+	stepExecutor := fallbackMetricStepExecutor{}
+	executor := NewExecutor(noopEvaluator{}, stepExecutor, newIsolatedTestStepRunner(stepExecutor))
 
 	if err := executor.ExecuteSteps(execution); err != nil {
 		t.Fatalf("expected fallback execution to succeed, got %v", err)

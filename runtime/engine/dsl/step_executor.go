@@ -71,15 +71,22 @@ func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execu
 
 	// Store the step result under the step ID, but skip if a response
 	// descriptor was set (the step produced a response, not a stored value).
+	var next string
 	if result != nil && execution.State().Response() == nil {
 		if m, ok := result.(map[string]any); ok {
-			execution.State().Store().SetNested(step.ID, m)
+			if n, exists := m["__next"]; exists {
+				next = fmt.Sprintf("%v", n)
+				delete(m, "__next")
+			}
+			if len(m) > 0 {
+				execution.State().Store().SetNested(step.ID, m)
+			}
 		} else {
 			execution.State().Store().Set(step.ID, result)
 		}
 	}
 
-	return "", nil
+	return next, nil
 }
 
 // ExecuteOnErrorHandler runs the flow-level on_error Risor body.

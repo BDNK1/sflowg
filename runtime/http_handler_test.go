@@ -88,7 +88,8 @@ func TestHandleRequest_LogsCompletedRequests(t *testing.T) {
 			},
 		},
 	}
-	executor := NewExecutor(noopEvaluator{}, noopStepExecutor{})
+	stepExecutor := noopStepExecutor{}
+	executor := NewExecutor(noopEvaluator{}, stepExecutor, newIsolatedTestStepRunner(stepExecutor))
 
 	NewHttpHandler(flow, container, executor, nil, newTestValueStore, router)
 
@@ -142,7 +143,8 @@ func TestHandleRequest_ContinuesInboundTraceContext(t *testing.T) {
 			},
 		},
 	}
-	executor := NewExecutor(noopEvaluator{}, noopStepExecutor{})
+	stepExecutor := noopStepExecutor{}
+	executor := NewExecutor(noopEvaluator{}, stepExecutor, newIsolatedTestStepRunner(stepExecutor))
 
 	NewHttpHandler(flow, container, executor, nil, newTestValueStore, router)
 
@@ -189,9 +191,10 @@ func TestHandleRequest_MarksRootSpanErrorWhenResponseDispatchFails(t *testing.T)
 		},
 		Steps: []Step{{ID: "respond", Type: "assign"}},
 	}
-	executor := NewExecutor(noopEvaluator{}, responseDescriptorStepExecutor{
+	stepExecutor := responseDescriptorStepExecutor{
 		descriptor: &ResponseDescriptor{HandlerName: "missing.handler"},
-	})
+	}
+	executor := NewExecutor(noopEvaluator{}, stepExecutor, newIsolatedTestStepRunner(stepExecutor))
 
 	NewHttpHandler(flow, container, executor, nil, newTestValueStore, router)
 

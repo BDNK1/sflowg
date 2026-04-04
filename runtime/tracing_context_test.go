@@ -48,7 +48,8 @@ func TestExecuteSteps_TracingContextDoesNotRecurse(t *testing.T) {
 	execution := NewExecution(flow, container, nil, newTestValueStore())
 	execution = execution.WithContext(context.Background())
 
-	executor := NewExecutor(noopEvaluator{}, doneTouchStepExecutor{})
+	stepExecutor := doneTouchStepExecutor{}
+	executor := NewExecutor(noopEvaluator{}, stepExecutor, newIsolatedTestStepRunner(stepExecutor))
 	if err := executor.ExecuteSteps(execution); err != nil {
 		t.Fatalf("expected ExecuteSteps to succeed, got %v", err)
 	}

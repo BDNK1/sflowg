@@ -22,12 +22,13 @@ type App struct {
 	loader           FlowLoader
 	evaluator        ExpressionEvaluator
 	stepExecutor     StepExecutor
+	stepRunner       StepRunner
 	newValueStore    func() ValueStore
 }
 
 // NewApp creates a new application with the given container and engine components.
 // The container must be initialized with a logger before calling NewApp.
-func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, newValueStore func() ValueStore, _ ...ObservabilityConfig) *App {
+func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepRunner StepRunner, newValueStore func() ValueStore, _ ...ObservabilityConfig) *App {
 	return &App{
 		Container:        container,
 		Flows:            make(map[string]Flow),
@@ -35,6 +36,7 @@ func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluat
 		loader:           loader,
 		evaluator:        evaluator,
 		stepExecutor:     stepExecutor,
+		stepRunner:       stepRunner,
 		newValueStore:    newValueStore,
 	}
 }
@@ -74,7 +76,7 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 	router := gin.Default()
 
 	// Create executor for flow execution
-	executor := NewExecutor(a.evaluator, a.stepExecutor)
+	executor := NewExecutor(a.evaluator, a.stepExecutor, a.stepRunner)
 
 	// Register flow endpoints
 	for flowID := range a.Flows {

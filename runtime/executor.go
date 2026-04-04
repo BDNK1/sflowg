@@ -17,10 +17,11 @@ import (
 // Executor orchestrates flow step execution.
 // It handles the step loop, condition evaluation, retry logic, fallback routing,
 // compensation unwind, and the global on_error handler.
-// Delegating actual step execution to a StepExecutor.
+// Delegating normal step execution to a StepRunner.
 type Executor struct {
 	evaluator    ExpressionEvaluator
 	stepExecutor StepExecutor
+	stepRunner   StepRunner
 }
 
 // OnErrorExecutor is an optional interface that DSL step executors may implement
@@ -30,10 +31,11 @@ type OnErrorExecutor interface {
 	ExecuteCompensation(execution *Execution, body string, stepID string, path SuccessPath) error
 }
 
-func NewExecutor(evaluator ExpressionEvaluator, stepExecutor StepExecutor) *Executor {
+func NewExecutor(evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepRunner StepRunner) *Executor {
 	return &Executor{
 		evaluator:    evaluator,
 		stepExecutor: stepExecutor,
+		stepRunner:   stepRunner,
 	}
 }
 
@@ -71,9 +73,10 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 		}
 
 		// --- Primary body with retries ---
-		fe := e.executeStepWithRetries(execution, s, SuccessPathPrimary)
+		output, fe := e.executeStepWithRetries(execution, s, SuccessPathPrimary)
 
 		if fe == nil {
+			applyStepOutput(execution, s.ID, output)
 			// Primary succeeded.
 			if s.CompensateBody != "" {
 				execution.State().AppendCompensation(CompensationEntry{
@@ -89,9 +92,11 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 				fbStep := s
 				fbStep.Body = s.FallbackBody
 				fbStep.Retry = nil // fallback has no retry policy
-				fbFE := e.executeStepWithRetries(execution, fbStep, SuccessPathFallback)
+				fbOutput, fbFE := e.executeStepWithRetries(execution, fbStep, SuccessPathFallback)
 
 				if fbFE == nil {
+					applyStepOutput(execution, s.ID, fbOutput)
+					output = fbOutput
 					// Fallback succeeded — store its result under the original step ID
 					// so downstream steps and compensation code use a stable key.
 					if s.CompensateBody != "" {
@@ -119,8 +124,8 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 			break
 		}
 
-		if next := execution.Value(s.ID + ".__next"); next != nil {
-			nextStep = fmt.Sprintf("%v", next)
+		if output.Next != "" {
+			nextStep = output.Next
 		}
 	}
 
@@ -145,14 +150,15 @@ func (e *Executor) handleFailure(execution *Execution, fe *FlowError) error {
 }
 
 // executeStepWithRetries runs the step body respecting its RetryConfig.
-// Returns nil on success or the last FlowError on exhausted retries.
-func (e *Executor) executeStepWithRetries(execution *Execution, step Step, path SuccessPath) *FlowError {
+// Returns the winning StepOutput on success or the last FlowError on exhausted retries.
+func (e *Executor) executeStepWithRetries(execution *Execution, step Step, path SuccessPath) (StepOutput, *FlowError) {
 	parentCtx := execution.ctx
 	if parentCtx == nil {
 		parentCtx = context.Background()
 	}
 	start := time.Now()
 	var lastFE *FlowError
+	var zero StepOutput
 
 	spanCtx, span := execution.Tracer().Start(parentCtx, fmt.Sprintf("step %s", step.ID),
 		trace.WithAttributes(
@@ -206,12 +212,12 @@ attemptLoop:
 			}
 		}
 
-		var err error
 		stepExec := execution.WithContext(stepCtx).WithActivePath(path).WithActiveStep(step.ID)
-		_, err = e.stepExecutor.ExecuteStep(stepCtx, stepExec, step)
+		input := BuildStepInput(execution, step, path)
+		output, err := e.stepRunner.RunStep(stepCtx, stepExec, input)
 		if err == nil {
 			lastFE = nil
-			return nil
+			return output, nil
 		}
 
 		// Convert to FlowError.
@@ -243,7 +249,20 @@ attemptLoop:
 		)
 	}
 
-	return lastFE
+	return zero, lastFE
+}
+
+func applyStepOutput(execution *Execution, stepID string, output StepOutput) {
+	if output.Result != nil {
+		if m, ok := output.Result.(map[string]any); ok {
+			execution.State().Store().SetNested(stepID, m)
+		} else {
+			execution.State().Store().Set(stepID, output.Result)
+		}
+	}
+	if output.Response != nil {
+		execution.State().SetResponse(output.Response)
+	}
 }
 
 func lastFlowError(fe *FlowError) error {

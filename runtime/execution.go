@@ -46,6 +46,11 @@ type RunState struct {
 	compStack []CompensationEntry
 }
 
+// NewRunState creates a RunState around the provided store.
+func NewRunState(store ValueStore) *RunState {
+	return &RunState{store: store}
+}
+
 // Store returns the underlying ValueStore.
 func (s *RunState) Store() ValueStore {
 	return s.store
@@ -168,6 +173,14 @@ func (e *Execution) WithActivePlugin(pluginName string) *Execution {
 	return &copy
 }
 
+// WithIsolatedState returns a shallow copy that points at a different RunState.
+// Used by step runners to execute one step against isolated per-step state.
+func (e *Execution) WithIsolatedState(state *RunState) *Execution {
+	copy := *e
+	copy.state = state
+	return &copy
+}
+
 func (e *Execution) AddValue(k string, v any) {
 	e.state.store.Set(k, v)
 }
@@ -238,7 +251,7 @@ func NewExecution(flow *Flow, container *Container, globalProperties map[string]
 		Flow:      flow,
 		Container: container,
 		ctx:       context.Background(),
-		state:     &RunState{store: store},
+		state:     NewRunState(store),
 	}
 
 	// Merge properties: global properties first, then flow properties (flow overrides).

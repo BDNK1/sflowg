@@ -63,3 +63,37 @@ func NewTestMetricsWithReader(reader *sdkmetric.ManualReader, decls map[string]U
 
 	return metrics, nil
 }
+
+type isolatedTestStepRunner struct {
+	executor StepExecutor
+}
+
+func newIsolatedTestStepRunner(executor StepExecutor) StepRunner {
+	return isolatedTestStepRunner{executor: executor}
+}
+
+func (r isolatedTestStepRunner) RunStep(ctx context.Context, execution *Execution, input StepInput) (StepOutput, error) {
+	store := NewValueStore()
+	for k, v := range input.Input {
+		store.SetNested(k, v)
+	}
+
+	isolated := execution.WithIsolatedState(NewRunState(store))
+	step := Step{
+		ID:      input.StepID,
+		Body:    input.Body,
+		Timeout: input.Timeout,
+	}
+
+	next, err := r.executor.ExecuteStep(ctx, isolated, step)
+	if err != nil {
+		return StepOutput{}, err
+	}
+
+	result, _ := isolated.State().Store().Get(input.StepID)
+	return StepOutput{
+		Result:   result,
+		Response: isolated.State().Response(),
+		Next:     next,
+	}, nil
+}
