@@ -20,3 +20,11 @@ func NewExpressionEvaluator() *ExpressionEvaluator {
 func (e *ExpressionEvaluator) Eval(execution *runtime.Execution, expression string) (any, error) {
 	return risor.Eval(execution, expression, risor.WithEnv(convertGlobals(execution.Values())))
 }
+
+func (e *ExpressionEvaluator) EvalWithEnv(execution *runtime.Execution, expression string, extraVars map[string]any) (any, error) {
+	merged := execution.Values()
+	for k, v := range extraVars {
+		merged[k] = v
+	}
+	return risor.Eval(execution, expression, risor.WithEnv(convertGlobals(merged)))
+}

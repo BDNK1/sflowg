@@ -67,4 +67,4 @@ Parses Go source without execution. Discovers by convention:
 3. Create plugin instance with dependencies injected
 4. Register with container
 
-Then start app with `runtime.NewApp(container).Start()`.
+Then the generated `main.go` wires the runtime components, enables compiled DSL mode by passing a compiler into `runtime.NewApp(...)`, and starts the app.

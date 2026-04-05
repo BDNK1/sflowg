@@ -316,11 +316,12 @@ func main() {
 	evaluator := dslengine.NewExpressionEvaluator()
 	stepExecutor := dslengine.NewStepExecutor()
 	stepRunner := dslengine.NewLocalStepRunner(stepExecutor)
+	compiler := dslengine.NewCompiler()
 	newValueStore := func() runtime.ValueStore { return runtime.NewValueStore() }
 
 	// Create app and start server (runtime handles everything)
 	// Runtime will: Initialize plugins → LoadFlows → Setup Gin → Handle signals → Graceful shutdown
-	app := runtime.NewApp(container, loader, evaluator, stepExecutor, stepRunner, newValueStore, observabilityCfg)
+	app := runtime.NewApp(container, loader, evaluator, stepExecutor, stepRunner, compiler, newValueStore, observabilityCfg)
 
 {{- if .GlobalProperties}}
 	// Set global properties from flow-config.yaml

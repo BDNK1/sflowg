@@ -2,7 +2,16 @@ package runtime
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
+)
+
+type DSLExecutionMode string
+
+const (
+	DSLExecutionModeInterpreted DSLExecutionMode = "interpreted"
+	DSLExecutionModeCompiled    DSLExecutionMode = "compiled"
 )
 
 // FlowLoader loads flow definitions from files.
@@ -11,12 +20,18 @@ type FlowLoader interface {
 	Load(filePath string) (Flow, error)
 }
 
+// FlowCompiler pre-compiles flows after load time using runtime container context.
+type FlowCompiler interface {
+	CompileFlow(ctx context.Context, flow *Flow, container *Container) error
+}
+
 // ExpressionEvaluator evaluates expressions within a given execution.
 // The *Execution carries both the variable namespace (via Values()) and the
 // deadline/cancellation signal (it implements context.Context), so a single
 // parameter covers both concerns.
 type ExpressionEvaluator interface {
 	Eval(execution *Execution, expression string) (any, error)
+	EvalWithEnv(execution *Execution, expression string, extraVars map[string]any) (any, error)
 }
 
 // ValueStore manages execution state storage and retrieval.
@@ -47,11 +62,12 @@ type SideEffect struct {
 
 // StepInput is the canonical input passed to a single isolated step execution.
 type StepInput struct {
-	StepID  string         `json:"step_id"`
-	Body    string         `json:"body"`
-	Input   map[string]any `json:"input"`
-	Timeout int            `json:"timeout,omitempty"`
-	Path    SuccessPath    `json:"path,omitempty"`
+	StepID   string         `json:"step_id"`
+	Body     string         `json:"body"`
+	Input    map[string]any `json:"input"`
+	Timeout  int            `json:"timeout,omitempty"`
+	Path     SuccessPath    `json:"path,omitempty"`
+	Compiled any            `json:"-"`
 }
 
 // StepOutput is the canonical output produced by a single isolated step execution.
@@ -76,13 +92,32 @@ type StepRunner interface {
 }
 
 // BuildStepInput constructs the current canonical input shape for a step.
-// Phase 2 will swap the full snapshot with bounded keys without changing executor logic.
-func BuildStepInput(execution *Execution, step Step, path SuccessPath) StepInput {
-	return StepInput{
-		StepID:  step.ID,
-		Body:    step.Body,
-		Input:   execution.State().Store().Snapshot(),
-		Timeout: step.Timeout,
-		Path:    path,
+func BuildStepInput(execution *Execution, step Step, path SuccessPath) (StepInput, error) {
+	input := execution.State().Store().Snapshot()
+	if execution.DSLMode() == DSLExecutionModeCompiled {
+		if strings.TrimSpace(step.Body) != "" && step.StoreKeys == nil {
+			return StepInput{}, fmt.Errorf("compiled mode invariant violated: step %q is missing compiled store keys", step.ID)
+		}
+		if step.StoreKeys != nil {
+			input = boundedSnapshot(execution.State().Store(), step.StoreKeys)
+		}
 	}
+
+	return StepInput{
+		StepID:   step.ID,
+		Body:     step.Body,
+		Input:    input,
+		Timeout:  step.Timeout,
+		Path:     path,
+		Compiled: step.Compiled,
+	}, nil
+}
+
+func boundedSnapshot(store ValueStore, keys []string) map[string]any {
+	full := store.Snapshot()
+	result := make(map[string]any, len(keys))
+	for _, key := range keys {
+		result[key] = full[key]
+	}
+	return result
 }

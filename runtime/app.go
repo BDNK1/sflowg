@@ -23,12 +23,14 @@ type App struct {
 	evaluator        ExpressionEvaluator
 	stepExecutor     StepExecutor
 	stepRunner       StepRunner
+	compiler         FlowCompiler
 	newValueStore    func() ValueStore
 }
 
 // NewApp creates a new application with the given container and engine components.
+// Passing a non-nil compiler enables compiled DSL mode; nil keeps interpreted DSL mode.
 // The container must be initialized with a logger before calling NewApp.
-func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepRunner StepRunner, newValueStore func() ValueStore, _ ...ObservabilityConfig) *App {
+func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepRunner StepRunner, compiler FlowCompiler, newValueStore func() ValueStore, _ ...ObservabilityConfig) *App {
 	return &App{
 		Container:        container,
 		Flows:            make(map[string]Flow),
@@ -37,6 +39,7 @@ func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluat
 		evaluator:        evaluator,
 		stepExecutor:     stepExecutor,
 		stepRunner:       stepRunner,
+		compiler:         compiler,
 		newValueStore:    newValueStore,
 	}
 }
@@ -69,6 +72,12 @@ func (a *App) Start(ctx context.Context, port string, flowsDir string) error {
 	// Load flows at startup (runtime resolution)
 	if err := a.loadFlows(flowsDir); err != nil {
 		return err
+	}
+	a.Container.Logger().Info("DSL execution mode", "mode", a.dslMode())
+	if a.compiler != nil {
+		if err := a.compileFlows(ctx); err != nil {
+			return err
+		}
 	}
 
 	// Setup Gin router
@@ -202,7 +211,26 @@ func (a *App) shutdown(ctx context.Context) error {
 }
 
 func (a *App) registerFlow(flow Flow) {
+	flow.DSLMode = a.dslMode()
 	a.Flows[flow.ID] = flow
+}
+
+func (a *App) dslMode() DSLExecutionMode {
+	if a.compiler != nil {
+		return DSLExecutionModeCompiled
+	}
+	return DSLExecutionModeInterpreted
+}
+
+func (a *App) compileFlows(ctx context.Context) error {
+	for flowID := range a.Flows {
+		flow := a.Flows[flowID]
+		if err := a.compiler.CompileFlow(ctx, &flow, a.Container); err != nil {
+			return fmt.Errorf("compiling flow %s: %w", flowID, err)
+		}
+		a.Flows[flowID] = flow
+	}
+	return nil
 }
 
 // applyMetricContext reads properties.observability.metrics.context from

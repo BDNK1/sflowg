@@ -28,7 +28,7 @@ type Executor struct {
 // to provide flow-level on_error and compensation handlers.
 type OnErrorExecutor interface {
 	ExecuteOnErrorHandler(execution *Execution, body string, fe *FlowError) error
-	ExecuteCompensation(execution *Execution, body string, stepID string, path SuccessPath) error
+	ExecuteCompensation(execution *Execution, body string, stepID string, path SuccessPath, compiled any) error
 }
 
 func NewExecutor(evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepRunner StepRunner) *Executor {
@@ -80,9 +80,10 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 			// Primary succeeded.
 			if s.CompensateBody != "" {
 				execution.State().AppendCompensation(CompensationEntry{
-					StepID: s.ID,
-					Body:   s.CompensateBody,
-					Path:   SuccessPathPrimary,
+					StepID:   s.ID,
+					Body:     s.CompensateBody,
+					Path:     SuccessPathPrimary,
+					Compiled: s.CompensateCompiled,
 				})
 			}
 		} else {
@@ -91,6 +92,8 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 				log.Info(fmt.Sprintf("Primary failed for step %s, trying fallback", s.ID))
 				fbStep := s
 				fbStep.Body = s.FallbackBody
+				fbStep.Compiled = s.FallbackCompiled
+				fbStep.StoreKeys = s.FallbackStoreKeys
 				fbStep.Retry = nil // fallback has no retry policy
 				fbOutput, fbFE := e.executeStepWithRetries(execution, fbStep, SuccessPathFallback)
 
@@ -101,9 +104,10 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 					// so downstream steps and compensation code use a stable key.
 					if s.CompensateBody != "" {
 						execution.State().AppendCompensation(CompensationEntry{
-							StepID: s.ID,
-							Body:   s.CompensateBody,
-							Path:   SuccessPathFallback,
+							StepID:   s.ID,
+							Body:     s.CompensateBody,
+							Path:     SuccessPathFallback,
+							Compiled: s.CompensateCompiled,
 						})
 					}
 					fe = nil // mark as success
@@ -213,7 +217,11 @@ attemptLoop:
 		}
 
 		stepExec := execution.WithContext(stepCtx).WithActivePath(path).WithActiveStep(step.ID)
-		input := BuildStepInput(execution, step, path)
+		input, err := BuildStepInput(execution, step, path)
+		if err != nil {
+			lastFE = toFlowError(err, step.ID, attempt)
+			break
+		}
 		output, err := e.stepRunner.RunStep(stepCtx, stepExec, input)
 		if err == nil {
 			lastFE = nil
@@ -289,9 +297,9 @@ func (e *Executor) shouldRetry(execution *Execution, step Step, fe *FlowError) b
 
 	// If a `when` expression is set, evaluate it with `error` injected into the store.
 	if retry.When != "" {
-		execution.State().Store().Set("error", fe.ToMap())
-		result, err := e.evaluator.Eval(execution, retry.When)
-		execution.State().Store().Set("error", nil) // clean up regardless of result
+		result, err := e.evaluator.EvalWithEnv(execution, retry.When, map[string]any{
+			"error": fe.ToMap(),
+		})
 		if err != nil {
 			execution.Logger().Error("error evaluating retry when expression", "error", err)
 			return false
@@ -405,7 +413,7 @@ func (e *Executor) runIsolatedCompensation(execution *Execution, entry Compensat
 	}
 
 	isolatedExec := execution.WithIsolatedState(cloneRunStateSnapshot(execution.State().Store().Snapshot()))
-	err := oee.ExecuteCompensation(isolatedExec, entry.Body, entry.StepID, entry.Path)
+	err := oee.ExecuteCompensation(isolatedExec, entry.Body, entry.StepID, entry.Path, entry.Compiled)
 	if err != nil {
 		return RecoveryOutput{}, err
 	}

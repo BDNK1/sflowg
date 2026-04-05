@@ -31,9 +31,10 @@ const (
 // if a later step fails. The Path field indicates which branch succeeded so
 // compensation logic can apply the correct undo operation.
 type CompensationEntry struct {
-	StepID string
-	Body   string
-	Path   SuccessPath
+	StepID   string
+	Body     string
+	Path     SuccessPath
+	Compiled any
 }
 
 // RunState holds the shared mutable state for a flow execution.
@@ -251,6 +252,13 @@ func (e *Execution) ActiveStepID() string {
 // ActivePath returns the current execution path (primary/fallback), if set.
 func (e *Execution) ActivePath() SuccessPath {
 	return e.activePath
+}
+
+func (e *Execution) DSLMode() DSLExecutionMode {
+	if e == nil || e.Flow == nil || e.Flow.DSLMode == "" {
+		return DSLExecutionModeInterpreted
+	}
+	return e.Flow.DSLMode
 }
 
 // Values returns the full context map for expression evaluation.

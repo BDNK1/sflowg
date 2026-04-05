@@ -10,7 +10,7 @@ import (
 type scriptedStepExecutor struct {
 	runStep         func(ctx context.Context, execution *Execution, step Step) (string, error)
 	runOnError      func(execution *Execution, body string, fe *FlowError) error
-	runCompensation func(execution *Execution, body string, stepID string, path SuccessPath) error
+	runCompensation func(execution *Execution, body string, stepID string, path SuccessPath, compiled any) error
 }
 
 func (s *scriptedStepExecutor) ExecuteStep(ctx context.Context, execution *Execution, step Step) (string, error) {
@@ -27,11 +27,11 @@ func (s *scriptedStepExecutor) ExecuteOnErrorHandler(execution *Execution, body 
 	return s.runOnError(execution, body, fe)
 }
 
-func (s *scriptedStepExecutor) ExecuteCompensation(execution *Execution, body string, stepID string, path SuccessPath) error {
+func (s *scriptedStepExecutor) ExecuteCompensation(execution *Execution, body string, stepID string, path SuccessPath, compiled any) error {
 	if s.runCompensation == nil {
 		return nil
 	}
-	return s.runCompensation(execution, body, stepID, path)
+	return s.runCompensation(execution, body, stepID, path, compiled)
 }
 
 func newExecutorTestHarness(t *testing.T, flow *Flow, stepExecutor StepExecutor) (*Execution, *Executor) {
@@ -349,7 +349,7 @@ func TestExecuteSteps_CompensationStillWorks(t *testing.T) {
 			}
 			return "", &FlowError{Type: ErrorTypePermanent, Code: "FAIL", Message: "boom", Step: step.ID}
 		},
-		runCompensation: func(execution *Execution, body string, stepID string, path SuccessPath) error {
+		runCompensation: func(execution *Execution, body string, stepID string, path SuccessPath, compiled any) error {
 			compensated = true
 			if stepID != "reserve" || path != SuccessPathPrimary {
 				return errors.New("unexpected compensation target")
@@ -468,7 +468,7 @@ func TestCompensation_IsolatedExecutionMergesSideEffectsOnly(t *testing.T) {
 			}
 			return "", &FlowError{Type: ErrorTypePermanent, Code: "FAIL", Message: "boom", Step: step.ID}
 		},
-		runCompensation: func(execution *Execution, body string, stepID string, path SuccessPath) error {
+		runCompensation: func(execution *Execution, body string, stepID string, path SuccessPath, compiled any) error {
 			execution.State().RecordSideEffect(SideEffect{Plugin: "inventory", Method: "release"})
 			execution.State().Store().SetNested("compensation", map[string]any{"changed": true})
 			execution.State().SetResponse(&ResponseDescriptor{HandlerName: "http.json"})
@@ -512,7 +512,7 @@ func TestCompensation_FailureDoesNotLeakPartialState(t *testing.T) {
 			}
 			return "", &FlowError{Type: ErrorTypePermanent, Code: "FAIL", Message: "boom", Step: step.ID}
 		},
-		runCompensation: func(execution *Execution, body string, stepID string, path SuccessPath) error {
+		runCompensation: func(execution *Execution, body string, stepID string, path SuccessPath, compiled any) error {
 			execution.State().RecordSideEffect(SideEffect{Plugin: "inventory", Method: "release"})
 			execution.State().Store().SetNested("compensation", map[string]any{"changed": true})
 			return errors.New("compensation failed")

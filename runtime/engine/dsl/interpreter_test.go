@@ -2,6 +2,7 @@ package dsl
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -232,5 +233,75 @@ func TestInterpreterEval_NestedNonFuncMapRemainsLenient(t *testing.T) {
 	}
 	if result != true {
 		t.Errorf("expected true for missing key == nil, got %v", result)
+	}
+}
+
+func TestInterpreterCompileRun_RoundTrip(t *testing.T) {
+	interp := &Interpreter{}
+	ctx := context.Background()
+
+	code, err := interp.Compile(ctx, `x + y`, map[string]any{
+		"x": int64(1),
+		"y": int64(2),
+	})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	result, err := interp.Run(ctx, code, map[string]any{
+		"x": int64(10),
+		"y": int64(20),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result != int64(30) {
+		t.Fatalf("Run() = %v, want 30", result)
+	}
+}
+
+func TestInterpreterCompileRun_ReuseWithSupersetEnv(t *testing.T) {
+	interp := &Interpreter{}
+	ctx := context.Background()
+
+	code, err := interp.Compile(ctx, `value * 2`, map[string]any{
+		"value": int64(0),
+	})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	result, err := interp.Run(ctx, code, map[string]any{
+		"value": int64(21),
+		"extra": "ignored",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result != int64(42) {
+		t.Fatalf("Run() = %v, want 42", result)
+	}
+}
+
+func TestInterpreterCompileRun_MissingKeyFails(t *testing.T) {
+	interp := &Interpreter{}
+	ctx := context.Background()
+
+	code, err := interp.Compile(ctx, `x + y`, map[string]any{
+		"x": int64(1),
+		"y": int64(2),
+	})
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	_, err = interp.Run(ctx, code, map[string]any{
+		"x": int64(1),
+	})
+	if err == nil {
+		t.Fatal("expected missing-key error, got nil")
+	}
+	if !strings.Contains(err.Error(), "missing required globals") {
+		t.Fatalf("expected missing required globals error, got %v", err)
 	}
 }

@@ -5,8 +5,10 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/BDNK1/sflowg/runtime"
+	"github.com/deepnoodle-ai/risor/v2/pkg/bytecode"
 )
 
 // StepExecutor executes DSL step bodies via the Risor interpreter.
@@ -31,8 +33,7 @@ func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execu
 
 	execution.Logger().Info(fmt.Sprintf("Executing DSL step: %s", step.ID))
 
-	// Pass execution as context.Context so Risor honours deadline/cancellation.
-	result, err := e.interpreter.Eval(ctx, step.Body, globals)
+	result, err := e.evalStep(ctx, execution.DSLMode(), step.ID, step.Body, step.Compiled, globals)
 	if err != nil {
 		// Preserve FlowError values raised by DSL code.
 		if _, ok := err.(*runtime.FlowError); !ok {
@@ -94,21 +95,49 @@ func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execu
 func (e *StepExecutor) ExecuteOnErrorHandler(execution *runtime.Execution, body string, fe *runtime.FlowError) error {
 	globals := e.buildEnv(execution)
 	globals["error"] = fe.ToMap()
-	_, err := e.interpreter.Eval(execution, body, globals)
+	_, err := e.evalStep(execution, execution.DSLMode(), "on_error", body, execution.Flow.OnErrorCompiled, globals)
 	return err
 }
 
 // ExecuteCompensation runs a compensation Risor body for a previously-succeeded step.
 // Injects `compensation.step` and `compensation.path` so the body can apply the
 // correct undo logic depending on which execution branch produced side-effects.
-func (e *StepExecutor) ExecuteCompensation(execution *runtime.Execution, body string, stepID string, path runtime.SuccessPath) error {
+func (e *StepExecutor) ExecuteCompensation(execution *runtime.Execution, body string, stepID string, path runtime.SuccessPath, compiled any) error {
 	globals := e.buildEnv(execution)
 	globals["compensation"] = map[string]any{
 		"step": stepID,
 		"path": string(path),
 	}
-	_, err := e.interpreter.Eval(execution, body, globals)
+	_, err := e.evalStep(execution, execution.DSLMode(), stepID, body, compiled, globals)
 	return err
+}
+
+func (e *StepExecutor) evalStep(ctx context.Context, mode runtime.DSLExecutionMode, stepID string, body string, compiled any, globals map[string]any) (any, error) {
+	if strings.TrimSpace(body) == "" {
+		return nil, nil
+	}
+	if mode == runtime.DSLExecutionModeCompiled {
+		code, ok := compiled.(*bytecode.Code)
+		if !ok {
+			return nil, &runtime.FlowError{
+				Type:    runtime.ErrorTypePermanent,
+				Code:    string(runtime.ErrorCodeRuntimeError),
+				Message: fmt.Sprintf("compiled mode invariant violated: step %q is missing compiled bytecode", stepID),
+				Step:    stepID,
+			}
+		}
+		preSeedMissingKeys(globals, code)
+		return e.interpreter.Run(ctx, code, globals)
+	}
+	return e.interpreter.Eval(ctx, body, globals)
+}
+
+func preSeedMissingKeys(globals map[string]any, code *bytecode.Code) {
+	for _, key := range code.EnvKeys() {
+		if _, exists := globals[key]; !exists {
+			globals[key] = nil
+		}
+	}
 }
 
 // buildEnv assembles the env map for a step's Risor evaluation.

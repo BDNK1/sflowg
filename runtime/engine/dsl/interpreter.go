@@ -6,6 +6,7 @@ import (
 	"reflect"
 
 	risor "github.com/deepnoodle-ai/risor/v2"
+	"github.com/deepnoodle-ai/risor/v2/pkg/bytecode"
 	"github.com/deepnoodle-ai/risor/v2/pkg/object"
 	"github.com/deepnoodle-ai/risor/v2/pkg/op"
 )
@@ -19,6 +20,14 @@ type Interpreter struct{}
 
 func (i *Interpreter) Eval(ctx context.Context, code string, globals map[string]any) (any, error) {
 	return risor.Eval(ctx, code, risor.WithEnv(convertGlobals(globals)))
+}
+
+func (i *Interpreter) Compile(ctx context.Context, source string, templateEnv map[string]any) (*bytecode.Code, error) {
+	return risor.Compile(ctx, source, risor.WithEnv(convertGlobals(templateEnv)))
+}
+
+func (i *Interpreter) Run(ctx context.Context, code *bytecode.Code, globals map[string]any) (any, error) {
+	return risor.Run(ctx, code, risor.WithEnv(convertGlobals(globals)))
 }
 
 // convertGlobals prepares the globals map for Risor evaluation.

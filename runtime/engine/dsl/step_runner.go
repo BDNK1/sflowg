@@ -24,9 +24,10 @@ func (r *LocalStepRunner) RunStep(ctx context.Context, execution *runtime.Execut
 	isolatedState := runtime.NewRunState(store)
 	isolatedExec := execution.WithIsolatedState(isolatedState)
 	step := runtime.Step{
-		ID:      input.StepID,
-		Body:    input.Body,
-		Timeout: input.Timeout,
+		ID:       input.StepID,
+		Body:     input.Body,
+		Timeout:  input.Timeout,
+		Compiled: input.Compiled,
 	}
 
 	next, err := r.executor.ExecuteStep(ctx, isolatedExec, step)

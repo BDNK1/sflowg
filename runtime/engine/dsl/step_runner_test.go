@@ -203,3 +203,45 @@ func TestRunStep_NextAndSideEffectsCanCoexist(t *testing.T) {
 		t.Fatalf("expected 1 side effect, got %#v", output.SideEffects)
 	}
 }
+
+func TestRunStep_CompiledModeFailsWhenBytecodeMissing(t *testing.T) {
+	exec := newRunnerExecution()
+	exec.Flow.DSLMode = runtime.DSLExecutionModeCompiled
+	runner := NewLocalStepRunner(NewStepExecutor())
+
+	_, err := runner.RunStep(context.Background(), exec, runtime.StepInput{
+		StepID: "charge",
+		Body:   `42`,
+		Input:  map[string]any{},
+	})
+	if err == nil {
+		t.Fatal("expected compiled mode invariant error, got nil")
+	}
+
+	flowErr, ok := err.(*runtime.FlowError)
+	if !ok {
+		t.Fatalf("expected FlowError, got %T (%v)", err, err)
+	}
+	if flowErr.Code != string(runtime.ErrorCodeRuntimeError) {
+		t.Fatalf("expected runtime error code, got %#v", flowErr)
+	}
+}
+
+func TestRunStep_InterpretedModeIgnoresCompiledArtifacts(t *testing.T) {
+	exec := newRunnerExecution()
+	exec.Flow.DSLMode = runtime.DSLExecutionModeInterpreted
+	runner := NewLocalStepRunner(NewStepExecutor())
+
+	output, err := runner.RunStep(context.Background(), exec, runtime.StepInput{
+		StepID:   "charge",
+		Body:     `42`,
+		Input:    map[string]any{},
+		Compiled: struct{}{},
+	})
+	if err != nil {
+		t.Fatalf("expected interpreted mode success, got %v", err)
+	}
+	if output.Result != int64(42) && output.Result != 42 {
+		t.Fatalf("expected scalar result 42, got %#v", output.Result)
+	}
+}

@@ -1,13 +1,15 @@
 package runtime
 
 type Flow struct {
-	ID          string         `yaml:"id"`
-	Entrypoint  Entrypoint     `yaml:"entrypoint"`
-	Steps       []Step         `yaml:"steps"`
-	Properties  map[string]any `yaml:"properties"`
-	Return      Return         `yaml:"return"`
-	OnErrorBody string         `yaml:"-"`
-	Timeout     int            `yaml:"-"`
+	ID              string           `yaml:"id"`
+	Entrypoint      Entrypoint       `yaml:"entrypoint"`
+	Steps           []Step           `yaml:"steps"`
+	Properties      map[string]any   `yaml:"properties"`
+	Return          Return           `yaml:"return"`
+	DSLMode         DSLExecutionMode `yaml:"-" json:"-"`
+	OnErrorBody     string           `yaml:"-"`
+	OnErrorCompiled any              `yaml:"-" json:"-"`
+	Timeout         int              `yaml:"-"`
 }
 
 type Entrypoint struct {
@@ -16,16 +18,21 @@ type Entrypoint struct {
 }
 
 type Step struct {
-	ID             string         `yaml:"id"`
-	Type           string         `yaml:"type"`
-	Condition      string         `yaml:"condition,omitempty"`
-	Args           map[string]any `yaml:"args"`
-	Next           string         `yaml:"next,omitempty"`
-	Retry          *RetryConfig   `yaml:"retry,omitempty"`
-	Body           string         `yaml:"-"`
-	Timeout        int            `yaml:"-"`
-	FallbackBody   string         `yaml:"-"`
-	CompensateBody string         `yaml:"-"`
+	ID                 string         `yaml:"id"`
+	Type               string         `yaml:"type"`
+	Condition          string         `yaml:"condition,omitempty"`
+	Args               map[string]any `yaml:"args"`
+	Next               string         `yaml:"next,omitempty"`
+	Retry              *RetryConfig   `yaml:"retry,omitempty"`
+	Body               string         `yaml:"-"`
+	Timeout            int            `yaml:"-"`
+	StoreKeys          []string       `yaml:"-" json:"-"`
+	Compiled           any            `yaml:"-" json:"-"`
+	FallbackBody       string         `yaml:"-"`
+	FallbackStoreKeys  []string       `yaml:"-" json:"-"`
+	FallbackCompiled   any            `yaml:"-" json:"-"`
+	CompensateBody     string         `yaml:"-"`
+	CompensateCompiled any            `yaml:"-" json:"-"`
 }
 
 type Return struct {

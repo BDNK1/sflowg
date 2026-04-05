@@ -23,6 +23,10 @@ func (noopEvaluator) Eval(execution *Execution, expression string) (any, error) 
 	return nil, nil
 }
 
+func (noopEvaluator) EvalWithEnv(execution *Execution, expression string, extraVars map[string]any) (any, error) {
+	return nil, nil
+}
+
 type noopStepExecutor struct{}
 
 func (noopStepExecutor) ExecuteStep(ctx context.Context, execution *Execution, step Step) (string, error) {

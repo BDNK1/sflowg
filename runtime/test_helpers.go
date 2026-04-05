@@ -80,9 +80,10 @@ func (r isolatedTestStepRunner) RunStep(ctx context.Context, execution *Executio
 
 	isolated := execution.WithIsolatedState(NewRunState(store))
 	step := Step{
-		ID:      input.StepID,
-		Body:    input.Body,
-		Timeout: input.Timeout,
+		ID:       input.StepID,
+		Body:     input.Body,
+		Timeout:  input.Timeout,
+		Compiled: input.Compiled,
 	}
 
 	next, err := r.executor.ExecuteStep(ctx, isolated, step)
