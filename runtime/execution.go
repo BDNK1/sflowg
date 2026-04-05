@@ -40,10 +40,11 @@ type CompensationEntry struct {
 // It is created once per request and referenced by pointer in all derived Execution copies,
 // so all scoped views (WithContext, WithActiveStep, etc.) read and write the same state.
 type RunState struct {
-	mu        sync.RWMutex
-	store     ValueStore
-	response  *ResponseDescriptor
-	compStack []CompensationEntry
+	mu          sync.RWMutex
+	store       ValueStore
+	response    *ResponseDescriptor
+	compStack   []CompensationEntry
+	sideEffects []SideEffect
 }
 
 // NewRunState creates a RunState around the provided store.
@@ -84,6 +85,38 @@ func (s *RunState) CompensationSnapshot() []CompensationEntry {
 	defer s.mu.RUnlock()
 	out := make([]CompensationEntry, len(s.compStack))
 	copy(out, s.compStack)
+	return out
+}
+
+// RecordSideEffect appends one side effect record to the current run state.
+func (s *RunState) RecordSideEffect(effect SideEffect) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sideEffects = append(s.sideEffects, cloneSideEffect(effect))
+}
+
+// AppendSideEffects appends side effect records to the current run state.
+func (s *RunState) AppendSideEffects(effects ...SideEffect) {
+	if len(effects) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, effect := range effects {
+		s.sideEffects = append(s.sideEffects, cloneSideEffect(effect))
+	}
+}
+
+// SideEffects returns a copy of the accumulated side effects.
+func (s *RunState) SideEffects() []SideEffect {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]SideEffect, len(s.sideEffects))
+	for i, effect := range s.sideEffects {
+		out[i] = cloneSideEffect(effect)
+	}
 	return out
 }
 
@@ -265,4 +298,16 @@ func NewExecution(flow *Flow, container *Container, globalProperties map[string]
 	}
 
 	return exec
+}
+
+func cloneSideEffect(effect SideEffect) SideEffect {
+	return SideEffect{
+		Plugin:    effect.Plugin,
+		Method:    effect.Method,
+		Input:     cloneValue(effect.Input),
+		Output:    cloneValue(effect.Output),
+		Error:     effect.Error,
+		Duration:  effect.Duration,
+		Timestamp: effect.Timestamp,
+	}
 }

@@ -263,6 +263,9 @@ func applyStepOutput(execution *Execution, stepID string, output StepOutput) {
 	if output.Response != nil {
 		execution.State().SetResponse(output.Response)
 	}
+	if len(output.SideEffects) > 0 {
+		execution.State().AppendSideEffects(output.SideEffects...)
+	}
 }
 
 func lastFlowError(fe *FlowError) error {
@@ -336,8 +339,7 @@ func (e *Executor) computeDelay(retry *RetryConfig, attempt int) time.Duration {
 // Uses a detached context so compensation DB/HTTP calls complete even if the flow
 // context was already cancelled (e.g. by a timeout).
 func (e *Executor) runCompensations(execution *Execution) {
-	oee, ok := e.stepExecutor.(OnErrorExecutor)
-	if !ok {
+	if _, ok := e.stepExecutor.(OnErrorExecutor); !ok {
 		return
 	}
 
@@ -347,10 +349,13 @@ func (e *Executor) runCompensations(execution *Execution) {
 	for i := len(stack) - 1; i >= 0; i-- {
 		entry := stack[i]
 		log.Info(fmt.Sprintf("Running compensation for step %s (path: %s)", entry.StepID, entry.Path))
-		if err := oee.ExecuteCompensation(safeExec, entry.Body, entry.StepID, entry.Path); err != nil {
+		output, err := e.runIsolatedCompensation(safeExec, entry)
+		if err != nil {
 			log.Error(fmt.Sprintf("Compensation failed for step %s", entry.StepID), "error", err)
 			// Continue remaining compensations even on failure.
+			continue
 		}
+		applyCompensationOutput(execution, output)
 	}
 }
 
@@ -361,8 +366,7 @@ func (e *Executor) runOnErrorHandler(execution *Execution, fe *FlowError) (handl
 	if execution.Flow.OnErrorBody == "" {
 		return false, nil
 	}
-	oee, ok := e.stepExecutor.(OnErrorExecutor)
-	if !ok {
+	if _, ok := e.stepExecutor.(OnErrorExecutor); !ok {
 		return false, nil
 	}
 
@@ -370,15 +374,79 @@ func (e *Executor) runOnErrorHandler(execution *Execution, fe *FlowError) (handl
 	log := execution.Logger()
 	log.Info("Running flow-level on_error handler", "error_code", fe.Code)
 	safeExec := execution.WithContext(safeCtx)
-	var err error
-	err = oee.ExecuteOnErrorHandler(safeExec, execution.Flow.OnErrorBody, fe)
+	output, err, handled := e.runIsolatedOnError(safeExec, fe)
+	if !handled {
+		return false, nil
+	}
 	if err != nil {
 		log.Error("on_error handler itself failed", "error", err)
+		return true, err
 	}
-	if err == nil {
-		return true, nil
+	applyOnErrorOutput(execution, output)
+	return true, nil
+}
+
+func (e *Executor) runIsolatedOnError(execution *Execution, fe *FlowError) (RecoveryOutput, *FlowError, bool) {
+	oee := e.stepExecutor.(OnErrorExecutor)
+
+	isolatedExec := execution.WithIsolatedState(cloneRunStateSnapshot(execution.State().Store().Snapshot()))
+	err := oee.ExecuteOnErrorHandler(isolatedExec, execution.Flow.OnErrorBody, fe)
+	if err != nil {
+		return RecoveryOutput{}, toFlowError(err, "on_error", 0), true
 	}
-	return true, toFlowError(err, "on_error", 0)
+
+	return collectRecoveryOutput(isolatedExec.State()), nil, true
+}
+
+func (e *Executor) runIsolatedCompensation(execution *Execution, entry CompensationEntry) (RecoveryOutput, error) {
+	oee, ok := e.stepExecutor.(OnErrorExecutor)
+	if !ok {
+		return RecoveryOutput{}, nil
+	}
+
+	isolatedExec := execution.WithIsolatedState(cloneRunStateSnapshot(execution.State().Store().Snapshot()))
+	err := oee.ExecuteCompensation(isolatedExec, entry.Body, entry.StepID, entry.Path)
+	if err != nil {
+		return RecoveryOutput{}, err
+	}
+
+	return collectRecoveryOutput(isolatedExec.State()), nil
+}
+
+func applyOnErrorOutput(execution *Execution, output RecoveryOutput) {
+	if output.Response != nil {
+		execution.State().SetResponse(output.Response)
+	}
+	if len(output.SideEffects) > 0 {
+		execution.State().AppendSideEffects(output.SideEffects...)
+	}
+	mergeStoreSnapshot(execution.State().Store(), output.Store)
+}
+
+func applyCompensationOutput(execution *Execution, output RecoveryOutput) {
+	if len(output.SideEffects) > 0 {
+		execution.State().AppendSideEffects(output.SideEffects...)
+	}
+}
+
+func collectRecoveryOutput(state *RunState) RecoveryOutput {
+	return RecoveryOutput{
+		Response:    state.Response(),
+		SideEffects: state.SideEffects(),
+		Store:       state.Store().Snapshot(),
+	}
+}
+
+func cloneRunStateSnapshot(snapshot map[string]any) *RunState {
+	store := NewValueStore()
+	mergeStoreSnapshot(store, snapshot)
+	return NewRunState(store)
+}
+
+func mergeStoreSnapshot(store ValueStore, snapshot map[string]any) {
+	for key, value := range snapshot {
+		store.SetNested(key, value)
+	}
 }
 
 // evaluateCondition returns (skip=true, nil) when the condition is false,

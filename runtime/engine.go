@@ -1,6 +1,9 @@
 package runtime
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // FlowLoader loads flow definitions from files.
 type FlowLoader interface {
@@ -31,8 +34,16 @@ type StepExecutor interface {
 	ExecuteStep(ctx context.Context, execution *Execution, step Step) (next string, err error)
 }
 
-// SideEffect is a placeholder transport type for phase 1b.
-type SideEffect struct{}
+// SideEffect records one external plugin interaction that occurred during execution.
+type SideEffect struct {
+	Plugin    string        `json:"plugin"`
+	Method    string        `json:"method"`
+	Input     any           `json:"input,omitempty"`
+	Output    any           `json:"output,omitempty"`
+	Error     string        `json:"error,omitempty"`
+	Duration  time.Duration `json:"duration"`
+	Timestamp time.Time     `json:"timestamp"`
+}
 
 // StepInput is the canonical input passed to a single isolated step execution.
 type StepInput struct {
@@ -49,6 +60,14 @@ type StepOutput struct {
 	Response    *ResponseDescriptor `json:"response,omitempty"`
 	Next        string              `json:"next,omitempty"`
 	SideEffects []SideEffect        `json:"side_effects,omitempty"`
+}
+
+// RecoveryOutput is the canonical output collected from isolated on_error and
+// compensation execution.
+type RecoveryOutput struct {
+	Response    *ResponseDescriptor `json:"response,omitempty"`
+	SideEffects []SideEffect        `json:"side_effects,omitempty"`
+	Store       map[string]any      `json:"store,omitempty"`
 }
 
 // StepRunner runs one step against isolated state and returns its canonical output.
