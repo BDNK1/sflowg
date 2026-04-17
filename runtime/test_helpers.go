@@ -93,9 +93,8 @@ func (r isolatedTestStepRunner) RunStep(ctx context.Context, execution *Executio
 
 	result, _ := isolated.State().Store().Get(input.StepID)
 	return StepOutput{
-		Result:      result,
-		Response:    isolated.State().Response(),
-		Next:        next,
-		SideEffects: isolated.State().SideEffects(),
+		Result:   result,
+		Response: isolated.State().Response(),
+		Next:     next,
 	}, nil
 }

@@ -12,27 +12,6 @@ func newRunnerExecution() *runtime.Execution {
 	return runtime.NewExecution(&runtime.Flow{ID: "payments"}, runtime.NewContainer(runtime.NewLogger(nil)), nil, runtime.NewValueStore())
 }
 
-type sideEffectRunnerPlugin struct{}
-
-func (p *sideEffectRunnerPlugin) Charge(_ *runtime.Execution, args map[string]any) (map[string]any, error) {
-	return map[string]any{
-		"ok":       true,
-		"status":   "captured",
-		"response": map[string]any{"id": "pay_123"},
-	}, nil
-}
-
-func newRunnerExecutionWithPlugin(t *testing.T) *runtime.Execution {
-	t.Helper()
-
-	container := runtime.NewContainer(runtime.NewLogger(nil))
-	if err := container.RegisterPlugin("wallet", &sideEffectRunnerPlugin{}); err != nil {
-		t.Fatalf("RegisterPlugin failed: %v", err)
-	}
-
-	return runtime.NewExecution(&runtime.Flow{ID: "payments"}, container, nil, runtime.NewValueStore())
-}
-
 func TestRunStep_BasicMapResult(t *testing.T) {
 	runner := NewLocalStepRunner(NewStepExecutor())
 	output, err := runner.RunStep(context.Background(), newRunnerExecution(), runtime.StepInput{
@@ -74,7 +53,7 @@ func TestRunStep_EmptyBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
-	if output.Result != nil || output.Response != nil || output.Next != "" || len(output.SideEffects) != 0 {
+	if output.Result != nil || output.Response != nil || output.Next != "" {
 		t.Fatalf("expected zero output, got %#v", output)
 	}
 }
@@ -150,57 +129,6 @@ func TestRunStep_ErrorPropagation(t *testing.T) {
 	var flowErr *runtime.FlowError
 	if !errors.As(err, &flowErr) {
 		t.Fatalf("expected FlowError, got %T (%v)", err, err)
-	}
-}
-
-func TestRunStep_ReturnsSideEffectsForSuccessfulPluginCall(t *testing.T) {
-	runner := NewLocalStepRunner(NewStepExecutor())
-	output, err := runner.RunStep(context.Background(), newRunnerExecutionWithPlugin(t), runtime.StepInput{
-		StepID: "charge",
-		Body:   `wallet.charge({amount: 42, payload: {card: "4242"}})`,
-		Input:  map[string]any{},
-	})
-	if err != nil {
-		t.Fatalf("expected success, got %v", err)
-	}
-	if len(output.SideEffects) != 1 {
-		t.Fatalf("expected 1 side effect, got %#v", output.SideEffects)
-	}
-
-	effect := output.SideEffects[0]
-	if effect.Plugin != "wallet" || effect.Method != "charge" {
-		t.Fatalf("expected wallet.charge side effect, got %#v", effect)
-	}
-
-	input, ok := effect.Input.(map[string]any)
-	if !ok {
-		t.Fatalf("expected summarized input map, got %#v", effect.Input)
-	}
-	if input["amount"] != int64(42) && input["amount"] != 42 {
-		t.Fatalf("expected scalar amount to be preserved, got %#v", input["amount"])
-	}
-
-	payload, ok := input["payload"].(map[string]any)
-	if !ok || payload["type"] != "object" || payload["size"] != 1 {
-		t.Fatalf("expected nested payload summary, got %#v", input["payload"])
-	}
-}
-
-func TestRunStep_NextAndSideEffectsCanCoexist(t *testing.T) {
-	runner := NewLocalStepRunner(NewStepExecutor())
-	output, err := runner.RunStep(context.Background(), newRunnerExecutionWithPlugin(t), runtime.StepInput{
-		StepID: "route",
-		Body:   `{payment: wallet.charge({amount: 42}), __next: "finish"}`,
-		Input:  map[string]any{},
-	})
-	if err != nil {
-		t.Fatalf("expected success, got %v", err)
-	}
-	if output.Next != "finish" {
-		t.Fatalf("expected next=finish, got %q", output.Next)
-	}
-	if len(output.SideEffects) != 1 {
-		t.Fatalf("expected 1 side effect, got %#v", output.SideEffects)
 	}
 }
 

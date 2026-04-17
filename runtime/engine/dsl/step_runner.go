@@ -37,9 +37,8 @@ func (r *LocalStepRunner) RunStep(ctx context.Context, execution *runtime.Execut
 
 	result, _ := isolatedState.Store().Get(input.StepID)
 	return runtime.StepOutput{
-		Result:      result,
-		Response:    isolatedState.Response(),
-		Next:        next,
-		SideEffects: isolatedState.SideEffects(),
+		Result:   result,
+		Response: isolatedState.Response(),
+		Next:     next,
 	}, nil
 }

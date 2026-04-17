@@ -271,9 +271,6 @@ func applyStepOutput(execution *Execution, stepID string, output StepOutput) {
 	if output.Response != nil {
 		execution.State().SetResponse(output.Response)
 	}
-	if len(output.SideEffects) > 0 {
-		execution.State().AppendSideEffects(output.SideEffects...)
-	}
 }
 
 func lastFlowError(fe *FlowError) error {
@@ -347,7 +344,8 @@ func (e *Executor) computeDelay(retry *RetryConfig, attempt int) time.Duration {
 // Uses a detached context so compensation DB/HTTP calls complete even if the flow
 // context was already cancelled (e.g. by a timeout).
 func (e *Executor) runCompensations(execution *Execution) {
-	if _, ok := e.stepExecutor.(OnErrorExecutor); !ok {
+	oee, ok := e.stepExecutor.(OnErrorExecutor)
+	if !ok {
 		return
 	}
 
@@ -357,13 +355,11 @@ func (e *Executor) runCompensations(execution *Execution) {
 	for i := len(stack) - 1; i >= 0; i-- {
 		entry := stack[i]
 		log.Info(fmt.Sprintf("Running compensation for step %s (path: %s)", entry.StepID, entry.Path))
-		output, err := e.runIsolatedCompensation(safeExec, entry)
-		if err != nil {
+		if err := e.runIsolatedCompensation(safeExec, oee, entry); err != nil {
 			log.Error(fmt.Sprintf("Compensation failed for step %s", entry.StepID), "error", err)
 			// Continue remaining compensations even on failure.
 			continue
 		}
-		applyCompensationOutput(execution, output)
 	}
 }
 
@@ -406,42 +402,22 @@ func (e *Executor) runIsolatedOnError(execution *Execution, fe *FlowError) (Reco
 	return collectRecoveryOutput(isolatedExec.State()), nil, true
 }
 
-func (e *Executor) runIsolatedCompensation(execution *Execution, entry CompensationEntry) (RecoveryOutput, error) {
-	oee, ok := e.stepExecutor.(OnErrorExecutor)
-	if !ok {
-		return RecoveryOutput{}, nil
-	}
-
+func (e *Executor) runIsolatedCompensation(execution *Execution, oee OnErrorExecutor, entry CompensationEntry) error {
 	isolatedExec := execution.WithIsolatedState(cloneRunStateSnapshot(execution.State().Store().Snapshot()))
-	err := oee.ExecuteCompensation(isolatedExec, entry.Body, entry.StepID, entry.Path, entry.Compiled)
-	if err != nil {
-		return RecoveryOutput{}, err
-	}
-
-	return collectRecoveryOutput(isolatedExec.State()), nil
+	return oee.ExecuteCompensation(isolatedExec, entry.Body, entry.StepID, entry.Path, entry.Compiled)
 }
 
 func applyOnErrorOutput(execution *Execution, output RecoveryOutput) {
 	if output.Response != nil {
 		execution.State().SetResponse(output.Response)
 	}
-	if len(output.SideEffects) > 0 {
-		execution.State().AppendSideEffects(output.SideEffects...)
-	}
 	mergeStoreSnapshot(execution.State().Store(), output.Store)
-}
-
-func applyCompensationOutput(execution *Execution, output RecoveryOutput) {
-	if len(output.SideEffects) > 0 {
-		execution.State().AppendSideEffects(output.SideEffects...)
-	}
 }
 
 func collectRecoveryOutput(state *RunState) RecoveryOutput {
 	return RecoveryOutput{
-		Response:    state.Response(),
-		SideEffects: state.SideEffects(),
-		Store:       state.Store().Snapshot(),
+		Response: state.Response(),
+		Store:    state.Store().Snapshot(),
 	}
 }
 

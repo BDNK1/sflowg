@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 )
 
 type DSLExecutionMode string
@@ -49,17 +48,6 @@ type StepExecutor interface {
 	ExecuteStep(ctx context.Context, execution *Execution, step Step) (next string, err error)
 }
 
-// SideEffect records one external plugin interaction that occurred during execution.
-type SideEffect struct {
-	Plugin    string        `json:"plugin"`
-	Method    string        `json:"method"`
-	Input     any           `json:"input,omitempty"`
-	Output    any           `json:"output,omitempty"`
-	Error     string        `json:"error,omitempty"`
-	Duration  time.Duration `json:"duration"`
-	Timestamp time.Time     `json:"timestamp"`
-}
-
 // StepInput is the canonical input passed to a single isolated step execution.
 type StepInput struct {
 	StepID   string         `json:"step_id"`
@@ -72,18 +60,15 @@ type StepInput struct {
 
 // StepOutput is the canonical output produced by a single isolated step execution.
 type StepOutput struct {
-	Result      any                 `json:"result,omitempty"`
-	Response    *ResponseDescriptor `json:"response,omitempty"`
-	Next        string              `json:"next,omitempty"`
-	SideEffects []SideEffect        `json:"side_effects,omitempty"`
+	Result   any                 `json:"result,omitempty"`
+	Response *ResponseDescriptor `json:"response,omitempty"`
+	Next     string              `json:"next,omitempty"`
 }
 
-// RecoveryOutput is the canonical output collected from isolated on_error and
-// compensation execution.
+// RecoveryOutput is the canonical output collected from isolated on_error execution.
 type RecoveryOutput struct {
-	Response    *ResponseDescriptor `json:"response,omitempty"`
-	SideEffects []SideEffect        `json:"side_effects,omitempty"`
-	Store       map[string]any      `json:"store,omitempty"`
+	Response *ResponseDescriptor `json:"response,omitempty"`
+	Store    map[string]any      `json:"store,omitempty"`
 }
 
 // StepRunner runs one step against isolated state and returns its canonical output.

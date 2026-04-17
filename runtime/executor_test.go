@@ -80,77 +80,6 @@ func TestExecuteSteps_FailedAttemptDoesNotLeakResult(t *testing.T) {
 	}
 }
 
-func TestExecuteSteps_AccumulatesSideEffectsAfterSuccess(t *testing.T) {
-	stepExecutor := &scriptedStepExecutor{
-		runStep: func(ctx context.Context, execution *Execution, step Step) (string, error) {
-			execution.State().RecordSideEffect(SideEffect{Plugin: "wallet", Method: step.ID})
-			execution.State().Store().Set(step.ID, map[string]any{"ok": true})
-			return "", nil
-		},
-	}
-	flow := &Flow{ID: "payments", Steps: []Step{{ID: "charge"}}}
-	exec, executor := newExecutorTestHarness(t, flow, stepExecutor)
-
-	if err := executor.ExecuteSteps(exec); err != nil {
-		t.Fatalf("expected success, got %v", err)
-	}
-
-	effects := exec.State().SideEffects()
-	if len(effects) != 1 {
-		t.Fatalf("expected 1 side effect, got %#v", effects)
-	}
-	if effects[0].Plugin != "wallet" || effects[0].Method != "charge" {
-		t.Fatalf("unexpected side effect %#v", effects[0])
-	}
-}
-
-func TestExecuteSteps_FailedAttemptDoesNotLeakSideEffects(t *testing.T) {
-	stepExecutor := &scriptedStepExecutor{
-		runStep: func(ctx context.Context, execution *Execution, step Step) (string, error) {
-			execution.State().RecordSideEffect(SideEffect{Plugin: "wallet", Method: "charge"})
-			return "", &FlowError{Type: ErrorTypePermanent, Code: "FAIL", Message: "boom", Step: step.ID}
-		},
-	}
-	flow := &Flow{ID: "payments", Steps: []Step{{ID: "charge"}}}
-	exec, executor := newExecutorTestHarness(t, flow, stepExecutor)
-
-	if err := executor.ExecuteSteps(exec); err == nil {
-		t.Fatal("expected flow error")
-	}
-	if effects := exec.State().SideEffects(); len(effects) != 0 {
-		t.Fatalf("expected no leaked side effects, got %#v", effects)
-	}
-}
-
-func TestExecuteSteps_RetryMergesOnlyWinningAttemptSideEffects(t *testing.T) {
-	attempts := 0
-	stepExecutor := &scriptedStepExecutor{
-		runStep: func(ctx context.Context, execution *Execution, step Step) (string, error) {
-			attempts++
-			execution.State().RecordSideEffect(SideEffect{Plugin: "wallet", Method: fmt.Sprintf("attempt-%d", attempts)})
-			if attempts == 1 {
-				return "", &FlowError{Type: ErrorTypeTransient, Code: "RETRY", Message: "retry", Step: step.ID}
-			}
-			execution.State().Store().Set(step.ID, map[string]any{"ok": true})
-			return "", nil
-		},
-	}
-	flow := &Flow{ID: "payments", Steps: []Step{{ID: "charge", Retry: &RetryConfig{MaxAttempts: 2}}}}
-	exec, executor := newExecutorTestHarness(t, flow, stepExecutor)
-
-	if err := executor.ExecuteSteps(exec); err != nil {
-		t.Fatalf("expected success, got %v", err)
-	}
-
-	effects := exec.State().SideEffects()
-	if len(effects) != 1 {
-		t.Fatalf("expected only winning attempt side effect, got %#v", effects)
-	}
-	if effects[0].Method != "attempt-2" {
-		t.Fatalf("expected second attempt side effect, got %#v", effects[0])
-	}
-}
-
 func TestExecuteSteps_FailedAttemptDoesNotLeakResponse(t *testing.T) {
 	stepExecutor := &scriptedStepExecutor{
 		runStep: func(ctx context.Context, execution *Execution, step Step) (string, error) {
@@ -252,37 +181,6 @@ func TestExecuteSteps_FallbackOutputMergesCorrectly(t *testing.T) {
 	got, ok := exec.State().Store().Get("charge.mode")
 	if !ok || got != "fallback" {
 		t.Fatalf("expected fallback result under original step ID, got %v (present=%v)", got, ok)
-	}
-}
-
-func TestExecuteSteps_FallbackMergesFallbackSideEffects(t *testing.T) {
-	stepExecutor := &scriptedStepExecutor{
-		runStep: func(ctx context.Context, execution *Execution, step Step) (string, error) {
-			if step.Body == "fallback" {
-				execution.State().RecordSideEffect(SideEffect{Plugin: "wallet", Method: "fallback"})
-				execution.State().Store().Set(step.ID, map[string]any{"mode": "fallback"})
-				return "", nil
-			}
-			execution.State().RecordSideEffect(SideEffect{Plugin: "wallet", Method: "primary"})
-			return "", &FlowError{Type: ErrorTypePermanent, Code: "PRIMARY_FAILED", Message: "primary failed", Step: step.ID}
-		},
-	}
-	flow := &Flow{
-		ID:    "payments",
-		Steps: []Step{{ID: "charge", Body: "primary", FallbackBody: "fallback"}},
-	}
-	exec, executor := newExecutorTestHarness(t, flow, stepExecutor)
-
-	if err := executor.ExecuteSteps(exec); err != nil {
-		t.Fatalf("expected success, got %v", err)
-	}
-
-	effects := exec.State().SideEffects()
-	if len(effects) != 1 {
-		t.Fatalf("expected only fallback side effect, got %#v", effects)
-	}
-	if effects[0].Method != "fallback" {
-		t.Fatalf("expected fallback side effect, got %#v", effects[0])
 	}
 }
 
@@ -429,37 +327,7 @@ func TestOnError_FailedAttemptDoesNotLeakPartialStore(t *testing.T) {
 	}
 }
 
-func TestOnError_MergesSideEffects(t *testing.T) {
-	stepExecutor := &scriptedStepExecutor{
-		runStep: func(ctx context.Context, execution *Execution, step Step) (string, error) {
-			return "", &FlowError{Type: ErrorTypePermanent, Code: "FAIL", Message: "boom", Step: step.ID}
-		},
-		runOnError: func(execution *Execution, body string, fe *FlowError) error {
-			execution.State().RecordSideEffect(SideEffect{Plugin: "notify", Method: "send"})
-			return nil
-		},
-	}
-	flow := &Flow{
-		ID:          "payments",
-		OnErrorBody: "recover",
-		Steps:       []Step{{ID: "charge"}},
-	}
-	exec, executor := newExecutorTestHarness(t, flow, stepExecutor)
-
-	if err := executor.ExecuteSteps(exec); err != nil {
-		t.Fatalf("expected on_error to handle failure, got %v", err)
-	}
-
-	effects := exec.State().SideEffects()
-	if len(effects) != 1 {
-		t.Fatalf("expected merged on_error side effect, got %#v", effects)
-	}
-	if effects[0].Plugin != "notify" || effects[0].Method != "send" {
-		t.Fatalf("unexpected side effect %#v", effects[0])
-	}
-}
-
-func TestCompensation_IsolatedExecutionMergesSideEffectsOnly(t *testing.T) {
+func TestCompensation_IsolatedExecutionDoesNotMergeStoreOrResponse(t *testing.T) {
 	stepExecutor := &scriptedStepExecutor{
 		runStep: func(ctx context.Context, execution *Execution, step Step) (string, error) {
 			if step.ID == "reserve" {
@@ -469,7 +337,6 @@ func TestCompensation_IsolatedExecutionMergesSideEffectsOnly(t *testing.T) {
 			return "", &FlowError{Type: ErrorTypePermanent, Code: "FAIL", Message: "boom", Step: step.ID}
 		},
 		runCompensation: func(execution *Execution, body string, stepID string, path SuccessPath, compiled any) error {
-			execution.State().RecordSideEffect(SideEffect{Plugin: "inventory", Method: "release"})
 			execution.State().Store().SetNested("compensation", map[string]any{"changed": true})
 			execution.State().SetResponse(&ResponseDescriptor{HandlerName: "http.json"})
 			return nil
@@ -486,14 +353,6 @@ func TestCompensation_IsolatedExecutionMergesSideEffectsOnly(t *testing.T) {
 
 	if err := executor.ExecuteSteps(exec); err == nil {
 		t.Fatal("expected flow error")
-	}
-
-	effects := exec.State().SideEffects()
-	if len(effects) != 1 {
-		t.Fatalf("expected merged compensation side effect, got %#v", effects)
-	}
-	if effects[0].Plugin != "inventory" || effects[0].Method != "release" {
-		t.Fatalf("unexpected compensation side effect %#v", effects[0])
 	}
 	if _, ok := exec.State().Store().Get("compensation"); ok {
 		t.Fatal("expected compensation store changes to remain isolated")
@@ -513,7 +372,6 @@ func TestCompensation_FailureDoesNotLeakPartialState(t *testing.T) {
 			return "", &FlowError{Type: ErrorTypePermanent, Code: "FAIL", Message: "boom", Step: step.ID}
 		},
 		runCompensation: func(execution *Execution, body string, stepID string, path SuccessPath, compiled any) error {
-			execution.State().RecordSideEffect(SideEffect{Plugin: "inventory", Method: "release"})
 			execution.State().Store().SetNested("compensation", map[string]any{"changed": true})
 			return errors.New("compensation failed")
 		},
@@ -529,9 +387,6 @@ func TestCompensation_FailureDoesNotLeakPartialState(t *testing.T) {
 
 	if err := executor.ExecuteSteps(exec); err == nil {
 		t.Fatal("expected flow error")
-	}
-	if effects := exec.State().SideEffects(); len(effects) != 0 {
-		t.Fatalf("expected failed compensation side effects to remain isolated, got %#v", effects)
 	}
 	if _, ok := exec.State().Store().Get("compensation"); ok {
 		t.Fatal("expected failed compensation store changes to remain isolated")
