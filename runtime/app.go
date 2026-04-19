@@ -199,11 +199,6 @@ func (a *App) shutdown(ctx context.Context) error {
 		errors = append(errors, fmt.Errorf("container shutdown: %w", err))
 	}
 
-	a.Container.Logger().Info("Shutting down observability")
-	if err := a.Container.ShutdownObservability(ctx); err != nil {
-		errors = append(errors, fmt.Errorf("observability shutdown: %w", err))
-	}
-
 	if len(errors) > 0 {
 		return fmt.Errorf("shutdown errors: %v", errors)
 	}

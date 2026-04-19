@@ -13,10 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"{{.RuntimeModulePath}}"
-	dslengine "{{.RuntimeModulePath}}/engine/dsl"
+	"{{.RuntimeModulePath}}/bootstrap"
 {{- range .Plugins}}
 {{- if eq .Type 3}}
 	"{{$.ModuleName}}/vendored"
@@ -199,19 +198,7 @@ func main() {
 		},
 	}
 
-		// Create container and initialize observability before registering plugins
-		container := runtime.NewContainer(runtime.NewLogger(nil))
-		if err := container.InitObservability(observabilityCfg); err != nil {
-			panic(fmt.Sprintf("Failed to initialize observability: %v", err))
-		}
-		defer func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := container.ShutdownObservability(shutdownCtx); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to shutdown observability: %v\n", err)
-			}
-		}()
-
+	registerPlugins := func(container *runtime.Container) error {
 		// Initialize plugins in dependency order (dependencies first)
 	// Phase 2.2: Automatic dependency injection via struct fields
 	// Phase 2.3: Configuration system with env vars and validation
@@ -235,7 +222,7 @@ func main() {
 		{{sanitize $plugin.Name}}RawValues["{{.YAMLField}}"] = val
 {{- if .Required}}
 	} else {
-		panic("Required environment variable {{.EnvVar}} not set")
+		return fmt.Errorf("required environment variable {{.EnvVar}} not set")
 {{- else}}
 	} else {
 		// Use default value from flow-config.yaml
@@ -258,7 +245,7 @@ func main() {
 
 	// Apply defaults, merge values, and validate
 	if err := runtime.InitializeConfig(&{{sanitize $plugin.Name}}Config, {{sanitize $plugin.Name}}RawValues); err != nil {
-		panic(fmt.Sprintf("Failed to initialize {{$plugin.Name}} config: %v", err))
+		return fmt.Errorf("failed to initialize {{$plugin.Name}} config: %w", err)
 	}
 
 	// DEBUG: Print config after InitializeConfig
@@ -288,9 +275,11 @@ func main() {
 
 	// Register plugin
 	if err := container.RegisterPlugin("{{$plugin.Name}}", {{sanitize $plugin.Name}}Plugin); err != nil {
-		panic(fmt.Sprintf("Failed to register plugin '{{$plugin.Name}}': %v", err))
+		return fmt.Errorf("failed to register plugin '{{$plugin.Name}}': %w", err)
 	}
 {{- end}}
+		return nil
+	}
 
 	// Determine flows directory
 {{- if .EmbedFlows}}
@@ -309,33 +298,24 @@ func main() {
 	}
 {{- end}}
 
-	container.Logger().Info("Resolved flows directory", "path", flowsDir, "source", flowsSource)
-
-	// Create engine components
-	loader := dslengine.NewFlowLoader()
-	evaluator := dslengine.NewExpressionEvaluator()
-	stepExecutor := dslengine.NewStepExecutor()
-	stepRunner := dslengine.NewLocalStepRunner(stepExecutor)
-	compiler := dslengine.NewCompiler()
-	newValueStore := func() runtime.ValueStore { return runtime.NewValueStore() }
-
-	// Create app and start server (runtime handles everything)
-	// Runtime will: Initialize plugins → LoadFlows → Setup Gin → Handle signals → Graceful shutdown
-	app := runtime.NewApp(container, loader, evaluator, stepExecutor, stepRunner, compiler, newValueStore, observabilityCfg)
-
+	globalProperties := map[string]any(nil)
 {{- if .GlobalProperties}}
 	// Set global properties from flow-config.yaml
-	globalProperties := map[string]any{
+	globalProperties = map[string]any{
 {{- range $key, $value := .GlobalProperties}}
 		"{{$key}}": {{printf "%#v" $value}},
 {{- end}}
 	}
-	if err := app.SetGlobalProperties(globalProperties); err != nil {
-		panic(fmt.Sprintf("Failed to set global properties: %v", err))
-	}
 {{- end}}
 
-	if err := app.Start(ctx, ":"+*port, flowsDir); err != nil {
+	if err := bootstrap.Run(ctx, bootstrap.Config{
+		HTTPAddr:         ":" + *port,
+		FlowsDir:        flowsDir,
+		FlowsSource:     flowsSource,
+		GlobalProperties: globalProperties,
+		Observability:    observabilityCfg,
+		RegisterPlugins:  registerPlugins,
+	}); err != nil {
 		panic(fmt.Sprintf("Server error: %v", err))
 	}
 }

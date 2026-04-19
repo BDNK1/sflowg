@@ -52,9 +52,9 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 	}
 
 	checks := []string{
-		"container := runtime.NewContainer(runtime.NewLogger(nil))",
-		"if err := container.InitObservability(observabilityCfg); err != nil {",
-		"if err := container.ShutdownObservability(shutdownCtx); err != nil {",
+		`"github.com/BDNK1/sflowg/runtime/bootstrap"`,
+		"if err := bootstrap.Run(ctx, bootstrap.Config{",
+		"Observability:    observabilityCfg,",
 		"Export: runtime.LogExportConfig{",
 		"Mode: runtime.LogExportModes{",
 		"Metrics: runtime.MetricsConfig{",
@@ -74,7 +74,7 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 	}
 }
 
-func TestGenerate_UsesRuntimeValueStoreConstructor(t *testing.T) {
+func TestGenerate_DelegatesRuntimeAssemblyToBootstrap(t *testing.T) {
 	gen := NewMainGoGenerator(
 		"github.com/example/ecom",
 		"8080",
@@ -88,8 +88,12 @@ func TestGenerate_UsesRuntimeValueStoreConstructor(t *testing.T) {
 		t.Fatalf("Generate failed: %v", err)
 	}
 
-	if !strings.Contains(content, "newValueStore := func() runtime.ValueStore { return runtime.NewValueStore() }") {
-		t.Fatalf("generated main.go missing runtime value store constructor\n%s", content)
+	if !strings.Contains(content, "bootstrap.Run(ctx, bootstrap.Config{") {
+		t.Fatalf("generated main.go missing bootstrap Run call\n%s", content)
+	}
+
+	if strings.Contains(content, "newValueStore := func() runtime.ValueStore { return runtime.NewValueStore() }") {
+		t.Fatalf("generated main.go still assembles runtime value store directly\n%s", content)
 	}
 
 	if strings.Contains(content, "dslengine.NewValueStore()") {
