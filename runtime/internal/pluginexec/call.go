@@ -5,7 +5,6 @@ import (
 	"reflect"
 
 	"github.com/BDNK1/sflowg/runtime/internal/configutil"
-	"github.com/gin-gonic/gin"
 )
 
 func extractError(v reflect.Value) error {
@@ -60,15 +59,4 @@ func convertOutput(binding TaskBinding, output any) (map[string]any, error) {
 		return nil, fmt.Errorf("failed to convert output for task %s: %w", binding.MethodName, err)
 	}
 	return resultMap, nil
-}
-
-func CallResponseHandler(binding ResponseBinding, c *gin.Context, exec any, args map[string]any) error {
-	results := binding.method.Func.Call([]reflect.Value{
-		binding.plugin,
-		reflect.ValueOf(c),
-		reflect.ValueOf(exec),
-		reflect.ValueOf(args),
-	})
-
-	return extractError(results[0])
 }

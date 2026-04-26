@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/BDNK1/sflowg/runtime/internal/pluginexec"
-	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -17,10 +16,6 @@ func newTaskExecutor(binding pluginexec.TaskBinding) Task {
 		binding:  binding,
 		spanName: fmt.Sprintf("plugin %s.%s", binding.PluginName, binding.MethodName),
 	}
-}
-
-func newResponseHandler(binding pluginexec.ResponseBinding) ResponseHandler {
-	return &pluginResponseHandlerWrapper{binding: binding}
 }
 
 type pluginTaskWrapper struct {
@@ -70,12 +65,4 @@ func execFlowID(exec *Execution) string {
 		return ""
 	}
 	return exec.Flow.ID
-}
-
-type pluginResponseHandlerWrapper struct {
-	binding pluginexec.ResponseBinding
-}
-
-func (w *pluginResponseHandlerWrapper) Handle(c *gin.Context, exec *Execution, args map[string]any) error {
-	return pluginexec.CallResponseHandler(w.binding, c, exec, args)
 }

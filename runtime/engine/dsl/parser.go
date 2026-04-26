@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/BDNK1/sflowg/runtime"
+	"github.com/BDNK1/sflowg/runtime/validation/httpinput"
 )
 
 // Parse parses a .flow DSL source into a runtime.Flow.
@@ -127,6 +128,10 @@ func (p *parser) parseEntrypoint() (runtime.Entrypoint, int, error) {
 	if err != nil {
 		return runtime.Entrypoint{}, 0, fmt.Errorf("parsing entrypoint config: %w", err)
 	}
+	input, err := httpinput.ParseBinding(config)
+	if err != nil {
+		return runtime.Entrypoint{}, 0, fmt.Errorf("parsing entrypoint input contract: %w", err)
+	}
 
 	// Extract flow-level timeout from entrypoint config.
 	timeout := 0
@@ -138,6 +143,7 @@ func (p *parser) parseEntrypoint() (runtime.Entrypoint, int, error) {
 	return runtime.Entrypoint{
 		Type:   epType,
 		Config: config,
+		Input:  input,
 	}, timeout, nil
 }
 

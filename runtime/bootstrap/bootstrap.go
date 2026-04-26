@@ -12,12 +12,12 @@ import (
 // Config contains the project-specific inputs needed to assemble and run the
 // standard runtime stack.
 type Config struct {
-	HTTPAddr         string
 	FlowsDir         string
 	FlowsSource      string
 	GlobalProperties map[string]any
 	Observability    runtime.ObservabilityConfig
 	RegisterPlugins  func(*runtime.Container) error
+	Transports       []runtime.Transport
 }
 
 // Run assembles the standard runtime stack and starts the application.
@@ -61,6 +61,11 @@ func Run(ctx context.Context, cfg Config) (err error) {
 			return fmt.Errorf("set global properties: %w", err)
 		}
 	}
+	for _, transport := range cfg.Transports {
+		if err := app.RegisterTransport(transport); err != nil {
+			return fmt.Errorf("register %s transport: %w", transport.Type(), err)
+		}
+	}
 
-	return app.Start(ctx, cfg.HTTPAddr, cfg.FlowsDir)
+	return app.Start(ctx, cfg.FlowsDir)
 }

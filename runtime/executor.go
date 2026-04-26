@@ -153,6 +153,16 @@ func (e *Executor) handleFailure(execution *Execution, fe *FlowError) error {
 	return nil
 }
 
+// HandleBoundaryError runs the flow-level on_error handler for an error raised
+// before any step has executed, such as input contract validation.
+func (e *Executor) HandleBoundaryError(execution *Execution, fe *FlowError) (bool, error) {
+	handled, handlerErr := e.runOnErrorHandler(execution, fe)
+	if handlerErr != nil {
+		return handled, handlerErr
+	}
+	return handled, nil
+}
+
 // executeStepWithRetries runs the step body respecting its RetryConfig.
 // Returns the winning StepOutput on success or the last FlowError on exhausted retries.
 func (e *Executor) executeStepWithRetries(execution *Execution, step Step, path SuccessPath) (StepOutput, *FlowError) {

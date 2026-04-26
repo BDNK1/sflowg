@@ -3,12 +3,9 @@ package runtime
 import (
 	"context"
 	"errors"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/gin-gonic/gin"
 )
 
 type failingInitializerPlugin struct{}
@@ -44,11 +41,6 @@ type greetingPlugin struct{}
 
 func (p *greetingPlugin) Greet(exec *Execution, input greetingInput) (greetingOutput, error) {
 	return greetingOutput{Message: "hello " + input.Name}, nil
-}
-
-func (p *greetingPlugin) Json(c *gin.Context, exec *Execution, args map[string]any) error {
-	c.Header("X-Plugin-Message", args["message"].(string))
-	return nil
 }
 
 func TestContainerRegisterPlugin_RegistersTypedTask(t *testing.T) {
@@ -99,33 +91,6 @@ func TestContainerRegisterPlugin_TypedTaskValidationFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "validation failed for task greet") {
 		t.Fatalf("expected typed wrapper validation error, got %v", err)
-	}
-}
-
-func TestContainerRegisterPlugin_RegistersResponseHandler(t *testing.T) {
-	container := NewContainer(NewLogger(nil))
-	if err := container.RegisterPlugin("greeting", &greetingPlugin{}); err != nil {
-		t.Fatalf("RegisterPlugin failed: %v", err)
-	}
-
-	handler, ok := container.ResponseHandlers.Get("greeting.json")
-	if !ok {
-		t.Fatal("expected response handler to be registered")
-	}
-
-	recorder := httptest.NewRecorder()
-	ginCtx, _ := gin.CreateTestContext(recorder)
-
-	exec := &Execution{
-		Container: container,
-		ctx:       context.Background(),
-	}
-
-	if err := handler.Handle(ginCtx, exec, map[string]any{"message": "ok"}); err != nil {
-		t.Fatalf("Handle failed: %v", err)
-	}
-	if got := recorder.Header().Get("X-Plugin-Message"); got != "ok" {
-		t.Fatalf("expected plugin response handler to run, got header %q", got)
 	}
 }
 

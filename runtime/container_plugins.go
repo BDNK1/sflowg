@@ -21,17 +21,17 @@ func newPluginRegistry() *pluginRegistry {
 	}
 }
 
-func (r *pluginRegistry) Register(pluginName string, plugin any) ([]pluginexec.TaskBinding, []pluginexec.ResponseBinding, error) {
+func (r *pluginRegistry) Register(pluginName string, plugin any) ([]pluginexec.TaskBinding, error) {
 	if plugin == nil {
-		return nil, nil, fmt.Errorf("plugin cannot be nil")
+		return nil, fmt.Errorf("plugin cannot be nil")
 	}
 
 	r.plugins[pluginName] = plugin
 	r.pluginNameIndex[plugin] = pluginName
 	r.detectPluginInterfaces(plugin)
 
-	taskBindings, responseBindings := pluginexec.Discover(pluginName, plugin)
-	return taskBindings, responseBindings, nil
+	taskBindings := pluginexec.Discover(pluginName, plugin)
+	return taskBindings, nil
 }
 
 func (r *pluginRegistry) Get(name string) any {
@@ -86,16 +86,13 @@ func (r *pluginRegistry) pluginName(plugin any) string {
 }
 
 func (c *Container) RegisterPlugin(pluginName string, plugin any) error {
-	taskBindings, responseBindings, err := c.plugins.Register(pluginName, plugin)
+	taskBindings, err := c.plugins.Register(pluginName, plugin)
 	if err != nil {
 		return err
 	}
 
 	for _, binding := range taskBindings {
 		c.registerTask(binding.TaskName, newTaskExecutor(binding))
-	}
-	for _, binding := range responseBindings {
-		c.ResponseHandlers.Register(binding.HandlerName, newResponseHandler(binding))
 	}
 
 	return nil

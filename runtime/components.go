@@ -1,20 +1,24 @@
 package runtime
 
+import "github.com/BDNK1/sflowg/runtime/validation/httpinput"
+
 type Flow struct {
-	ID              string           `yaml:"id"`
-	Entrypoint      Entrypoint       `yaml:"entrypoint"`
-	Steps           []Step           `yaml:"steps"`
-	Properties      map[string]any   `yaml:"properties"`
-	Return          Return           `yaml:"return"`
-	DSLMode         DSLExecutionMode `yaml:"-" json:"-"`
-	OnErrorBody     string           `yaml:"-"`
-	OnErrorCompiled any              `yaml:"-" json:"-"`
-	Timeout         int              `yaml:"-"`
+	ID               string           `yaml:"id"`
+	Entrypoint       Entrypoint       `yaml:"entrypoint"`
+	Steps            []Step           `yaml:"steps"`
+	Properties       map[string]any   `yaml:"properties"`
+	Return           Return           `yaml:"return"`
+	DSLMode          DSLExecutionMode `yaml:"-" json:"-"`
+	ResponseSubtypes []string         `yaml:"-" json:"-"`
+	OnErrorBody      string           `yaml:"-"`
+	OnErrorCompiled  any              `yaml:"-" json:"-"`
+	Timeout          int              `yaml:"-"`
 }
 
 type Entrypoint struct {
-	Type   string         `yaml:"type"`
-	Config map[string]any `yaml:"config"`
+	Type   string             `yaml:"type"`
+	Config map[string]any     `yaml:"config"`
+	Input  *httpinput.Binding `yaml:"-" json:"-"`
 }
 
 type Step struct {

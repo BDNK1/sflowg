@@ -1,15 +1,16 @@
 entrypoint.http {
     method: POST
     path: /internal/payments/stripe-webhook
-    body: { type: json }
+    body: {
+        type: json
+        schema: {
+            order_id: { type: string, required: true, minLength: 1 }
+            event_type: { type: string, required: true, enum: [payment_intent.succeeded, payment_intent.payment_failed, payment_intent.canceled] }
+            payment_intent_id: { type: string }
+            status: { type: string }
+        }
+    }
     timeout: 5000
-}
-
-step validate_order_id(condition: request.body.order_id == nil || request.body.order_id == "") {
-    response.json({
-        status: 400,
-        body: { error: "order_id is required" }
-    })
 }
 
 step map_event {

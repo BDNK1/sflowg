@@ -16,6 +16,7 @@ import (
 
 	"{{.RuntimeModulePath}}"
 	"{{.RuntimeModulePath}}/bootstrap"
+	httptransport "{{.RuntimeModulePath}}/transport/http"
 {{- range .Plugins}}
 {{- if eq .Type 3}}
 	"{{$.ModuleName}}/vendored"
@@ -309,12 +310,14 @@ func main() {
 {{- end}}
 
 	if err := bootstrap.Run(ctx, bootstrap.Config{
-		HTTPAddr:         ":" + *port,
 		FlowsDir:        flowsDir,
 		FlowsSource:     flowsSource,
 		GlobalProperties: globalProperties,
 		Observability:    observabilityCfg,
 		RegisterPlugins:  registerPlugins,
+		Transports: []runtime.Transport{
+			httptransport.New(httptransport.Config{Addr: ":" + *port}),
+		},
 	}); err != nil {
 		panic(fmt.Sprintf("Server error: %v", err))
 	}

@@ -13,13 +13,12 @@ const (
 )
 
 type Container struct {
-	tasks            map[string]Task
-	ResponseHandlers *ResponseHandlerRegistry
-	plugins          *pluginRegistry
-	observability    *ObservabilityRuntime
-	logger           Logger
-	tracer           trace.Tracer
-	metrics          *Metrics
+	tasks         map[string]Task
+	plugins       *pluginRegistry
+	observability *ObservabilityRuntime
+	logger        Logger
+	tracer        trace.Tracer
+	metrics       *Metrics
 }
 
 // Logger returns the container's logger for framework-level (non-execution) logs.
@@ -44,12 +43,11 @@ func (c *Container) Metrics() *Metrics {
 
 func NewContainer(logger Logger) *Container {
 	return &Container{
-		tasks:            make(map[string]Task),
-		ResponseHandlers: NewResponseHandlerRegistry(),
-		plugins:          newPluginRegistry(),
-		logger:           logger,
-		tracer:           newNoopTracer(),
-		metrics:          NewNoopMetrics(),
+		tasks:   make(map[string]Task),
+		plugins: newPluginRegistry(),
+		logger:  logger,
+		tracer:  newNoopTracer(),
+		metrics: NewNoopMetrics(),
 	}
 }
 

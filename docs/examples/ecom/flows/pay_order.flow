@@ -1,7 +1,9 @@
 entrypoint.http {
     method: POST
     path: /api/orders/:id/pay
-    pathVariables: [id]
+    pathVariables: {
+        id: { type: integer, required: true, minimum: 1 }
+    }
     timeout: 8000
 }
 

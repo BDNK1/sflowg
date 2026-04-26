@@ -3,7 +3,9 @@
 entrypoint.http {
     method: GET
     path: /api/orders/:id
-    pathVariables: [id]
+    pathVariables: {
+        id: { type: integer, required: true, minimum: 1 }
+    }
 }
 
 step fetch_order {

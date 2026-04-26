@@ -20,33 +20,34 @@ func NewCompiler() *Compiler {
 
 func (c *Compiler) CompileFlow(ctx context.Context, flow *runtime.Flow, container *runtime.Container) error {
 	frameworkKeys, frameworkEnv := collectFrameworkInfo(container)
+	frameworkEnv["response"] = buildResponseTemplateModule(flow.ResponseSubtypes)
 	knownStoreKeys := collectKnownStoreKeys(flow)
 
 	for i := range flow.Steps {
 		step := &flow.Steps[i]
 
-		storeKeys, compiled, err := c.compileBody(ctx, step.Body, knownStoreKeys, frameworkKeys, frameworkEnv)
+		storeKeys, compiled, err := c.compileBody(ctx, step.Body, knownStoreKeys, frameworkKeys, frameworkEnv, flow.ResponseSubtypes)
 		if err != nil {
 			return fmt.Errorf("compile step %s: %w", step.ID, err)
 		}
 		step.StoreKeys = storeKeys
 		step.Compiled = compiled
 
-		fallbackStoreKeys, fallbackCompiled, err := c.compileBody(ctx, step.FallbackBody, knownStoreKeys, frameworkKeys, frameworkEnv)
+		fallbackStoreKeys, fallbackCompiled, err := c.compileBody(ctx, step.FallbackBody, knownStoreKeys, frameworkKeys, frameworkEnv, flow.ResponseSubtypes)
 		if err != nil {
 			return fmt.Errorf("compile fallback for step %s: %w", step.ID, err)
 		}
 		step.FallbackStoreKeys = fallbackStoreKeys
 		step.FallbackCompiled = fallbackCompiled
 
-		_, compensateCompiled, err := c.compileBody(ctx, step.CompensateBody, knownStoreKeys, frameworkKeys, frameworkEnv)
+		_, compensateCompiled, err := c.compileBody(ctx, step.CompensateBody, knownStoreKeys, frameworkKeys, frameworkEnv, flow.ResponseSubtypes)
 		if err != nil {
 			return fmt.Errorf("compile compensation for step %s: %w", step.ID, err)
 		}
 		step.CompensateCompiled = compensateCompiled
 	}
 
-	_, onErrorCompiled, err := c.compileBody(ctx, flow.OnErrorBody, knownStoreKeys, frameworkKeys, frameworkEnv)
+	_, onErrorCompiled, err := c.compileBody(ctx, flow.OnErrorBody, knownStoreKeys, frameworkKeys, frameworkEnv, flow.ResponseSubtypes)
 	if err != nil {
 		return fmt.Errorf("compile on_error: %w", err)
 	}
@@ -61,9 +62,14 @@ func (c *Compiler) compileBody(
 	knownStoreKeys []string,
 	frameworkKeys map[string]struct{},
 	frameworkEnv map[string]any,
+	responseSubtypes []string,
 ) ([]string, any, error) {
 	if strings.TrimSpace(body) == "" {
 		return nil, nil, nil
+	}
+
+	if err := ValidateResponseCalls(body, responseSubtypes); err != nil {
+		return nil, nil, err
 	}
 
 	storeKeys, err := ExtractStoreKeys(body, knownStoreKeys, frameworkKeys)
@@ -115,7 +121,7 @@ func collectFrameworkInfo(container *runtime.Container) (map[string]struct{}, ma
 	}
 
 	frameworkEnv := map[string]any{
-		"response":      buildResponseTemplateModule(container),
+		"response":      buildResponseTemplateModule(nil),
 		"log":           buildLogTemplateModule(),
 		"metric":        buildMetricTemplateModule(container),
 		"sprintf":       fmt.Sprintf,
@@ -172,19 +178,13 @@ func buildPluginTemplateModules(container *runtime.Container) map[string]any {
 	return result
 }
 
-func buildResponseTemplateModule(container *runtime.Container) map[string]any {
-	methods := make(map[string]any)
-	if container != nil && container.ResponseHandlers != nil {
-		for handlerName := range container.ResponseHandlers.All() {
-			parts := strings.SplitN(handlerName, ".", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			methods[parts[1]] = func(args ...any) error { return nil }
-		}
+func buildResponseTemplateModule(subtypes []string) map[string]any {
+	if len(subtypes) == 0 {
+		subtypes = []string{"json"}
 	}
-	if len(methods) == 0 {
-		methods["json"] = func(args ...any) error { return nil }
+	methods := make(map[string]any, len(subtypes))
+	for _, subtype := range subtypes {
+		methods[subtype] = func(args ...any) error { return nil }
 	}
 	return methods
 }

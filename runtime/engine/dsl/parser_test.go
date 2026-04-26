@@ -36,6 +36,49 @@ func TestParse_Entrypoint(t *testing.T) {
 	}
 }
 
+func TestParse_EntrypointInputSchemas(t *testing.T) {
+	source := `entrypoint.http {
+	method: POST
+	path: /api/orders/:id
+	pathVariables: {
+		id: { type: integer, required: true }
+	}
+	queryParameters: {
+		limit: { type: integer, default: 50, minimum: 1 }
+	}
+	headers: {
+		X-Tenant-ID: { type: string, format: uuid, required: true }
+	}
+	body: {
+		type: json
+		schema: {
+			customer_email: { type: string, required: true, format: email }
+		}
+	}
+}`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	input := flow.Entrypoint.Input
+	if input == nil {
+		t.Fatal("entrypoint input is nil")
+	}
+	if input.Body == nil || input.Body.Properties["customer_email"] == nil {
+		t.Fatalf("body customer_email schema not parsed: %#v", input.Body)
+	}
+	if input.PathVariables["id"] == nil {
+		t.Fatalf("path variable id schema not parsed")
+	}
+	if input.QueryParameters["limit"] == nil {
+		t.Fatalf("query parameter limit schema not parsed")
+	}
+	if input.Headers["X-Tenant-ID"] == nil {
+		t.Fatalf("header X-Tenant-ID schema not parsed")
+	}
+}
+
 func TestParse_Properties(t *testing.T) {
 	source := `properties {
 	base_url: "https://api.stripe.com"

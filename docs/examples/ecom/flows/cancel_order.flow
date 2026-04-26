@@ -3,7 +3,9 @@
 entrypoint.http {
     method: POST
     path: /api/orders/:id/cancel
-    pathVariables: [id]
+    pathVariables: {
+        id: { type: integer, required: true, minimum: 1 }
+    }
 }
 
 step fetch_order {

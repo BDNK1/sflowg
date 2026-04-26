@@ -1,8 +1,37 @@
 entrypoint.http {
     method: POST
     path: /api/webhooks/stripe
-    headers: [Stripe-Signature]
-    body: { type: json }
+    headers: {
+        Stripe-Signature: { type: string, required: true, minLength: 1 }
+    }
+    body: {
+        type: json
+        schema: {
+            type: object
+            properties: {
+                id: { type: string, required: true, minLength: 1 }
+                type: { type: string, required: true, minLength: 1 }
+                data: {
+                    type: object
+                    properties: {
+                        object: {
+                            type: object
+                            properties: {
+                                id: { type: string }
+                                status: { type: string }
+                                metadata: {
+                                    type: object
+                                    properties: {
+                                        order_id: { type: string }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     timeout: 10000
 }
 

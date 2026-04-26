@@ -53,8 +53,11 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 
 	checks := []string{
 		`"github.com/BDNK1/sflowg/runtime/bootstrap"`,
+		`httptransport "github.com/BDNK1/sflowg/runtime/transport/http"`,
 		"if err := bootstrap.Run(ctx, bootstrap.Config{",
 		"Observability:    observabilityCfg,",
+		"Transports: []runtime.Transport{",
+		`httptransport.New(httptransport.Config{Addr: ":" + *port}),`,
 		"Export: runtime.LogExportConfig{",
 		"Mode: runtime.LogExportModes{",
 		"Metrics: runtime.MetricsConfig{",

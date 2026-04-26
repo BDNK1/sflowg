@@ -13,9 +13,10 @@ import (
 var _ context.Context = &Execution{}
 
 // ResponseDescriptor captures a response set by steps (YAML return or DSL response.*() calls).
-// The HTTP handler dispatches them to the appropriate ResponseHandler.
+// Transports dispatch descriptors to protocol-specific responses.
 type ResponseDescriptor struct {
-	HandlerName string         // e.g. "http.json"
+	Subtype     string         // e.g. "json"
+	HandlerName string         // compatibility name, e.g. "http.json"
 	Args        map[string]any // e.g. {status: 404, body: {...}}
 }
 

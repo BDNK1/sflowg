@@ -23,6 +23,7 @@ const (
 	ErrorCodeRuntimeError     FlowErrorCode = "RUNTIME_ERROR"
 	ErrorCodeContextCancelled FlowErrorCode = "CONTEXT_CANCELLED"
 	ErrorCodeDeadlineExceeded FlowErrorCode = "DEADLINE_EXCEEDED"
+	ErrorCodeSchemaViolation  FlowErrorCode = "SCHEMA_VIOLATION"
 
 	// Default code used when DSL raise() is called without arguments.
 	ErrorCodeRaise FlowErrorCode = "RAISE"
@@ -46,11 +47,15 @@ func (e *FlowError) Error() string {
 
 // ToMap converts the error to a map suitable for injection into Risor/expr-lang contexts.
 func (e *FlowError) ToMap() map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"type":    string(e.Type),
 		"code":    e.Code,
 		"message": e.Message,
 		"step":    e.Step,
 		"retries": e.Retries,
 	}
+	if len(e.Meta) > 0 {
+		out["meta"] = e.Meta
+	}
+	return out
 }

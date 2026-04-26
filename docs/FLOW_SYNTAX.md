@@ -1,27 +1,36 @@
 # Flow Syntax Reference
 
-Complete reference for writing SFlowG flow YAML files.
+Complete reference for writing SFlowG `.flow` files.
 
 ## Flow Structure
 
-```yaml
-id: flow_name                    # Required: unique flow identifier
+```sflowg
+entrypoint.http {
+    method: POST
+    path: /api/orders
+    body: {
+        type: json
+        schema: {
+            customer_email: { type: string, required: true, format: email }
+        }
+    }
+}
 
-entrypoint: # Required: how flow is triggered
-  type: http
-  config: { ... }
+properties {
+    default_currency: "usd"
+}
 
-properties: # Optional: flow-level variables
-  key: value
+step create_order {
+    postgres.get({
+        query: "INSERT INTO orders (...) VALUES (...)",
+        params: [request.body.customer_email]
+    })
+}
 
-steps: # Required: processing steps
-  - id: step_name
-    type: step_type
-    args: { ... }
-
-return: # Required: response configuration
-  type: http.json
-  args: { ... }
+return response.json({
+    status: 201,
+    body: { order: create_order.row }
+})
 ```
 
 ## DSL Logging
@@ -157,33 +166,28 @@ Defines how the flow is triggered. Currently supports HTTP entrypoints.
 
 ### HTTP Entrypoint
 
-```yaml
-entrypoint:
-  type: http
-  config:
-    method: get|post|put|delete|patch
+```sflowg
+entrypoint.http {
+    method: GET|POST
     path: /api/resource/:param
-    headers:
-      - Header-Name
-    pathVariables:
-      - param
-    queryParameters:
-      - limit
-      - offset
-    body:
-      type: json
+    headers: [Header-Name]
+    pathVariables: [param]
+    queryParameters: [limit, offset]
+    body: { type: json }
+}
 ```
 
 **Fields:**
 
-| Field             | Description                                 | Required |
-|-------------------|---------------------------------------------|----------|
-| `method`          | HTTP method (get, post, put, delete, patch) | Yes      |
-| `path`            | URL path with optional `:param` variables   | Yes      |
-| `headers`         | List of headers to extract                  | No       |
-| `pathVariables`   | List of path parameters to extract          | No       |
-| `queryParameters` | List of query parameters to extract         | No       |
-| `body.type`       | Request body type (`json`)                  | No       |
+| Field             | Description                               | Required |
+|-------------------|-------------------------------------------|----------|
+| `method`          | HTTP method (`GET` or `POST`)             | Yes      |
+| `path`            | URL path with optional `:param` variables | Yes      |
+| `headers`         | Headers to extract or validate            | No       |
+| `pathVariables`   | Path parameters to extract or validate    | No       |
+| `queryParameters` | Query parameters to extract or validate   | No       |
+| `body.type`       | Request body type (`json`)                | No       |
+| `body.schema`     | Optional JSON body schema                 | No       |
 
 **Accessing request data in steps:**
 
@@ -198,12 +202,133 @@ request.queryParameters.limit
 request.headers.Authorization
 request.headers.X-Request-ID
 
-# Body (for POST/PUT/PATCH)
+# Body (for POST)
 request.body.field
 request.body.nested.field
 
 # Raw body (for webhook signature verification)
 request.rawBody                 # Exact string as received
+```
+
+### HTTP Input Schemas
+
+HTTP list forms extract string values without validation:
+
+```sflowg
+entrypoint.http {
+    method: GET
+    path: /api/orders/:id
+    pathVariables: [id]
+    queryParameters: [limit]
+    headers: [Authorization]
+}
+```
+
+Object forms add validation and normalization before steps run:
+
+```sflowg
+entrypoint.http {
+    method: POST
+    path: /api/orders/:id
+
+    pathVariables: {
+        id: { type: integer, required: true, minimum: 1 }
+    }
+
+    queryParameters: {
+        limit: { type: integer, default: 50, minimum: 1 }
+        include: { type: array, items: { type: string } }
+    }
+
+    headers: {
+        X-Tenant-ID: { type: string, format: uuid, required: true }
+    }
+
+    body: {
+        type: json
+        schema: {
+            customer_email: { type: string, required: true, format: email }
+            amount_cents: { type: integer, required: true, minimum: 1 }
+            currency: { type: string, enum: [usd, eur], default: usd }
+        }
+    }
+}
+```
+
+Validated values stay in the same namespaces:
+
+- `request.body`
+- `request.pathVariables`
+- `request.queryParameters`
+- `request.headers`
+- `request.rawBody`
+
+Path variables, query parameters, and headers start as strings and can be coerced to `integer`, `number`, `boolean`, or validated strings. Use `type: string, format: uuid` for UUID values. Repeated query parameters and multi-value headers can be validated as arrays.
+
+#### Schema Types
+
+- `object`
+- `array`
+- `string`
+- `integer`
+- `number`
+- `boolean`
+
+#### Schema Constraints
+
+| Constraint | Applies To | Description |
+|------------|------------|-------------|
+| `required` | all types | Missing value fails validation unless `default` is provided |
+| `default` | all types | Value used when input is absent; applied before `required` |
+| `enum` | `string` | Value must match one listed option |
+| `minimum` | `integer`, `number` | Inclusive lower bound |
+| `maximum` | `integer`, `number` | Inclusive upper bound |
+| `minLength` | `string` | Minimum string length |
+| `maxLength` | `string` | Maximum string length |
+| `pattern` | `string` | Regular expression match |
+| `format` | `string` | One of `email`, `uuid`, `url`, `date`, `date-time` |
+| `properties` | `object` | Nested object fields |
+| `items` | `array` | Array item schema |
+
+Unknown object fields are preserved in Phase 1.
+
+When an input schema fails, steps do not run. The runtime raises a boundary `SCHEMA_VIOLATION` error. A flow-level `on_error` block can handle it and set a response. Validation field errors are available at `error.meta.fields`.
+
+```sflowg
+on_error {
+    if error.code == "SCHEMA_VIOLATION" {
+        return response.json({
+            status: 400,
+            body: {
+                error: "invalid_request",
+                fields: error.meta.fields,
+            }
+        })
+    }
+
+    return response.json({
+        status: 500,
+        body: { error: error.code }
+    })
+}
+```
+
+If the flow does not handle the error, HTTP returns `400 application/problem+json`:
+
+```json
+{
+  "title": "Request validation failed",
+  "status": 400,
+  "detail": "One or more inputs did not match the flow contract.",
+  "errors": [
+    {
+      "path": "body.customer_email",
+      "pointer": "#/body/customer_email",
+      "constraint": "required",
+      "detail": "body.customer_email is required"
+    }
+  ]
+}
 ```
 
 ## Properties
@@ -370,55 +495,62 @@ Retry failed steps:
 
 ## Return
 
-Defines the response sent back to the client. Built-in response types are `http.json`, `http.html`, and `http.redirect`. Plugins can register additional response types.
+Defines the response sent back to the client. HTTP flows support:
 
-### JSON Response (`http.json`)
+- `response.json(...)`
+- `response.text(...)`
+- `response.redirect(...)`
 
-```yaml
-return:
-  type: http.json
-  args:
-    status: 200                    # Optional, defaults to 200
-    headers:                       # Optional
-      X-Request-ID: requestId
-    body:
-      field: expression
-      nested:
-        data: step.result
+Responses are entrypoint-aware. For example, `response.ack()` is invalid in an HTTP flow and fails startup validation.
+
+### JSON Response
+
+```sflowg
+return response.json({
+    status: 200,
+    headers: {
+        X-Request-ID: request_id
+    },
+    body: {
+        field: value,
+        nested: {
+            data: step.result
+        }
+    }
+})
 ```
 
 **Dynamic status codes:**
 
-```yaml
-return:
-  type: http.json
-  args:
-    status: 'success ? 200 : 400'
-    body:
-      success: success
-      message: message
+```sflowg
+return response.json({
+    status: success ? 200 : 400,
+    body: {
+        success: success,
+        message: message
+    }
+})
 ```
 
-### HTML Response (`http.html`)
+### Text Response
 
-```yaml
-return:
-  type: http.html
-  args:
-    status: 200                    # Optional, defaults to 200
-    headers:                       # Optional
-      Cache-Control: '"no-cache"'
-    body: htmlContent              # Must be a string expression
+```sflowg
+return response.text({
+    status: 200,
+    headers: {
+        Cache-Control: "no-cache"
+    },
+    body: rendered_text
+})
 ```
 
-### Redirect (`http.redirect`)
+### Redirect
 
-```yaml
-return:
-  type: http.redirect
-  args:
-    status: 301                    # Optional, defaults to 302. Must be 3xx
-    location: redirectUrl          # Required: URL to redirect to
+```sflowg
+return response.redirect({
+    status: 302,
+    location: checkout_url
+})
 ```
 
 ## Expression Syntax
@@ -577,81 +709,6 @@ float: float(value)
 # Base64 encoding/decoding
 encoded: base64_encode(value)
 decoded: base64_decode(encoded_value)
-```
-
-## Complete Example
-
-```yaml
-id: create_order
-
-entrypoint:
-  type: http
-  config:
-    method: post
-    path: /api/orders
-    headers:
-      - Authorization
-    body:
-      type: json
-
-properties:
-  taxRate: 0.15
-  minAmount: 10.00
-
-steps:
-  # Extract and validate
-  - id: extract
-    type: assign
-    args:
-      items: request.body.items
-      customerId: request.body.customerId
-
-  - id: calculate
-    type: assign
-    args:
-      subtotal: request.body.amount
-      tax: request.body.amount * properties.taxRate
-      total: request.body.amount * (1 + properties.taxRate)
-
-  # Validate amount
-  - id: validate
-    type: switch
-    args:
-      invalid_amount: calculate.total < properties.minAmount
-      process_order: calculate.total >= properties.minAmount
-
-  - id: invalid_amount
-    type: assign
-    args:
-      success: false
-      error: '"Order amount below minimum"'
-
-  # Process valid order
-  - id: process_order
-    type: http.request
-    args:
-      method: POST
-      url: '"https://api.payment.com/charges"'
-      headers:
-        Authorization: request.headers.Authorization
-      body:
-        amount: calculate.total
-        customer: extract.customerId
-
-  - id: build_response
-    type: assign
-    args:
-      success: process_order.result.statusCode == 200
-      orderId: process_order.result.body.id
-
-return:
-  type: http.json
-  args:
-    status: 'build_response.success ? 201 : 400'
-    body:
-      success: build_response.success
-      orderId: build_response.orderId
-      total: calculate.total
 ```
 
 ## Related Documentation

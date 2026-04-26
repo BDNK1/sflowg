@@ -3,25 +3,19 @@
 entrypoint.http {
     method: POST
     path: /api/orders
-    body: { type: json }
+    body: {
+        type: json
+        schema: {
+            customer_email: { type: string, required: true, format: email }
+            customer_name: { type: string, maxLength: 200 }
+            amount_cents: { type: integer, required: true, minimum: 1 }
+            currency: { type: string, enum: [usd, eur], default: usd }
+        }
+    }
 }
 
 properties {
     default_currency: "usd"
-}
-
-step validate_email(condition: request.body.customer_email == nil || request.body.customer_email == "") {
-    response.json({
-        status: 400,
-        body: { error: "customer_email is required" }
-    })
-}
-
-step validate_amount(condition: request.body.amount_cents == nil || request.body.amount_cents <= 0) {
-    response.json({
-        status: 400,
-        body: { error: "amount_cents must be greater than 0" }
-    })
 }
 
 step resolve_currency {

@@ -50,26 +50,31 @@ func BuildPluginGlobals(exec *runtime.Execution) map[string]any {
 }
 
 // BuildResponseGlobals creates the "response" global module for Risor DSL code.
-// Both step bodies and return bodies use this — response.*() calls set
-// execution.ResponseDescriptor, and the ReturnHandler dispatches it to gin.
+// Both step bodies and return bodies use this; response.*() calls set a
+// descriptor for the active transport to dispatch.
 func BuildResponseGlobals(exec *runtime.Execution) map[string]any {
 	responseMethods := make(map[string]any)
 
-	for handlerName := range exec.Container.ResponseHandlers.All() {
-		parts := strings.SplitN(handlerName, ".", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		methodName := parts[1]
+	subtypes := exec.Flow.ResponseSubtypes
+	if len(subtypes) == 0 {
+		subtypes = []string{"json"}
+	}
 
-		hn := handlerName
-		responseMethods[methodName] = func(args ...any) error {
+	for _, subtype := range subtypes {
+		subtype := subtype
+		entrypointType := exec.Flow.Entrypoint.Type
+		if entrypointType == "" {
+			entrypointType = "http"
+		}
+		handlerName := entrypointType + "." + subtype
+		responseMethods[subtype] = func(args ...any) error {
 			argsMap, err := normalizeResponseArgs(args)
 			if err != nil {
 				return err
 			}
 			exec.State().SetResponse(&runtime.ResponseDescriptor{
-				HandlerName: hn,
+				Subtype:     subtype,
+				HandlerName: handlerName,
 				Args:        argsMap,
 			})
 			return nil

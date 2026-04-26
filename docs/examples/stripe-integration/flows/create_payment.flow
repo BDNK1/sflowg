@@ -1,8 +1,26 @@
 entrypoint.http {
     method: POST
     path: /api/payments
-    headers: [X-Request-ID]
-    body: { type: json }
+    headers: {
+        X-Request-ID: { type: string }
+    }
+    body: {
+        type: json
+        schema: {
+            amount: { type: integer, required: true, minimum: 1 }
+            currency: { type: string, enum: [usd, eur], default: usd }
+            description: { type: string, default: Payment }
+            customer_email: { type: string, format: email }
+            customer_name: { type: string, maxLength: 200 }
+            metadata: {
+                type: object
+                required: true
+                properties: {
+                    order_id: { type: string, required: true, minLength: 1 }
+                }
+            }
+        }
+    }
     timeout: 15000
 }
 
@@ -16,19 +34,6 @@ step extract_request {
         metadata_order_id: request.body.metadata?.order_id,
         request_id: request.headers["X-Request-ID"]
     }
-}
-
-step validate_order_id(condition: extract_request.metadata_order_id == nil || extract_request.metadata_order_id == "") {
-    response.json({
-        status: 400,
-        body: {
-            success: false,
-            error: {
-                code: "ORDER_ID_REQUIRED",
-                message: "metadata.order_id is required"
-            }
-        }
-    })
 }
 
 step insert_payment {
