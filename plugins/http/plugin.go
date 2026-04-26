@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/BDNK1/sflowg/runtime/plugin"
+	"github.com/BDNK1/sflowg/core/plugin"
 	"github.com/go-resty/resty/v2"
 )
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/BDNK1/sflowg/cli/internal/config"
-	"github.com/BDNK1/sflowg/runtime/bootstrap"
+	"github.com/BDNK1/sflowg/core/bootstrap"
 )
 
 func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
@@ -52,8 +52,8 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 	}
 
 	checks := []string{
-		`"github.com/BDNK1/sflowg/runtime/bootstrap"`,
-		`httptransport "github.com/BDNK1/sflowg/runtime/transport/http"`,
+		`"github.com/BDNK1/sflowg/core/bootstrap"`,
+		`httptransport "github.com/BDNK1/sflowg/core/transport/http"`,
 		"if err := bootstrap.Run(ctx, bootstrap.Config{",
 		"Observability:    observabilityCfg,",
 		"Transports: []bootstrap.Transport{",
@@ -76,7 +76,7 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(content, `"github.com/BDNK1/sflowg/runtime"`) {
+	if strings.Contains(content, `"github.com/BDNK1/sflowg/core"`) {
 		t.Fatalf("generated main.go imports root runtime directly\n%s", content)
 	}
 	if strings.Contains(content, "runtime.ObservabilityConfig") || strings.Contains(content, "runtime.Transport") || strings.Contains(content, "*runtime.Container") {

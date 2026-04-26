@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/go-resty/resty/v2 v2.16.5
-	github.com/BDNK1/sflowg/runtime v0.1.3
+	github.com/BDNK1/sflowg/core v0.1.4
 )
 
 require (

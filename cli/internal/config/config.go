@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/BDNK1/sflowg/cli/internal/security"
-	"github.com/BDNK1/sflowg/runtime/bootstrap"
+	"github.com/BDNK1/sflowg/core/bootstrap"
 	"gopkg.in/yaml.v3"
 )
 

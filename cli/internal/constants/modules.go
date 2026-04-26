@@ -5,8 +5,8 @@ const (
 	// BaseModulePath is the root path for all SFlowG modules
 	BaseModulePath = "github.com/BDNK1/sflowg"
 
-	// RuntimeModulePath is the full path to the runtime module
-	RuntimeModulePath = BaseModulePath + "/runtime"
+	// RuntimeModulePath is the full path to the core runtime module
+	RuntimeModulePath = BaseModulePath + "/core"
 
 	// PluginsBasePath is the base path for core plugins
 	PluginsBasePath = BaseModulePath + "/plugins"

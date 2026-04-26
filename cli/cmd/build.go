@@ -15,8 +15,8 @@ import (
 	"github.com/BDNK1/sflowg/cli/internal/detector"
 	"github.com/BDNK1/sflowg/cli/internal/generator"
 	"github.com/BDNK1/sflowg/cli/internal/workspace"
-	"github.com/BDNK1/sflowg/runtime"
-	dslengine "github.com/BDNK1/sflowg/runtime/engine/dsl"
+	"github.com/BDNK1/sflowg/core"
+	dslengine "github.com/BDNK1/sflowg/core/engine/dsl"
 	"github.com/spf13/cobra"
 )
 

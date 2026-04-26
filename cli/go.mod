@@ -3,13 +3,13 @@ module github.com/BDNK1/sflowg/cli
 go 1.25.0
 
 require (
-	github.com/BDNK1/sflowg/runtime v0.0.0
+	github.com/BDNK1/sflowg/core v0.1.4
 	github.com/google/uuid v1.6.0
 	github.com/spf13/cobra v1.8.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-replace github.com/BDNK1/sflowg/runtime => ../runtime
+replace github.com/BDNK1/sflowg/core => ../core
 
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
