@@ -339,16 +339,15 @@ func extractEmbeddedFlows(fsys embed.FS, dir string) (string, error) {
 		return "", fmt.Errorf("failed to read embedded directory: %w", err)
 	}
 
-	// Extract each .yaml file
+	// Extract each .flow file
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 
-		// Check if it's a flow file (YAML or DSL)
-		matchedYAML, _ := filepath.Match("*.yaml", entry.Name())
+		// Check if it's a DSL flow file
 		matchedDSL, _ := filepath.Match("*.flow", entry.Name())
-		if !matchedYAML && !matchedDSL {
+		if !matchedDSL {
 			continue
 		}
 

@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/google/uuid"
 	"github.com/BDNK1/sflowg/cli/internal/security"
+	"github.com/google/uuid"
 )
 
 // Workspace represents a temporary build workspace
@@ -49,7 +49,7 @@ func (w *Workspace) Cleanup() error {
 	return nil
 }
 
-// CopyFlows copies flow YAML files from project directory to workspace
+// CopyFlows copies DSL flow files from project directory to workspace.
 func (w *Workspace) CopyFlows() error {
 	// Look for flows directory in project
 	flowsDir := filepath.Join(w.ProjectDir, "flows")
@@ -70,7 +70,7 @@ func (w *Workspace) CopyFlows() error {
 		return fmt.Errorf("failed to create flows directory in workspace at %q: %w", workspaceFlowsDir, err)
 	}
 
-	// Copy all .yaml and .yml files from flows directory
+	// Copy all .flow files from flows directory.
 	entries, err := os.ReadDir(flowsDir)
 	if err != nil {
 		return fmt.Errorf("failed to read flows directory at %q: %w", flowsDir, err)
@@ -83,7 +83,7 @@ func (w *Workspace) CopyFlows() error {
 		}
 
 		name := entry.Name()
-		if filepath.Ext(name) == ".yaml" || filepath.Ext(name) == ".yml" {
+		if filepath.Ext(name) == ".flow" {
 			src := filepath.Join(flowsDir, name)
 			dst := filepath.Join(workspaceFlowsDir, name)
 
@@ -100,7 +100,7 @@ func (w *Workspace) CopyFlows() error {
 	}
 
 	if copiedCount == 0 {
-		return fmt.Errorf("no flow files (.yaml/.yml) found in flows directory")
+		return fmt.Errorf("no flow files (.flow) found in flows directory")
 	}
 
 	return nil
