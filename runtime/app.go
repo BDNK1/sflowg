@@ -3,10 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/BDNK1/sflowg/runtime/internal/configutil"
@@ -28,7 +25,7 @@ type App struct {
 // NewApp creates a new application with the given container and engine components.
 // Passing a non-nil compiler enables compiled DSL mode; nil keeps interpreted DSL mode.
 // The container must be initialized with a logger before calling NewApp.
-func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepRunner StepRunner, compiler FlowCompiler, newValueStore func() ValueStore, _ ...ObservabilityConfig) *App {
+func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepRunner StepRunner, compiler FlowCompiler, newValueStore func() ValueStore) *App {
 	return &App{
 		Container:        container,
 		Flows:            make(map[string]Flow),
@@ -65,38 +62,42 @@ func (a *App) Start(ctx context.Context, flowsDir string) error {
 	if err := a.initialize(ctx); err != nil {
 		return err
 	}
+	cleanupStartupError := func(startupErr error) error {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if shutdownErr := a.Container.Shutdown(shutdownCtx); shutdownErr != nil {
+			return fmt.Errorf("%w; shutdown: %v", startupErr, shutdownErr)
+		}
+		return startupErr
+	}
 
 	// Wire metric context from properties.observability.metrics.context.
 	if err := a.applyMetricContext(); err != nil {
-		return err
+		return cleanupStartupError(err)
 	}
 
 	// Load flows at startup (runtime resolution)
 	if err := a.loadFlows(flowsDir); err != nil {
-		return err
+		return cleanupStartupError(err)
 	}
 	a.Container.Logger().Info("DSL execution mode", "mode", a.dslMode())
 	grouped, activeTransports, err := a.groupFlowsByTransport()
 	if err != nil {
-		return err
+		return cleanupStartupError(err)
 	}
 	if len(activeTransports) == 0 {
-		return fmt.Errorf("no transports to start")
+		return cleanupStartupError(fmt.Errorf("no transports to start"))
 	}
 	if a.compiler != nil {
 		if err := a.compileFlows(ctx); err != nil {
-			return err
+			return cleanupStartupError(err)
 		}
 	}
 
 	// Create executor for flow execution
 	executor := NewExecutor(a.evaluator, a.stepExecutor, a.stepRunner)
 
-	// Setup graceful shutdown
 	errChan := make(chan error, len(activeTransports))
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigChan)
 
 	for _, transport := range activeTransports {
 		transport := transport
@@ -119,11 +120,6 @@ func (a *App) Start(ctx context.Context, flowsDir string) error {
 	a.Container.Logger().Info("Flows loaded", "count", len(a.Flows))
 
 	select {
-	case <-sigChan:
-		a.Container.Logger().Info("Shutting down gracefully")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		return a.shutdown(shutdownCtx, activeTransports)
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

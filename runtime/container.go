@@ -1,8 +1,6 @@
 package runtime
 
 import (
-	"context"
-
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -13,12 +11,11 @@ const (
 )
 
 type Container struct {
-	tasks         map[string]Task
-	plugins       *pluginRegistry
-	observability *ObservabilityRuntime
-	logger        Logger
-	tracer        trace.Tracer
-	metrics       *Metrics
+	tasks   map[string]Task
+	plugins *pluginRegistry
+	logger  Logger
+	tracer  trace.Tracer
+	metrics *Metrics
 }
 
 // Logger returns the container's logger for framework-level (non-execution) logs.
@@ -51,47 +48,21 @@ func NewContainer(logger Logger) *Container {
 	}
 }
 
-func (c *Container) InitObservability(cfg ObservabilityConfig) error {
-	obs, err := InitObservability(cfg)
-	if err != nil {
-		return err
-	}
-	c.SetObservability(obs)
-	return nil
-}
-
-func (c *Container) SetObservability(obs *ObservabilityRuntime) {
-	c.observability = obs
-	if obs == nil {
+func (c *Container) SetObservabilityServices(logger Logger, tracer trace.Tracer, metrics *Metrics) {
+	c.logger = logger
+	if c.logger.base == nil {
 		c.logger = NewLogger(nil)
-		c.tracer = newNoopTracer()
-		c.metrics = NewNoopMetrics()
-		return
 	}
-
-	c.logger = obs.Logger
-	if obs.Tracer == nil {
+	if tracer == nil {
 		c.tracer = newNoopTracer()
 	} else {
-		c.tracer = obs.Tracer
+		c.tracer = tracer
 	}
-	if obs.Metrics == nil {
+	if metrics == nil {
 		c.metrics = NewNoopMetrics()
 	} else {
-		c.metrics = obs.Metrics
+		c.metrics = metrics
 	}
-}
-
-func (c *Container) ShutdownObservability(ctx context.Context) error {
-	if c.observability == nil {
-		return nil
-	}
-	err := c.observability.Shutdown(ctx)
-	c.observability = nil
-	c.logger = NewLogger(nil)
-	c.tracer = newNoopTracer()
-	c.metrics = NewNoopMetrics()
-	return err
 }
 
 func (c *Container) SetTracer(tracer trace.Tracer) {

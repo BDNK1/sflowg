@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/BDNK1/sflowg/cli/internal/security"
-	"github.com/BDNK1/sflowg/runtime"
+	"github.com/BDNK1/sflowg/runtime/bootstrap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,11 +27,11 @@ type RuntimeConfig struct {
 	Engine  string `yaml:"engine,omitempty"`  // Optional: only "dsl" is supported
 }
 
-type ObservabilityConfig = runtime.ObservabilityConfig
-type LoggingConfig = runtime.LoggingConfig
-type LogSourcesConfig = runtime.LogSourcesConfig
-type MaskingConfig = runtime.MaskingConfig
-type TracingConfig = runtime.TracingConfig
+type ObservabilityConfig = bootstrap.ObservabilityConfig
+type LoggingConfig = bootstrap.LoggingConfig
+type LogSourcesConfig = bootstrap.LogSourcesConfig
+type MaskingConfig = bootstrap.MaskingConfig
+type TracingConfig = bootstrap.TracingConfig
 
 // PluginConfig represents a single plugin configuration
 type PluginConfig struct {
@@ -112,7 +112,7 @@ func (c *FlowConfig) Validate() error {
 		return fmt.Errorf("runtime.engine must be 'dsl', got %q", c.Runtime.Engine)
 	}
 
-	if err := runtime.ValidateObservabilityConfig(c.Observability); err != nil {
+	if err := bootstrap.ValidateObservabilityConfig(c.Observability); err != nil {
 		return fmt.Errorf("invalid observability config: %w", err)
 	}
 
@@ -143,7 +143,7 @@ func (c *FlowConfig) ApplyDefaults(projectDir string) error {
 		c.Runtime.Engine = "dsl"
 	}
 
-	if err := runtime.ApplyObservabilityDefaults(&c.Observability); err != nil {
+	if err := bootstrap.ApplyObservabilityDefaults(&c.Observability); err != nil {
 		return fmt.Errorf("failed to apply observability defaults: %w", err)
 	}
 

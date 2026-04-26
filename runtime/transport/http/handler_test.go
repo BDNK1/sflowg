@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	runtime "github.com/BDNK1/sflowg/runtime"
+	"github.com/BDNK1/sflowg/runtime/observability"
 	"github.com/BDNK1/sflowg/runtime/validation/httpinput"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel"
@@ -23,8 +24,8 @@ type Execution = runtime.Execution
 type Entrypoint = runtime.Entrypoint
 type Flow = runtime.Flow
 type FlowError = runtime.FlowError
-type LoggingConfig = runtime.LoggingConfig
-type ObservabilityConfig = runtime.ObservabilityConfig
+type LoggingConfig = observability.LoggingConfig
+type ObservabilityConfig = observability.Config
 type ResponseDescriptor = runtime.ResponseDescriptor
 type Step = runtime.Step
 type StepInput = runtime.StepInput
@@ -38,7 +39,7 @@ var NewContainer = runtime.NewContainer
 var NewExecution = runtime.NewExecution
 var NewExecutor = runtime.NewExecutor
 var NewLogger = runtime.NewLogger
-var NewObservabilityLoggerWithWriter = runtime.NewObservabilityLoggerWithWriter
+var NewObservabilityLoggerWithWriter = observability.NewLoggerWithWriter
 var NewRunState = runtime.NewRunState
 var NewValueStore = runtime.NewValueStore
 

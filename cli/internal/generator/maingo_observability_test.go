@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/BDNK1/sflowg/cli/internal/config"
-	"github.com/BDNK1/sflowg/runtime"
+	"github.com/BDNK1/sflowg/runtime/bootstrap"
 )
 
 func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
@@ -15,10 +15,10 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 		false,
 		nil,
 		config.ObservabilityConfig{
-			Logging: runtime.LoggingConfig{
-				Export: runtime.LogExportConfig{
+			Logging: bootstrap.LoggingConfig{
+				Export: bootstrap.LogExportConfig{
 					Enabled:  true,
-					Mode:     runtime.LogExportModes{"stdout", "otlp"},
+					Mode:     bootstrap.LogExportModes{"stdout", "otlp"},
 					Endpoint: "localhost:4317",
 					Insecure: true,
 					Attributes: map[string]string{
@@ -30,7 +30,7 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 				Enabled:  true,
 				Endpoint: "localhost:4317",
 			},
-			Metrics: runtime.MetricsConfig{
+			Metrics: bootstrap.MetricsConfig{
 				Enabled:          true,
 				Endpoint:         "localhost:4317",
 				Insecure:         true,
@@ -38,7 +38,7 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 				Attributes: map[string]string{
 					"service.name": "ecommerce-api",
 				},
-				HistogramBuckets: runtime.HistogramBuckets{
+				HistogramBuckets: bootstrap.HistogramBuckets{
 					HTTPRequestMS: []float64{5, 25, 100},
 					FlowMS:        []float64{10, 50, 250},
 				},
@@ -56,11 +56,11 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 		`httptransport "github.com/BDNK1/sflowg/runtime/transport/http"`,
 		"if err := bootstrap.Run(ctx, bootstrap.Config{",
 		"Observability:    observabilityCfg,",
-		"Transports: []runtime.Transport{",
+		"Transports: []bootstrap.Transport{",
 		`httptransport.New(httptransport.Config{Addr: ":" + *port}),`,
-		"Export: runtime.LogExportConfig{",
-		"Mode: runtime.LogExportModes{",
-		"Metrics: runtime.MetricsConfig{",
+		"Export: bootstrap.LogExportConfig{",
+		"Mode: bootstrap.LogExportModes{",
+		"Metrics: bootstrap.MetricsConfig{",
 		"Enabled:          true,",
 		`Endpoint:         "localhost:4317",`,
 		"Insecure:         true,",
@@ -74,6 +74,13 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 		if !strings.Contains(content, check) {
 			t.Fatalf("generated main.go missing %q\n%s", check, content)
 		}
+	}
+
+	if strings.Contains(content, `"github.com/BDNK1/sflowg/runtime"`) {
+		t.Fatalf("generated main.go imports root runtime directly\n%s", content)
+	}
+	if strings.Contains(content, "runtime.ObservabilityConfig") || strings.Contains(content, "runtime.Transport") || strings.Contains(content, "*runtime.Container") {
+		t.Fatalf("generated main.go still exposes root runtime API\n%s", content)
 	}
 }
 
@@ -111,15 +118,15 @@ func TestGenerate_IncludesUserMetricsDeclarations(t *testing.T) {
 		false,
 		nil,
 		config.ObservabilityConfig{
-			Metrics: runtime.MetricsConfig{
+			Metrics: bootstrap.MetricsConfig{
 				Enabled:  true,
 				Endpoint: "localhost:4317",
-				User: runtime.UserMetricsConfig{
-					Declarations: map[string]runtime.UserMetricDecl{
+				User: bootstrap.UserMetricsConfig{
+					Declarations: map[string]bootstrap.UserMetricDecl{
 						"payment_attempts": {
 							Type:        "counter",
 							Description: "Payment attempts by provider and outcome",
-							Labels: map[string]runtime.UserMetricLabel{
+							Labels: map[string]bootstrap.UserMetricLabel{
 								"provider": {Type: "enum", Values: []string{"stripe"}},
 								"outcome":  {Type: "enum", Values: []string{"success", "error", "queued"}},
 							},
@@ -141,12 +148,12 @@ func TestGenerate_IncludesUserMetricsDeclarations(t *testing.T) {
 	}
 
 	checks := []string{
-		"User: runtime.UserMetricsConfig{",
-		"Declarations: map[string]runtime.UserMetricDecl{",
+		"User: bootstrap.UserMetricsConfig{",
+		"Declarations: map[string]bootstrap.UserMetricDecl{",
 		`"payment_attempts"`,
 		`Type:        "counter"`,
 		`Description: "Payment attempts by provider and outcome"`,
-		"Labels: map[string]runtime.UserMetricLabel{",
+		"Labels: map[string]bootstrap.UserMetricLabel{",
 		`"provider"`,
 		`Type: "enum"`,
 		`"stripe"`,

@@ -6,12 +6,13 @@ import (
 	"testing"
 
 	"github.com/BDNK1/sflowg/runtime"
+	"github.com/BDNK1/sflowg/runtime/observability"
 )
 
 func TestBuildLogGlobals_UsesExecutionContext(t *testing.T) {
 	var buf bytes.Buffer
-	logger := runtime.NewObservabilityLoggerWithWriter(&buf, runtime.ObservabilityConfig{
-		Logging: runtime.LoggingConfig{
+	logger := observability.NewLoggerWithWriter(&buf, observability.Config{
+		Logging: observability.LoggingConfig{
 			Level:           "debug",
 			MaxPayloadBytes: 10240,
 		},
@@ -41,8 +42,8 @@ func TestBuildLogGlobals_UsesExecutionContext(t *testing.T) {
 
 func TestBuildLogGlobals_PreservesExtraArguments(t *testing.T) {
 	var buf bytes.Buffer
-	logger := runtime.NewObservabilityLoggerWithWriter(&buf, runtime.ObservabilityConfig{
-		Logging: runtime.LoggingConfig{
+	logger := observability.NewLoggerWithWriter(&buf, observability.Config{
+		Logging: observability.LoggingConfig{
 			Level: "debug",
 		},
 	})

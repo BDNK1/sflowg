@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"{{.RuntimeModulePath}}"
 	"{{.RuntimeModulePath}}/bootstrap"
 	httptransport "{{.RuntimeModulePath}}/transport/http"
 {{- range .Plugins}}
@@ -43,8 +42,8 @@ func main() {
 
 	ctx := context.Background()
 
-	observabilityCfg := runtime.ObservabilityConfig{
-		Logging: runtime.LoggingConfig{
+	observabilityCfg := bootstrap.ObservabilityConfig{
+		Logging: bootstrap.LoggingConfig{
 			Level:           "{{.Observability.Logging.Level}}",
 			Format:          "{{.Observability.Logging.Format}}",
 			MaxPayloadBytes: {{.Observability.Logging.MaxPayloadBytes}},
@@ -56,7 +55,7 @@ func main() {
 			},
 {{- end}}
 {{- if or .Observability.Logging.Sources.Framework .Observability.Logging.Sources.Plugin .Observability.Logging.Sources.User}}
-			Sources: runtime.LogSourcesConfig{
+			Sources: bootstrap.LogSourcesConfig{
 {{- if .Observability.Logging.Sources.Framework}}
 				Framework: "{{.Observability.Logging.Sources.Framework}}",
 {{- end}}
@@ -68,7 +67,7 @@ func main() {
 {{- end}}
 			},
 {{- end}}
-			Masking: runtime.MaskingConfig{
+			Masking: bootstrap.MaskingConfig{
 {{- if .Observability.Logging.Masking.Fields}}
 				Fields: []string{
 {{- range .Observability.Logging.Masking.Fields}}
@@ -78,10 +77,10 @@ func main() {
 {{- end}}
 				Placeholder: "{{.Observability.Logging.Masking.Placeholder}}",
 			},
-			Export: runtime.LogExportConfig{
+			Export: bootstrap.LogExportConfig{
 				Enabled:  {{.Observability.Logging.Export.Enabled}},
 {{- if .Observability.Logging.Export.Mode}}
-				Mode: runtime.LogExportModes{
+				Mode: bootstrap.LogExportModes{
 {{- range .Observability.Logging.Export.Mode}}
 					{{printf "%q" .}},
 {{- end}}
@@ -98,7 +97,7 @@ func main() {
 {{- end}}
 			},
 		},
-		Tracing: runtime.TracingConfig{
+		Tracing: bootstrap.TracingConfig{
 			Enabled:    {{.Observability.Tracing.Enabled}},
 			Endpoint:   "{{.Observability.Tracing.Endpoint}}",
 			Insecure:   {{.Observability.Tracing.Insecure}},
@@ -112,7 +111,7 @@ func main() {
 			},
 {{- end}}
 		},
-		Metrics: runtime.MetricsConfig{
+		Metrics: bootstrap.MetricsConfig{
 			Enabled:          {{.Observability.Metrics.Enabled}},
 			Endpoint:         "{{.Observability.Metrics.Endpoint}}",
 			Insecure:         {{.Observability.Metrics.Insecure}},
@@ -125,7 +124,7 @@ func main() {
 			},
 {{- end}}
 {{- if or .Observability.Metrics.HistogramBuckets.HTTPRequestMS .Observability.Metrics.HistogramBuckets.FlowMS .Observability.Metrics.HistogramBuckets.StepMS .Observability.Metrics.HistogramBuckets.PluginMS}}
-			HistogramBuckets: runtime.HistogramBuckets{
+			HistogramBuckets: bootstrap.HistogramBuckets{
 {{- if .Observability.Metrics.HistogramBuckets.HTTPRequestMS}}
 				HTTPRequestMS: []float64{
 {{- range .Observability.Metrics.HistogramBuckets.HTTPRequestMS}}
@@ -157,8 +156,8 @@ func main() {
 			},
 {{- end}}
 {{- if .Observability.Metrics.User.Declarations}}
-			User: runtime.UserMetricsConfig{
-				Declarations: map[string]runtime.UserMetricDecl{
+			User: bootstrap.UserMetricsConfig{
+				Declarations: map[string]bootstrap.UserMetricDecl{
 {{- range $name, $decl := .Observability.Metrics.User.Declarations}}
 					"{{$name}}": {
 						Type:        "{{$decl.Type}}",
@@ -176,7 +175,7 @@ func main() {
 						},
 {{- end}}
 {{- if $decl.Labels}}
-						Labels: map[string]runtime.UserMetricLabel{
+						Labels: map[string]bootstrap.UserMetricLabel{
 {{- range $labelName, $label := $decl.Labels}}
 							"{{$labelName}}": {
 								Type: "{{$label.Type}}",
@@ -199,7 +198,7 @@ func main() {
 		},
 	}
 
-	registerPlugins := func(container *runtime.Container) error {
+	registerPlugins := func(container *bootstrap.Container) error {
 		// Initialize plugins in dependency order (dependencies first)
 	// Phase 2.2: Automatic dependency injection via struct fields
 	// Phase 2.3: Configuration system with env vars and validation
@@ -245,7 +244,7 @@ func main() {
 	fmt.Printf("[config] DEBUG {{$plugin.Name}}: rawValues = %+v\n", {{sanitize $plugin.Name}}RawValues)
 
 	// Apply defaults, merge values, and validate
-	if err := runtime.InitializeConfig(&{{sanitize $plugin.Name}}Config, {{sanitize $plugin.Name}}RawValues); err != nil {
+	if err := bootstrap.InitializeConfig(&{{sanitize $plugin.Name}}Config, {{sanitize $plugin.Name}}RawValues); err != nil {
 		return fmt.Errorf("failed to initialize {{$plugin.Name}} config: %w", err)
 	}
 
@@ -315,7 +314,7 @@ func main() {
 		GlobalProperties: globalProperties,
 		Observability:    observabilityCfg,
 		RegisterPlugins:  registerPlugins,
-		Transports: []runtime.Transport{
+		Transports: []bootstrap.Transport{
 			httptransport.New(httptransport.Config{Addr: ":" + *port}),
 		},
 	}); err != nil {

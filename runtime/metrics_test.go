@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -62,34 +61,6 @@ type metricPlugin struct{}
 
 func (metricPlugin) Charge(exec *Execution, args map[string]any) (map[string]any, error) {
 	return map[string]any{"ok": true}, nil
-}
-
-func TestValidateObservabilityConfig_RequiresMetricsEndpointWhenEnabled(t *testing.T) {
-	err := ValidateObservabilityConfig(ObservabilityConfig{
-		Metrics: MetricsConfig{Enabled: true},
-	})
-	if err == nil {
-		t.Fatal("expected metrics validation error")
-	}
-	if !strings.Contains(err.Error(), "Endpoint") {
-		t.Fatalf("expected endpoint validation error, got %v", err)
-	}
-}
-
-func TestValidateObservabilityConfig_RejectsNonIncreasingMetricBuckets(t *testing.T) {
-	err := ValidateObservabilityConfig(ObservabilityConfig{
-		Metrics: MetricsConfig{
-			HistogramBuckets: HistogramBuckets{
-				FlowMS: []float64{10, 25, 25},
-			},
-		},
-	})
-	if err == nil {
-		t.Fatal("expected bucket validation error")
-	}
-	if !strings.Contains(err.Error(), "FlowMS") {
-		t.Fatalf("expected FlowMS validation error, got %v", err)
-	}
 }
 
 func TestMetricClassificationHelpers(t *testing.T) {

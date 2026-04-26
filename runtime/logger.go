@@ -62,10 +62,6 @@ func (l Logger) Slog() *slog.Logger {
 // plugin lifecycle logs can add the plugin attr explicitly at the call site.
 // Preserves any context already bound to the logger.
 func (l Logger) ForPlugin(name string) Logger {
-	if h, ok := l.slog().Handler().(*observabilityHandler); ok {
-		return Logger{base: slog.New(h.withSource("plugin")), ctx: l.ctx}
-	}
-	// Fallback for non-observability handlers (e.g. tests using slog.Default).
 	return Logger{base: l.slog().With("source", "plugin"), ctx: l.ctx}
 }
 
@@ -73,9 +69,6 @@ func (l Logger) ForPlugin(name string) Logger {
 // Used for DSL log globals so user-emitted logs are filtered and labelled correctly.
 // Preserves any context already bound to the logger.
 func (l Logger) ForUser() Logger {
-	if h, ok := l.slog().Handler().(*observabilityHandler); ok {
-		return Logger{base: slog.New(h.withSource("user")), ctx: l.ctx}
-	}
 	return Logger{base: l.slog().With("source", "user"), ctx: l.ctx}
 }
 

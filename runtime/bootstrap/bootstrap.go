@@ -2,12 +2,32 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/BDNK1/sflowg/runtime"
 	dslengine "github.com/BDNK1/sflowg/runtime/engine/dsl"
+	"github.com/BDNK1/sflowg/runtime/observability"
 )
+
+type Container = runtime.Container
+type Transport = runtime.Transport
+type ObservabilityConfig = observability.Config
+type LoggingConfig = observability.LoggingConfig
+type LogExportConfig = observability.LogExportConfig
+type LogExportModes = observability.LogExportModes
+type LogSourcesConfig = observability.LogSourcesConfig
+type MaskingConfig = observability.MaskingConfig
+type TracingConfig = observability.TracingConfig
+type MetricsConfig = observability.MetricsConfig
+type HistogramBuckets = observability.HistogramBuckets
+type UserMetricsConfig = observability.UserMetricsConfig
+type UserMetricDecl = observability.UserMetricDecl
+type UserMetricLabel = observability.UserMetricLabel
 
 // Config contains the project-specific inputs needed to assemble and run the
 // standard runtime stack.
@@ -15,21 +35,23 @@ type Config struct {
 	FlowsDir         string
 	FlowsSource      string
 	GlobalProperties map[string]any
-	Observability    runtime.ObservabilityConfig
-	RegisterPlugins  func(*runtime.Container) error
-	Transports       []runtime.Transport
+	Observability    ObservabilityConfig
+	RegisterPlugins  func(*Container) error
+	Transports       []Transport
 }
 
 // Run assembles the standard runtime stack and starts the application.
 func Run(ctx context.Context, cfg Config) (err error) {
 	container := runtime.NewContainer(runtime.NewLogger(nil))
-	if err := container.InitObservability(cfg.Observability); err != nil {
+	obs, err := observability.Init(cfg.Observability)
+	if err != nil {
 		return fmt.Errorf("initialize observability: %w", err)
 	}
+	container.SetObservabilityServices(obs.Logger, obs.Tracer, obs.Metrics)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if shutdownErr := container.ShutdownObservability(shutdownCtx); shutdownErr != nil {
+		if shutdownErr := obs.Shutdown(shutdownCtx); shutdownErr != nil {
 			if err != nil {
 				err = fmt.Errorf("%w; observability shutdown: %v", err, shutdownErr)
 				return
@@ -55,7 +77,7 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	compiler := dslengine.NewCompiler()
 	newValueStore := func() runtime.ValueStore { return runtime.NewValueStore() }
 
-	app := runtime.NewApp(container, loader, evaluator, stepExecutor, stepRunner, compiler, newValueStore, cfg.Observability)
+	app := runtime.NewApp(container, loader, evaluator, stepExecutor, stepRunner, compiler, newValueStore)
 	if len(cfg.GlobalProperties) > 0 {
 		if err := app.SetGlobalProperties(cfg.GlobalProperties); err != nil {
 			return fmt.Errorf("set global properties: %w", err)
@@ -67,5 +89,30 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		}
 	}
 
-	return app.Start(ctx, cfg.FlowsDir)
+	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := app.Start(runCtx, cfg.FlowsDir); err != nil {
+		if errors.Is(err, context.Canceled) && ctx.Err() == nil && runCtx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func InitializeConfig(config any, rawValues map[string]any) error {
+	return runtime.InitializeConfig(config, rawValues)
+}
+
+func DefaultObservabilityConfig() ObservabilityConfig {
+	return observability.DefaultConfig()
+}
+
+func ApplyObservabilityDefaults(cfg *ObservabilityConfig) error {
+	return observability.ApplyDefaults(cfg)
+}
+
+func ValidateObservabilityConfig(cfg ObservabilityConfig) error {
+	return observability.ValidateConfig(cfg)
 }

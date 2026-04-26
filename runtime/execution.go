@@ -234,7 +234,7 @@ func (e *Execution) Values() map[string]any {
 	return e.state.store.Snapshot()
 }
 
-func (e *Execution) observabilityAttrs() []slog.Attr {
+func (e *Execution) ObservabilityAttrs() []slog.Attr {
 	attrs := []slog.Attr{
 		slog.String("execution_id", e.ID),
 	}

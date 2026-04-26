@@ -1,34 +1,35 @@
-package runtime
+package observability
 
 import (
 	"context"
 	"errors"
 
+	"github.com/BDNK1/sflowg/runtime"
 	"go.opentelemetry.io/otel/trace"
 )
 
 var (
-	initObservabilityLogger = InitObservabilityLogger
+	initObservabilityLogger = InitLogger
 	initTracingRuntime      = InitTracing
-	initMetricsRuntime      = InitMetrics
+	initMetricsRuntime      = runtime.InitMetrics
 )
 
-// ObservabilityRuntime owns the app-scoped observability primitives and their shutdown.
-type ObservabilityRuntime struct {
-	Logger   Logger
+// Runtime owns the app-scoped observability primitives and their shutdown.
+type Runtime struct {
+	Logger   runtime.Logger
 	Tracer   trace.Tracer
-	Metrics  *Metrics
+	Metrics  *runtime.Metrics
 	shutdown func(context.Context) error
 }
 
-func (o *ObservabilityRuntime) Shutdown(ctx context.Context) error {
+func (o *Runtime) Shutdown(ctx context.Context) error {
 	if o == nil || o.shutdown == nil {
 		return nil
 	}
 	return o.shutdown(ctx)
 }
 
-func InitObservability(cfg ObservabilityConfig) (*ObservabilityRuntime, error) {
+func Init(cfg Config) (*Runtime, error) {
 	baseLogger, shutdownLogging, err := initObservabilityLogger(cfg)
 	if err != nil {
 		return nil, err
@@ -55,8 +56,8 @@ func InitObservability(cfg ObservabilityConfig) (*ObservabilityRuntime, error) {
 		return nil, err
 	}
 
-	return &ObservabilityRuntime{
-		Logger:  NewLogger(baseLogger),
+	return &Runtime{
+		Logger:  runtime.NewLogger(baseLogger),
 		Tracer:  tracer,
 		Metrics: metrics,
 		shutdown: joinShutdowns([]func(context.Context) error{

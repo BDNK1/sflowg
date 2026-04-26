@@ -1,31 +1,41 @@
-package runtime
+package observability
 
 import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/BDNK1/sflowg/runtime"
 	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/yaml.v3"
-	"log/slog"
 )
+
+type testObservabilityContext struct{}
+
+func (testObservabilityContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (testObservabilityContext) Done() <-chan struct{}       { return nil }
+func (testObservabilityContext) Err() error                  { return nil }
+func (testObservabilityContext) Value(any) any               { return nil }
+func (testObservabilityContext) ObservabilityAttrs() []slog.Attr {
+	return []slog.Attr{
+		slog.String("execution_id", "exec-123"),
+		slog.String("flow_id", "payment_flow"),
+		slog.String("step_id", "charge_card"),
+		slog.String("plugin", "http"),
+	}
+}
 
 func TestObservabilityHandler_EnrichesExecutionContext(t *testing.T) {
 	var buf bytes.Buffer
 	handler := newObservabilityHandler(&buf, LoggingConfig{Level: "debug"}, "framework")
 	logger := slog.New(handler)
 
-	exec := &Execution{
-		ID:           "exec-123",
-		Flow:         &Flow{ID: "payment_flow"},
-		activeStepID: "charge_card",
-		activePlugin: "http",
-	}
-
-	logger.InfoContext(exec, "test log")
+	logger.InfoContext(testObservabilityContext{}, "test log")
 
 	output := buf.String()
 	for _, want := range []string{`"execution_id":"exec-123"`, `"flow_id":"payment_flow"`, `"step_id":"charge_card"`, `"plugin":"http"`} {
@@ -110,7 +120,7 @@ func TestObservabilityHandler_InjectsSourceFromHandler(t *testing.T) {
 
 func TestLoggerForPlugin_SetsSourceOnly(t *testing.T) {
 	var buf bytes.Buffer
-	base := NewLogger(NewObservabilityLoggerWithWriter(&buf, ObservabilityConfig{
+	base := runtime.NewLogger(NewLoggerWithWriter(&buf, Config{
 		Logging: LoggingConfig{Level: "debug"},
 	}))
 
@@ -124,10 +134,10 @@ func TestLoggerForPlugin_SetsSourceOnly(t *testing.T) {
 
 func TestExecutionPluginLogs_DoNotDuplicatePluginAttr(t *testing.T) {
 	var buf bytes.Buffer
-	container := NewContainer(NewLogger(NewObservabilityLoggerWithWriter(&buf, ObservabilityConfig{
+	container := runtime.NewContainer(runtime.NewLogger(NewLoggerWithWriter(&buf, Config{
 		Logging: LoggingConfig{Level: "debug"},
 	})))
-	exec := NewExecution(&Flow{ID: "payments"}, container, nil, &testValueStore{values: make(map[string]any)})
+	exec := runtime.NewExecution(&runtime.Flow{ID: "payments"}, container, nil, runtime.NewValueStore())
 
 	pluginExec := exec.WithActivePlugin("stripe")
 	pluginExec.Logger().Info("charged")
@@ -140,7 +150,7 @@ func TestExecutionPluginLogs_DoNotDuplicatePluginAttr(t *testing.T) {
 
 func TestLoggerForUser_SetsSourceUser(t *testing.T) {
 	var buf bytes.Buffer
-	base := NewLogger(NewObservabilityLoggerWithWriter(&buf, ObservabilityConfig{
+	base := runtime.NewLogger(NewLoggerWithWriter(&buf, Config{
 		Logging: LoggingConfig{Level: "debug"},
 	}))
 
@@ -176,8 +186,8 @@ func TestObservabilityHandler_InjectsTraceContext(t *testing.T) {
 	}
 }
 
-func TestValidateObservabilityConfig_RequiresTracingEndpointWhenEnabled(t *testing.T) {
-	err := ValidateObservabilityConfig(ObservabilityConfig{
+func TestValidateConfig_RequiresTracingEndpointWhenEnabled(t *testing.T) {
+	err := ValidateConfig(Config{
 		Tracing: TracingConfig{Enabled: true},
 	})
 	if err == nil {
@@ -189,9 +199,9 @@ func TestValidateObservabilityConfig_RequiresTracingEndpointWhenEnabled(t *testi
 }
 
 func TestApplyObservabilityDefaults_DefaultsLogExportModeToStdout(t *testing.T) {
-	cfg := ObservabilityConfig{}
-	if err := ApplyObservabilityDefaults(&cfg); err != nil {
-		t.Fatalf("ApplyObservabilityDefaults failed: %v", err)
+	cfg := Config{}
+	if err := ApplyDefaults(&cfg); err != nil {
+		t.Fatalf("ApplyDefaults failed: %v", err)
 	}
 	if got, want := []string(cfg.Logging.Export.Mode), []string{logExportModeStdout}; !slices.Equal(got, want) {
 		t.Fatalf("expected default log export mode %v, got %v", want, got)
@@ -199,9 +209,9 @@ func TestApplyObservabilityDefaults_DefaultsLogExportModeToStdout(t *testing.T) 
 }
 
 func TestApplyObservabilityDefaults_DefaultsTracingSampleRateToOneWhenUnset(t *testing.T) {
-	cfg := ObservabilityConfig{}
-	if err := ApplyObservabilityDefaults(&cfg); err != nil {
-		t.Fatalf("ApplyObservabilityDefaults failed: %v", err)
+	cfg := Config{}
+	if err := ApplyDefaults(&cfg); err != nil {
+		t.Fatalf("ApplyDefaults failed: %v", err)
 	}
 	if cfg.Tracing.SampleRate != 1.0 {
 		t.Fatalf("expected default trace sample rate 1.0, got %v", cfg.Tracing.SampleRate)
@@ -209,20 +219,20 @@ func TestApplyObservabilityDefaults_DefaultsTracingSampleRateToOneWhenUnset(t *t
 }
 
 func TestApplyObservabilityDefaults_PreservesExplicitZeroTracingSampleRate(t *testing.T) {
-	var cfg ObservabilityConfig
+	var cfg Config
 	if err := yaml.Unmarshal([]byte("tracing:\n  sampler: trace_id_ratio\n  sample_rate: 0\n"), &cfg); err != nil {
 		t.Fatalf("yaml.Unmarshal failed: %v", err)
 	}
-	if err := ApplyObservabilityDefaults(&cfg); err != nil {
-		t.Fatalf("ApplyObservabilityDefaults failed: %v", err)
+	if err := ApplyDefaults(&cfg); err != nil {
+		t.Fatalf("ApplyDefaults failed: %v", err)
 	}
 	if cfg.Tracing.SampleRate != 0 {
 		t.Fatalf("expected explicit zero trace sample rate to be preserved, got %v", cfg.Tracing.SampleRate)
 	}
 }
 
-func TestValidateObservabilityConfig_RequiresLoggingExportEndpointWhenOTLPEnabled(t *testing.T) {
-	err := ValidateObservabilityConfig(ObservabilityConfig{
+func TestValidateConfig_RequiresLoggingExportEndpointWhenOTLPEnabled(t *testing.T) {
+	err := ValidateConfig(Config{
 		Logging: LoggingConfig{
 			Export: LogExportConfig{
 				Enabled: true,
@@ -235,6 +245,34 @@ func TestValidateObservabilityConfig_RequiresLoggingExportEndpointWhenOTLPEnable
 	}
 	if !strings.Contains(err.Error(), "Endpoint") {
 		t.Fatalf("expected endpoint validation error, got %v", err)
+	}
+}
+
+func TestValidateConfig_RequiresMetricsEndpointWhenEnabled(t *testing.T) {
+	err := ValidateConfig(Config{
+		Metrics: runtime.MetricsConfig{Enabled: true},
+	})
+	if err == nil {
+		t.Fatal("expected metrics validation error")
+	}
+	if !strings.Contains(err.Error(), "Endpoint") {
+		t.Fatalf("expected endpoint validation error, got %v", err)
+	}
+}
+
+func TestValidateConfig_RejectsNonIncreasingMetricBuckets(t *testing.T) {
+	err := ValidateConfig(Config{
+		Metrics: runtime.MetricsConfig{
+			HistogramBuckets: runtime.HistogramBuckets{
+				FlowMS: []float64{10, 25, 25},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected bucket validation error")
+	}
+	if !strings.Contains(err.Error(), "FlowMS") {
+		t.Fatalf("expected FlowMS validation error, got %v", err)
 	}
 }
 
@@ -260,7 +298,7 @@ func TestLogExportModes_UnmarshalScalarAndSequence(t *testing.T) {
 	}
 }
 
-func TestInitObservabilityLoggerWithWriter_FansOutToStdoutAndOTLP(t *testing.T) {
+func TestInitLoggerWithWriter_FansOutToStdoutAndOTLP(t *testing.T) {
 	var stdout bytes.Buffer
 	var otlp bytes.Buffer
 
@@ -270,7 +308,7 @@ func TestInitObservabilityLoggerWithWriter_FansOutToStdoutAndOTLP(t *testing.T) 
 		return slog.NewJSONHandler(&otlp, &slog.HandlerOptions{Level: slog.LevelDebug}), func(context.Context) error { return nil }, nil
 	}
 
-	logger, shutdown, err := InitObservabilityLoggerWithWriter(&stdout, ObservabilityConfig{
+	logger, shutdown, err := InitLoggerWithWriter(&stdout, Config{
 		Logging: LoggingConfig{
 			Level: "debug",
 			Masking: MaskingConfig{
@@ -285,7 +323,7 @@ func TestInitObservabilityLoggerWithWriter_FansOutToStdoutAndOTLP(t *testing.T) 
 		},
 	})
 	if err != nil {
-		t.Fatalf("InitObservabilityLoggerWithWriter failed: %v", err)
+		t.Fatalf("InitLoggerWithWriter failed: %v", err)
 	}
 	defer func() {
 		if err := shutdown(context.Background()); err != nil {
@@ -305,7 +343,7 @@ func TestInitObservabilityLoggerWithWriter_FansOutToStdoutAndOTLP(t *testing.T) 
 	}
 }
 
-func TestInitObservabilityLoggerWithWriter_OTLPOnlySkipsStdout(t *testing.T) {
+func TestInitLoggerWithWriter_OTLPOnlySkipsStdout(t *testing.T) {
 	var stdout bytes.Buffer
 	var otlp bytes.Buffer
 
@@ -315,7 +353,7 @@ func TestInitObservabilityLoggerWithWriter_OTLPOnlySkipsStdout(t *testing.T) {
 		return slog.NewJSONHandler(&otlp, &slog.HandlerOptions{Level: slog.LevelDebug}), func(context.Context) error { return nil }, nil
 	}
 
-	logger, shutdown, err := InitObservabilityLoggerWithWriter(&stdout, ObservabilityConfig{
+	logger, shutdown, err := InitLoggerWithWriter(&stdout, Config{
 		Logging: LoggingConfig{
 			Level: "debug",
 			Export: LogExportConfig{
@@ -326,7 +364,7 @@ func TestInitObservabilityLoggerWithWriter_OTLPOnlySkipsStdout(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("InitObservabilityLoggerWithWriter failed: %v", err)
+		t.Fatalf("InitLoggerWithWriter failed: %v", err)
 	}
 	defer func() {
 		if err := shutdown(context.Background()); err != nil {
@@ -366,7 +404,7 @@ func TestInitObservability_CleansUpLoggerWhenTracingInitFails(t *testing.T) {
 	})
 
 	loggerShutdownCalled := false
-	initObservabilityLogger = func(cfg ObservabilityConfig) (*slog.Logger, func(context.Context) error, error) {
+	initObservabilityLogger = func(cfg Config) (*slog.Logger, func(context.Context) error, error) {
 		return slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), func(context.Context) error {
 			loggerShutdownCalled = true
 			return nil
@@ -375,12 +413,12 @@ func TestInitObservability_CleansUpLoggerWhenTracingInitFails(t *testing.T) {
 	initTracingRuntime = func(cfg TracingConfig) (trace.Tracer, func(context.Context) error, error) {
 		return nil, nil, errors.New("tracing boom")
 	}
-	initMetricsRuntime = func(cfg MetricsConfig) (*Metrics, func(context.Context) error, error) {
+	initMetricsRuntime = func(cfg runtime.MetricsConfig) (*runtime.Metrics, func(context.Context) error, error) {
 		t.Fatal("metrics init should not be called when tracing init fails")
 		return nil, nil, nil
 	}
 
-	_, err := InitObservability(ObservabilityConfig{})
+	_, err := Init(Config{})
 	if err == nil {
 		t.Fatal("expected InitObservability to fail")
 	}

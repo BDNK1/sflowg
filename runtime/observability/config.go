@@ -1,4 +1,4 @@
-package runtime
+package observability
 
 import (
 	"context"
@@ -6,11 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/BDNK1/sflowg/runtime"
 	"github.com/BDNK1/sflowg/runtime/internal/configutil"
 	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/yaml.v3"
@@ -18,7 +18,7 @@ import (
 
 const defaultLogPayloadLimit = 10 * 1024
 
-type ObservabilityConfig struct {
+type Config struct {
 	Logging LoggingConfig `yaml:"logging"`
 	Tracing TracingConfig `yaml:"tracing"`
 	Metrics MetricsConfig `yaml:"metrics"`
@@ -101,61 +101,28 @@ type TracingConfig struct {
 	sampleRateSet bool `yaml:"-"`
 }
 
-type MetricsConfig struct {
-	Enabled          bool              `yaml:"enabled" default:"false"`
-	Endpoint         string            `yaml:"endpoint,omitempty" validate:"omitempty,hostname_port"`
-	Insecure         bool              `yaml:"insecure" default:"false"`
-	ExportIntervalMS int               `yaml:"export_interval_ms" default:"10000" validate:"omitempty,gte=1000,lte=60000"`
-	Attributes       map[string]string `yaml:"attributes,omitempty"`
-	HistogramBuckets HistogramBuckets  `yaml:"histogram_buckets,omitempty"`
-	User             UserMetricsConfig `yaml:"user,omitempty"`
-}
-
-type HistogramBuckets struct {
-	HTTPRequestMS []float64 `yaml:"http_request_ms,omitempty"`
-	FlowMS        []float64 `yaml:"flow_ms,omitempty"`
-	StepMS        []float64 `yaml:"step_ms,omitempty"`
-	PluginMS      []float64 `yaml:"plugin_ms,omitempty"`
-}
-
-// UserMetricsConfig holds optional user-defined metric declarations.
-// Dynamic metrics (metric.counter, metric.histogram, etc.) are always available.
-// Predeclared metrics provide startup validation and named handles.
-type UserMetricsConfig struct {
-	Declarations map[string]UserMetricDecl `yaml:"declarations,omitempty"`
-}
-
-// UserMetricDecl defines a predeclared user metric.
-type UserMetricDecl struct {
-	Type        string                     `yaml:"type"`
-	Unit        string                     `yaml:"unit,omitempty"`
-	Description string                     `yaml:"description,omitempty"`
-	Buckets     []float64                  `yaml:"buckets,omitempty"`
-	Labels      map[string]UserMetricLabel `yaml:"labels,omitempty"`
-}
-
-// UserMetricLabel defines a label constraint for a predeclared metric.
-type UserMetricLabel struct {
-	Type   string   `yaml:"type"`
-	Values []string `yaml:"values,omitempty"`
-}
+type MetricsConfig = runtime.MetricsConfig
+type HistogramBuckets = runtime.HistogramBuckets
+type UserMetricsConfig = runtime.UserMetricsConfig
+type UserMetricDecl = runtime.UserMetricDecl
+type UserMetricLabel = runtime.UserMetricLabel
 
 type observabilityContext interface {
-	observabilityAttrs() []slog.Attr
+	ObservabilityAttrs() []slog.Attr
 }
 
-func NewObservabilityLogger(cfg ObservabilityConfig) *slog.Logger {
-	logger, _, err := InitObservabilityLoggerWithWriter(os.Stdout, cfg)
+func NewLogger(cfg Config) *slog.Logger {
+	logger, _, err := InitLoggerWithWriter(os.Stdout, cfg)
 	if err == nil {
 		return logger
 	}
 	fmt.Fprintf(os.Stderr, "sflowg: failed to initialize log export, falling back to stdout-only: %v\n", err)
 	fallback := cfg
 	fallback.Logging.Export = LogExportConfig{}
-	return NewObservabilityLoggerWithWriter(os.Stdout, fallback)
+	return NewLoggerWithWriter(os.Stdout, fallback)
 }
 
-func NewObservabilityLoggerWithWriter(w io.Writer, cfg ObservabilityConfig) *slog.Logger {
+func NewLoggerWithWriter(w io.Writer, cfg Config) *slog.Logger {
 	handler := newObservabilityHandler(w, cfg.Logging, "framework")
 	logger := slog.New(handler)
 	if len(cfg.Logging.Attributes) > 0 {
@@ -168,11 +135,11 @@ func NewObservabilityLoggerWithWriter(w io.Writer, cfg ObservabilityConfig) *slo
 	return logger
 }
 
-func InitObservabilityLogger(cfg ObservabilityConfig) (*slog.Logger, func(context.Context) error, error) {
-	return InitObservabilityLoggerWithWriter(os.Stdout, cfg)
+func InitLogger(cfg Config) (*slog.Logger, func(context.Context) error, error) {
+	return InitLoggerWithWriter(os.Stdout, cfg)
 }
 
-func InitObservabilityLoggerWithWriter(w io.Writer, cfg ObservabilityConfig) (*slog.Logger, func(context.Context) error, error) {
+func InitLoggerWithWriter(w io.Writer, cfg Config) (*slog.Logger, func(context.Context) error, error) {
 	handler, shutdown, err := newObservabilityHandlerWithShutdown(w, cfg.Logging, "framework")
 	if err != nil {
 		return nil, nil, err
@@ -190,13 +157,13 @@ func InitObservabilityLoggerWithWriter(w io.Writer, cfg ObservabilityConfig) (*s
 	return logger, shutdown, nil
 }
 
-func DefaultObservabilityConfig() ObservabilityConfig {
-	cfg := ObservabilityConfig{}
-	_ = ApplyObservabilityDefaults(&cfg)
+func DefaultConfig() Config {
+	cfg := Config{}
+	_ = ApplyDefaults(&cfg)
 	return cfg
 }
 
-func ApplyObservabilityDefaults(cfg *ObservabilityConfig) error {
+func ApplyDefaults(cfg *Config) error {
 	if err := configutil.ApplyDefaults(cfg); err != nil {
 		return err
 	}
@@ -220,7 +187,7 @@ func (c *TracingConfig) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-func ValidateObservabilityConfig(cfg ObservabilityConfig) error {
+func ValidateConfig(cfg Config) error {
 	if err := configutil.ValidateStruct(cfg); err != nil {
 		return err
 	}
@@ -255,7 +222,7 @@ func ValidateObservabilityConfig(cfg ObservabilityConfig) error {
 		return err
 	}
 
-	if err := validateUserMetricsConfig(metrics.User); err != nil {
+	if err := runtime.ValidateUserMetricsConfig(metrics.User); err != nil {
 		return err
 	}
 
@@ -320,89 +287,6 @@ func validateLogExportModes(modes LogExportModes) error {
 		default:
 			return fmt.Errorf("config validation failed:\n  - field 'Mode' must contain only stdout or otlp")
 		}
-	}
-	return nil
-}
-
-var validMetricNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.]*$`)
-
-const (
-	maxMetricNameLen = 128
-	maxLabelNameLen  = 64
-)
-
-var validUserMetricTypes = map[string]bool{
-	"counter":       true,
-	"updowncounter": true,
-	"histogram":     true,
-	"gauge":         true,
-}
-
-// reservedUserMetricDSLNames are the names used by the dynamic metric API
-// (metric.counter, metric.histogram, etc.). Predeclared metric declarations
-// must not use these names or they would overwrite the API functions in the
-// DSL metric module, silently breaking metric.counter(...) and siblings.
-var reservedUserMetricDSLNames = map[string]bool{
-	"counter":       true,
-	"updowncounter": true,
-	"histogram":     true,
-	"gauge":         true,
-}
-
-func validateUserMetricsConfig(cfg UserMetricsConfig) error {
-	for name, decl := range cfg.Declarations {
-		if err := validateUserMetricDecl(name, decl); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateUserMetricDecl(name string, decl UserMetricDecl) error {
-	if name == "" {
-		return fmt.Errorf("config validation failed:\n  - user metric name must not be empty")
-	}
-	if len(name) > maxMetricNameLen {
-		return fmt.Errorf("config validation failed:\n  - user metric name %q exceeds maximum length %d", name, maxMetricNameLen)
-	}
-	if !validMetricNamePattern.MatchString(name) {
-		return fmt.Errorf("config validation failed:\n  - user metric name %q contains invalid characters", name)
-	}
-	if reservedUserMetricDSLNames[name] {
-		return fmt.Errorf("config validation failed:\n  - user metric name %q is reserved by the DSL metric API", name)
-	}
-	if !validUserMetricTypes[decl.Type] {
-		return fmt.Errorf("config validation failed:\n  - user metric %q has invalid type %q, must be one of: counter, updowncounter, histogram, gauge", name, decl.Type)
-	}
-	if len(decl.Buckets) > 0 && decl.Type != "histogram" {
-		return fmt.Errorf("config validation failed:\n  - user metric %q has buckets but type is %q (buckets are only valid for histogram)", name, decl.Type)
-	}
-	if err := validateIncreasingBuckets(fmt.Sprintf("user.%s.buckets", name), decl.Buckets); err != nil {
-		return err
-	}
-	for labelName, label := range decl.Labels {
-		if err := validateUserMetricLabel(name, labelName, label); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateUserMetricLabel(metricName, labelName string, label UserMetricLabel) error {
-	if labelName == "" {
-		return fmt.Errorf("config validation failed:\n  - user metric %q has empty label name", metricName)
-	}
-	if len(labelName) > maxLabelNameLen {
-		return fmt.Errorf("config validation failed:\n  - user metric %q label %q exceeds maximum length %d", metricName, labelName, maxLabelNameLen)
-	}
-	if !validMetricNamePattern.MatchString(labelName) {
-		return fmt.Errorf("config validation failed:\n  - user metric %q label %q contains invalid characters", metricName, labelName)
-	}
-	if label.Type != "enum" {
-		return fmt.Errorf("config validation failed:\n  - user metric %q label %q has invalid type %q, must be enum", metricName, labelName, label.Type)
-	}
-	if len(label.Values) == 0 {
-		return fmt.Errorf("config validation failed:\n  - user metric %q label %q must have at least one enum value", metricName, labelName)
 	}
 	return nil
 }
@@ -544,7 +428,7 @@ func (h *observabilityHandler) Handle(ctx context.Context, r slog.Record) error 
 	}
 
 	if carrier, ok := ctx.(observabilityContext); ok {
-		record.AddAttrs(carrier.observabilityAttrs()...)
+		record.AddAttrs(carrier.ObservabilityAttrs()...)
 	}
 
 	if spanCtx := trace.SpanContextFromContext(ctx); spanCtx.IsValid() {

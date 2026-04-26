@@ -3,9 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
+
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 type failingInitializerPlugin struct{}
@@ -109,5 +112,24 @@ func TestContainerRangeTasks_IteratesRegisteredTasks(t *testing.T) {
 	expected := []string{"greeting.greet"}
 	if !slices.Equal(taskNames, expected) {
 		t.Fatalf("expected tasks %v, got %v", expected, taskNames)
+	}
+}
+
+func TestContainerSetObservabilityServices_InjectsServices(t *testing.T) {
+	container := NewContainer(NewLogger(nil))
+	metrics := NewNoopMetrics()
+	tracer := noop.NewTracerProvider().Tracer("test")
+	logger := NewLogger(slog.Default())
+
+	container.SetObservabilityServices(logger, tracer, metrics)
+
+	if container.Logger().Slog() != logger.Slog() {
+		t.Fatal("expected injected logger")
+	}
+	if container.Tracer() != tracer {
+		t.Fatal("expected injected tracer")
+	}
+	if container.Metrics() != metrics {
+		t.Fatal("expected injected metrics")
 	}
 }
