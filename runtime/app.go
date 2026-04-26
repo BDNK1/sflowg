@@ -7,7 +7,13 @@ import (
 	"time"
 
 	"github.com/BDNK1/sflowg/runtime/internal/configutil"
+	validationschema "github.com/BDNK1/sflowg/runtime/validation/schema"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
+
+const flowInputNamespace = "input"
 
 type App struct {
 	Container        *Container
@@ -20,6 +26,7 @@ type App struct {
 	compiler         FlowCompiler
 	newValueStore    func() ValueStore
 	transports       *TransportRegistry
+	flowValidator    FlowSetValidator
 }
 
 // NewApp creates a new application with the given container and engine components.
@@ -56,6 +63,14 @@ func (a *App) SetGlobalProperties(props map[string]any) error {
 	return nil
 }
 
+func (a *App) SetFlowValidator(validator FlowSetValidator) {
+	a.flowValidator = validator
+}
+
+func (a *App) Executor() *Executor {
+	return NewExecutor(a.evaluator, a.stepExecutor, a.stepRunner)
+}
+
 // Start starts registered transports and blocks until shutdown.
 func (a *App) Start(ctx context.Context, flowsDir string) error {
 	// Initialize plugins
@@ -85,6 +100,11 @@ func (a *App) Start(ctx context.Context, flowsDir string) error {
 	if err != nil {
 		return cleanupStartupError(err)
 	}
+	if a.flowValidator != nil {
+		if err := a.flowValidator.ValidateFlows(a.Flows); err != nil {
+			return cleanupStartupError(fmt.Errorf("validating flows: %w", err))
+		}
+	}
 	if len(activeTransports) == 0 {
 		return cleanupStartupError(fmt.Errorf("no transports to start"))
 	}
@@ -95,7 +115,7 @@ func (a *App) Start(ctx context.Context, flowsDir string) error {
 	}
 
 	// Create executor for flow execution
-	executor := NewExecutor(a.evaluator, a.stepExecutor, a.stepRunner)
+	executor := a.Executor()
 
 	errChan := make(chan error, len(activeTransports))
 
@@ -260,6 +280,116 @@ func (a *App) compileFlows(ctx context.Context) error {
 		a.Flows[flowID] = flow
 	}
 	return nil
+}
+
+func (a *App) LookupFlow(name string) (*Flow, bool) {
+	flow, ok := a.Flows[name]
+	if !ok {
+		return nil, false
+	}
+	return &flow, true
+}
+
+func (a *App) InvokeSubflow(parent *Execution, target *Flow, args map[string]any) (map[string]any, error) {
+	if target == nil {
+		return nil, &FlowError{Type: ErrorTypePermanent, Code: string(ErrorCodeRuntimeError), Message: "subflow target is nil"}
+	}
+	normalized, err := validateSubflowArgs(target, args)
+	if err != nil {
+		return nil, err
+	}
+
+	sub := NewExecution(target, parent.Container, a.GlobalProperties, a.newValueStore())
+	sub = sub.WithContext(parent)
+	for key, value := range normalized {
+		sub.AddValue(flowInputNamespace+"."+key, value)
+	}
+
+	ctx, span := parent.Tracer().Start(parent, fmt.Sprintf("flow.call %s", target.ID),
+		trace.WithAttributes(attribute.String("flow.call.target", target.ID)),
+	)
+	defer span.End()
+	subCtx := ctx
+	cancel := func() {}
+	if target.Timeout > 0 {
+		subCtx, cancel = context.WithTimeout(ctx, time.Duration(target.Timeout)*time.Millisecond)
+	}
+	defer cancel()
+	sub = sub.WithContext(subCtx)
+
+	if err := a.Executor().ExecuteSteps(sub); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+
+	rd := sub.State().Response()
+	if rd == nil {
+		err := &FlowError{Type: ErrorTypePermanent, Code: "SUBFLOW_NO_RESPONSE", Message: fmt.Sprintf("subflow %q completed without response.value or response.error", target.ID)}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Message)
+		return nil, err
+	}
+	switch rd.Subtype {
+	case "value":
+		return rd.Args, nil
+	case "error":
+		fe := flowResponseError(rd.Args)
+		span.RecordError(fe)
+		span.SetStatus(codes.Error, fe.Message)
+		return nil, fe
+	default:
+		err := &FlowError{Type: ErrorTypePermanent, Code: string(ErrorCodeRuntimeError), Message: fmt.Sprintf("subflow %q returned unsupported response.%s", target.ID, rd.Subtype)}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Message)
+		return nil, err
+	}
+}
+
+func validateSubflowArgs(target *Flow, args map[string]any) (map[string]any, error) {
+	if args == nil {
+		args = map[string]any{}
+	}
+	fields := target.Entrypoint.Input.FieldSchemas(flowInputNamespace)
+	normalized := make(map[string]any, len(args)+len(fields))
+	for key, value := range args {
+		normalized[key] = value
+	}
+	var fieldErrs []validationschema.FieldError
+	for name, fieldSchema := range fields {
+		raw, present := args[name]
+		value, errs := validationschema.ValidateField(raw, present, fieldSchema, flowInputNamespace+"."+name)
+		if len(errs) > 0 {
+			fieldErrs = append(fieldErrs, errs...)
+			continue
+		}
+		if value != nil || present || fieldSchema.Default != nil {
+			normalized[name] = value
+		}
+	}
+	if len(fieldErrs) > 0 {
+		return nil, &FlowError{
+			Type:    ErrorTypePermanent,
+			Code:    string(ErrorCodeSchemaViolation),
+			Message: fmt.Sprintf("subflow %q input validation failed", target.ID),
+			Meta: map[string]any{
+				"fields": validationschema.FieldsToMaps(fieldErrs),
+			},
+		}
+	}
+	return normalized, nil
+}
+
+func flowResponseError(args map[string]any) *FlowError {
+	code, _ := args["code"].(string)
+	message, _ := args["message"].(string)
+	if code == "" {
+		code = string(ErrorCodeRuntimeError)
+	}
+	if message == "" {
+		message = code
+	}
+	return &FlowError{Type: ErrorTypePermanent, Code: code, Message: message}
 }
 
 // applyMetricContext reads properties.observability.metrics.context from

@@ -10,6 +10,7 @@ This example uses `engine: dsl` in `flow-config.yaml`. Flows are written in `.fl
 - Steps contain Risor code bodies instead of declarative args
 - `response.json(...)` is called directly (no separate return type dispatch)
 - Plugin calls use function syntax: `postgres.get({query: "...", params: [...]})`
+- `create_order` calls the reusable `resolve_order_currency` subflow via `flow.call(...)`
 - `pay_order` delegates payment creation to the `stripe-integration` flow via `http.request(...)`
 
 ## Quick Setup

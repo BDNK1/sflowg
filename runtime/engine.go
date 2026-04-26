@@ -53,6 +53,7 @@ type StepInput struct {
 	StepID   string         `json:"step_id"`
 	Body     string         `json:"body"`
 	Input    map[string]any `json:"input"`
+	ExtraEnv map[string]any `json:"extra_env,omitempty"`
 	Timeout  int            `json:"timeout,omitempty"`
 	Path     SuccessPath    `json:"path,omitempty"`
 	Compiled any            `json:"-"`
@@ -78,6 +79,12 @@ type StepRunner interface {
 
 // BuildStepInput constructs the current canonical input shape for a step.
 func BuildStepInput(execution *Execution, step Step, path SuccessPath) (StepInput, error) {
+	return BuildStepInputWithExtra(execution, step, path, nil)
+}
+
+// BuildStepInputWithExtra constructs StepInput and overlays scoped values that
+// should be visible only to this isolated step body.
+func BuildStepInputWithExtra(execution *Execution, step Step, path SuccessPath, extra map[string]any) (StepInput, error) {
 	input := execution.State().Store().Snapshot()
 	if execution.DSLMode() == DSLExecutionModeCompiled {
 		if strings.TrimSpace(step.Body) != "" && step.StoreKeys == nil {
@@ -92,6 +99,7 @@ func BuildStepInput(execution *Execution, step Step, path SuccessPath) (StepInpu
 		StepID:   step.ID,
 		Body:     step.Body,
 		Input:    input,
+		ExtraEnv: extra,
 		Timeout:  step.Timeout,
 		Path:     path,
 		Compiled: step.Compiled,

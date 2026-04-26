@@ -77,6 +77,9 @@ func (r isolatedTestStepRunner) RunStep(ctx context.Context, execution *Executio
 	for k, v := range input.Input {
 		store.SetNested(k, v)
 	}
+	for k, v := range input.ExtraEnv {
+		store.SetNested(k, v)
+	}
 
 	isolated := execution.WithIsolatedState(NewRunState(store))
 	step := Step{

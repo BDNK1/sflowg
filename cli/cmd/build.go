@@ -15,6 +15,8 @@ import (
 	"github.com/BDNK1/sflowg/cli/internal/detector"
 	"github.com/BDNK1/sflowg/cli/internal/generator"
 	"github.com/BDNK1/sflowg/cli/internal/workspace"
+	"github.com/BDNK1/sflowg/runtime"
+	dslengine "github.com/BDNK1/sflowg/runtime/engine/dsl"
 	"github.com/spf13/cobra"
 )
 
@@ -183,6 +185,9 @@ func runBuild(_ *cobra.Command, args []string) error {
 		fmt.Println("\nCopying flows to workspace for embedding...")
 		if err := ws.CopyFlows(); err != nil {
 			return fmt.Errorf("failed to copy flows: %w", err)
+		}
+		if err := validateEmbeddedFlows(filepath.Join(ws.Path, "flows")); err != nil {
+			return fmt.Errorf("embedded flow validation failed: %w", err)
 		}
 	} else {
 		fmt.Println("\nSkipping flow copy (development mode - flows loaded at runtime)")
@@ -412,6 +417,31 @@ func runBuild(_ *cobra.Command, args []string) error {
 	fmt.Printf("\nRun with: %s\n", outputPath)
 
 	return nil
+}
+
+func validateEmbeddedFlows(flowsDir string) error {
+	loader := dslengine.NewFlowLoader()
+	flows := map[string]runtime.Flow{}
+	for _, ext := range loader.Extensions() {
+		matches, err := filepath.Glob(filepath.Join(flowsDir, ext))
+		if err != nil {
+			return err
+		}
+		for _, file := range matches {
+			flow, err := loader.Load(file)
+			if err != nil {
+				return err
+			}
+			switch flow.Entrypoint.Type {
+			case "http", "":
+				flow.ResponseSubtypes = []string{"json", "text", "redirect"}
+			case "flow":
+				flow.ResponseSubtypes = []string{"value", "error"}
+			}
+			flows[flow.ID] = flow
+		}
+	}
+	return dslengine.NewFlowValidator().ValidateFlows(flows)
 }
 
 func resolveModuleDir(workspacePath, modulePath string) (string, error) {

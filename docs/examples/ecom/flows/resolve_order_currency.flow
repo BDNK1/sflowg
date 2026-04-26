@@ -1,0 +1,10 @@
+entrypoint.flow {
+    input: {
+        requested_currency: { type: string, enum: [usd, eur] }
+        default_currency: { type: string, required: true, enum: [usd, eur] }
+    }
+}
+
+return response.value({
+    currency: input.requested_currency || input.default_currency
+})

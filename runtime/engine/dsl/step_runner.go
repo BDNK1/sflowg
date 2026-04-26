@@ -20,6 +20,9 @@ func (r *LocalStepRunner) RunStep(ctx context.Context, execution *runtime.Execut
 	for k, v := range input.Input {
 		store.SetNested(k, v)
 	}
+	for k, v := range input.ExtraEnv {
+		store.SetNested(k, v)
+	}
 
 	isolatedState := runtime.NewRunState(store)
 	isolatedExec := execution.WithIsolatedState(isolatedState)

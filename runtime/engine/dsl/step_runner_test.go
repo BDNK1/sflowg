@@ -8,6 +8,24 @@ import (
 	"github.com/BDNK1/sflowg/runtime"
 )
 
+type fakeSubflowInvoker struct {
+	flows map[string]runtime.Flow
+	args  map[string]any
+}
+
+func (f *fakeSubflowInvoker) LookupFlow(name string) (*runtime.Flow, bool) {
+	flow, ok := f.flows[name]
+	if !ok {
+		return nil, false
+	}
+	return &flow, true
+}
+
+func (f *fakeSubflowInvoker) InvokeSubflow(_ *runtime.Execution, _ *runtime.Flow, args map[string]any) (map[string]any, error) {
+	f.args = args
+	return map[string]any{"y": int64(2)}, nil
+}
+
 func newRunnerExecution() *runtime.Execution {
 	return runtime.NewExecution(&runtime.Flow{ID: "payments"}, runtime.NewContainer(runtime.NewLogger(nil)), nil, runtime.NewValueStore())
 }
@@ -129,6 +147,56 @@ func TestRunStep_ErrorPropagation(t *testing.T) {
 	var flowErr *runtime.FlowError
 	if !errors.As(err, &flowErr) {
 		t.Fatalf("expected FlowError, got %T (%v)", err, err)
+	}
+}
+
+func TestRunStep_ExtraEnvIsScopedToIsolatedStep(t *testing.T) {
+	exec := newRunnerExecution()
+	runner := NewLocalStepRunner(NewStepExecutor())
+	output, err := runner.RunStep(context.Background(), exec, runtime.StepInput{
+		StepID: "fallback",
+		Body:   `{code: error.code}`,
+		Input:  map[string]any{},
+		ExtraEnv: map[string]any{
+			"error": map[string]any{"code": "FAILED"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	result, ok := output.Result.(map[string]any)
+	if !ok || result["code"] != "FAILED" {
+		t.Fatalf("result = %#v", output.Result)
+	}
+	if _, ok := exec.State().Store().Get("error"); ok {
+		t.Fatal("extra env leaked into parent execution store")
+	}
+}
+
+func TestRunStep_FlowCallGlobal(t *testing.T) {
+	invoker := &fakeSubflowInvoker{
+		flows: map[string]runtime.Flow{
+			"sub": {ID: "sub", Entrypoint: runtime.Entrypoint{Type: "flow"}},
+		},
+	}
+	executor := NewStepExecutor()
+	executor.SetSubflowInvoker(invoker)
+	runner := NewLocalStepRunner(executor)
+
+	output, err := runner.RunStep(context.Background(), newRunnerExecution(), runtime.StepInput{
+		StepID: "call_sub",
+		Body:   `flow.call("sub", {x: 1})`,
+		Input:  map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	result, ok := output.Result.(map[string]any)
+	if !ok || result["y"] != int64(2) {
+		t.Fatalf("result = %#v", output.Result)
+	}
+	if invoker.args["x"] != int64(1) {
+		t.Fatalf("args = %#v", invoker.args)
 	}
 }
 

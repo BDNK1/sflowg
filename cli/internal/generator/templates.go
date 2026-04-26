@@ -313,6 +313,7 @@ func main() {
 		FlowsSource:     flowsSource,
 		GlobalProperties: globalProperties,
 		Observability:    observabilityCfg,
+		ValidateFlows:    {{if .EmbedFlows}}false{{else}}true{{end}},
 		RegisterPlugins:  registerPlugins,
 		Transports: []bootstrap.Transport{
 			httptransport.New(httptransport.Config{Addr: ":" + *port}),

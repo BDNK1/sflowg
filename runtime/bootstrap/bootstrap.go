@@ -12,6 +12,7 @@ import (
 	"github.com/BDNK1/sflowg/runtime"
 	dslengine "github.com/BDNK1/sflowg/runtime/engine/dsl"
 	"github.com/BDNK1/sflowg/runtime/observability"
+	flowtransport "github.com/BDNK1/sflowg/runtime/transport/flow"
 )
 
 type Container = runtime.Container
@@ -38,6 +39,7 @@ type Config struct {
 	Observability    ObservabilityConfig
 	RegisterPlugins  func(*Container) error
 	Transports       []Transport
+	ValidateFlows    bool
 }
 
 // Run assembles the standard runtime stack and starts the application.
@@ -78,6 +80,10 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	newValueStore := func() runtime.ValueStore { return runtime.NewValueStore() }
 
 	app := runtime.NewApp(container, loader, evaluator, stepExecutor, stepRunner, compiler, newValueStore)
+	stepExecutor.SetSubflowInvoker(app)
+	if cfg.ValidateFlows {
+		app.SetFlowValidator(dslengine.NewFlowValidator())
+	}
 	if len(cfg.GlobalProperties) > 0 {
 		if err := app.SetGlobalProperties(cfg.GlobalProperties); err != nil {
 			return fmt.Errorf("set global properties: %w", err)
@@ -87,6 +93,9 @@ func Run(ctx context.Context, cfg Config) (err error) {
 		if err := app.RegisterTransport(transport); err != nil {
 			return fmt.Errorf("register %s transport: %w", transport.Type(), err)
 		}
+	}
+	if err := app.RegisterTransport(flowtransport.New()); err != nil {
+		return fmt.Errorf("register flow transport: %w", err)
 	}
 
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)

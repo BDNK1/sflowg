@@ -65,6 +65,16 @@ func (fakeStepRunner) RunStep(context.Context, *Execution, StepInput) (StepOutpu
 	return StepOutput{}, nil
 }
 
+type deadlineCapturingStepRunner struct {
+	deadlineSet *bool
+}
+
+func (r deadlineCapturingStepRunner) RunStep(ctx context.Context, _ *Execution, _ StepInput) (StepOutput, error) {
+	_, ok := ctx.Deadline()
+	*r.deadlineSet = ok
+	return StepOutput{Response: &ResponseDescriptor{Subtype: "value", Args: map[string]any{"ok": true}}}, nil
+}
+
 type shutdownOnlyPlugin struct {
 	called *bool
 }
@@ -90,6 +100,35 @@ func TestGroupFlowsByTransport_SetsResponseSubtypes(t *testing.T) {
 	}
 	if got := app.Flows["payments"].ResponseSubtypes; len(got) != 3 || got[0] != "json" {
 		t.Fatalf("response subtypes = %#v", got)
+	}
+}
+
+func TestInvokeSubflow_HonorsTargetTimeout(t *testing.T) {
+	deadlineSet := false
+	app := NewApp(
+		NewContainer(NewLogger(nil)),
+		fakeLoader{},
+		fakeEvaluator{},
+		fakeStepExecutor{},
+		deadlineCapturingStepRunner{deadlineSet: &deadlineSet},
+		nil,
+		func() ValueStore { return NewValueStore() },
+	)
+	parentFlow := &Flow{ID: "caller", Entrypoint: Entrypoint{Type: "http"}}
+	parent := NewExecution(parentFlow, app.Container, nil, NewValueStore())
+	target := &Flow{
+		ID:               "sub",
+		Entrypoint:       Entrypoint{Type: "flow"},
+		Timeout:          25,
+		ResponseSubtypes: []string{"value", "error"},
+		Steps:            []Step{{ID: "__return", Body: `response.value({ok: true})`}},
+	}
+
+	if _, err := app.InvokeSubflow(parent, target, nil); err != nil {
+		t.Fatalf("InvokeSubflow() error = %v", err)
+	}
+	if !deadlineSet {
+		t.Fatal("expected subflow step context to have deadline")
 	}
 }
 

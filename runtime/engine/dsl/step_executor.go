@@ -16,12 +16,17 @@ import (
 // per-step and flow-level timeouts propagate into the interpreter.
 type StepExecutor struct {
 	interpreter *Interpreter
+	subflows    runtime.SubflowInvoker
 }
 
 func NewStepExecutor() *StepExecutor {
 	return &StepExecutor{
 		interpreter: &Interpreter{},
 	}
+}
+
+func (e *StepExecutor) SetSubflowInvoker(invoker runtime.SubflowInvoker) {
+	e.subflows = invoker
 }
 
 func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execution, step runtime.Step) (string, error) {
@@ -155,6 +160,11 @@ func (e *StepExecutor) buildEnv(execution *runtime.Execution) map[string]any {
 
 	responseGlobals := BuildResponseGlobals(execution)
 	for k, v := range responseGlobals {
+		globals[k] = v
+	}
+
+	flowGlobals := BuildFlowCallGlobals(e.subflows, execution)
+	for k, v := range flowGlobals {
 		globals[k] = v
 	}
 

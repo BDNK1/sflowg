@@ -68,7 +68,7 @@ func BuildResponseGlobals(exec *runtime.Execution) map[string]any {
 		}
 		handlerName := entrypointType + "." + subtype
 		responseMethods[subtype] = func(args ...any) error {
-			argsMap, err := normalizeResponseArgs(args)
+			argsMap, err := normalizeResponseArgsFor(entrypointType, subtype, args)
 			if err != nil {
 				return err
 			}
@@ -84,6 +84,48 @@ func BuildResponseGlobals(exec *runtime.Execution) map[string]any {
 	return map[string]any{
 		"response": responseMethods,
 	}
+}
+
+func BuildFlowCallGlobals(invoker runtime.SubflowInvoker, exec *runtime.Execution) map[string]any {
+	return map[string]any{
+		"flow": map[string]any{
+			"call": func(name string, args map[string]any) (map[string]any, error) {
+				if invoker == nil {
+					return nil, fmt.Errorf("flow.call is not available")
+				}
+				target, ok := invoker.LookupFlow(name)
+				if !ok {
+					return nil, &runtime.FlowError{
+						Type:    runtime.ErrorTypePermanent,
+						Code:    string(runtime.ErrorCodeRuntimeError),
+						Message: fmt.Sprintf("undefined subflow %q", name),
+					}
+				}
+				if target.Entrypoint.Type != "flow" {
+					return nil, &runtime.FlowError{
+						Type:    runtime.ErrorTypePermanent,
+						Code:    string(runtime.ErrorCodeRuntimeError),
+						Message: fmt.Sprintf("flow.call target %q must be entrypoint.flow, got %q", name, target.Entrypoint.Type),
+					}
+				}
+				return invoker.InvokeSubflow(exec, target, args)
+			},
+		},
+	}
+}
+
+func normalizeResponseArgsFor(entrypointType, subtype string, args []any) (map[string]any, error) {
+	if entrypointType == "flow" && subtype == "error" {
+		if len(args) != 1 {
+			return nil, fmt.Errorf("response.error expects one map argument")
+		}
+		m, ok := args[0].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("response.error expects map argument, got %T", args[0])
+		}
+		return m, nil
+	}
+	return normalizeResponseArgs(args)
 }
 
 // normalizeResponseArgs converts the variadic args from a Risor function call

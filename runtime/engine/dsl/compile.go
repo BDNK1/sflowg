@@ -90,9 +90,10 @@ func (c *Compiler) compileBody(
 }
 
 func collectKnownStoreKeys(flow *runtime.Flow) []string {
-	keys := []string{"request", "properties", "error", "compensation"}
+	keys := []string{"request", "input", "properties", "error", "compensation"}
 	seen := map[string]struct{}{
 		"request":      {},
+		"input":        {},
 		"properties":   {},
 		"error":        {},
 		"compensation": {},
@@ -106,13 +107,14 @@ func collectKnownStoreKeys(flow *runtime.Flow) []string {
 		keys = append(keys, step.ID)
 	}
 
-	sort.Strings(keys[4:])
+	sort.Strings(keys[5:])
 	return keys
 }
 
 func collectFrameworkInfo(container *runtime.Container) (map[string]struct{}, map[string]any) {
 	frameworkKeys := map[string]struct{}{
 		"response":      {},
+		"flow":          {},
 		"log":           {},
 		"metric":        {},
 		"sprintf":       {},
@@ -122,6 +124,7 @@ func collectFrameworkInfo(container *runtime.Container) (map[string]struct{}, ma
 
 	frameworkEnv := map[string]any{
 		"response":      buildResponseTemplateModule(nil),
+		"flow":          buildFlowTemplateModule(),
 		"log":           buildLogTemplateModule(),
 		"metric":        buildMetricTemplateModule(container),
 		"sprintf":       fmt.Sprintf,
@@ -140,6 +143,14 @@ func collectFrameworkInfo(container *runtime.Container) (map[string]struct{}, ma
 	}
 
 	return frameworkKeys, frameworkEnv
+}
+
+func buildFlowTemplateModule() map[string]any {
+	return map[string]any{
+		"call": func(name string, args map[string]any) (map[string]any, error) {
+			return nil, nil
+		},
+	}
 }
 
 func buildStepTemplateEnv(storeKeys []string, frameworkEnv map[string]any) map[string]any {

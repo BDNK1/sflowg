@@ -95,7 +95,9 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 				fbStep.Compiled = s.FallbackCompiled
 				fbStep.StoreKeys = s.FallbackStoreKeys
 				fbStep.Retry = nil // fallback has no retry policy
-				fbOutput, fbFE := e.executeStepWithRetries(execution, fbStep, SuccessPathFallback)
+				fbOutput, fbFE := e.executeStepWithRetriesWithExtra(execution, fbStep, SuccessPathFallback, map[string]any{
+					"error": fe.ToMap(),
+				})
 
 				if fbFE == nil {
 					applyStepOutput(execution, s.ID, fbOutput)
@@ -139,7 +141,8 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 // handleFailure runs compensation and on_error handling.
 // Behavior:
 //   - If no on_error is configured (or executable), returns original error.
-//   - If on_error succeeds without raising, swallows the error (returns nil).
+//   - If on_error sets a response and does not raise, swallows the error.
+//   - If on_error succeeds without a response, returns the original error.
 //   - If on_error raises/returns an error, returns handler error instead of original.
 func (e *Executor) handleFailure(execution *Execution, fe *FlowError) error {
 	e.runCompensations(execution)
@@ -166,6 +169,10 @@ func (e *Executor) HandleBoundaryError(execution *Execution, fe *FlowError) (boo
 // executeStepWithRetries runs the step body respecting its RetryConfig.
 // Returns the winning StepOutput on success or the last FlowError on exhausted retries.
 func (e *Executor) executeStepWithRetries(execution *Execution, step Step, path SuccessPath) (StepOutput, *FlowError) {
+	return e.executeStepWithRetriesWithExtra(execution, step, path, nil)
+}
+
+func (e *Executor) executeStepWithRetriesWithExtra(execution *Execution, step Step, path SuccessPath, extra map[string]any) (StepOutput, *FlowError) {
 	parentCtx := execution.ctx
 	if parentCtx == nil {
 		parentCtx = context.Background()
@@ -227,7 +234,7 @@ attemptLoop:
 		}
 
 		stepExec := execution.WithContext(stepCtx).WithActivePath(path).WithActiveStep(step.ID)
-		input, err := BuildStepInput(execution, step, path)
+		input, err := BuildStepInputWithExtra(execution, step, path, extra)
 		if err != nil {
 			lastFE = toFlowError(err, step.ID, attempt)
 			break
@@ -395,6 +402,9 @@ func (e *Executor) runOnErrorHandler(execution *Execution, fe *FlowError) (handl
 	if err != nil {
 		log.Error("on_error handler itself failed", "error", err)
 		return true, err
+	}
+	if output.Response == nil {
+		return false, nil
 	}
 	applyOnErrorOutput(execution, output)
 	return true, nil
