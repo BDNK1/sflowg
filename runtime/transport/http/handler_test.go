@@ -22,6 +22,7 @@ import (
 
 type Execution = runtime.Execution
 type Entrypoint = runtime.Entrypoint
+type InputContract = runtime.InputContract
 type Flow = runtime.Flow
 type FlowError = runtime.FlowError
 type LoggingConfig = observability.LoggingConfig
@@ -84,7 +85,7 @@ func (r isolatedTestStepRunner) RunStep(ctx context.Context, execution *Executio
 	}, nil
 }
 
-func mustParseHTTPBinding(t *testing.T, config map[string]any) *httpinput.Binding {
+func mustParseHTTPBinding(t *testing.T, config map[string]any) *InputContract {
 	t.Helper()
 	binding, err := httpinput.ParseBinding(config)
 	if err != nil {

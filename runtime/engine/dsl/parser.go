@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/BDNK1/sflowg/runtime"
+	"github.com/BDNK1/sflowg/runtime/validation/flowinput"
 	"github.com/BDNK1/sflowg/runtime/validation/httpinput"
 )
 
@@ -128,7 +129,7 @@ func (p *parser) parseEntrypoint() (runtime.Entrypoint, int, error) {
 	if err != nil {
 		return runtime.Entrypoint{}, 0, fmt.Errorf("parsing entrypoint config: %w", err)
 	}
-	input, err := httpinput.ParseBinding(config)
+	input, err := parseEntrypointInput(epType, config)
 	if err != nil {
 		return runtime.Entrypoint{}, 0, fmt.Errorf("parsing entrypoint input contract: %w", err)
 	}
@@ -145,6 +146,17 @@ func (p *parser) parseEntrypoint() (runtime.Entrypoint, int, error) {
 		Config: config,
 		Input:  input,
 	}, timeout, nil
+}
+
+func parseEntrypointInput(epType string, config map[string]any) (*runtime.InputContract, error) {
+	switch epType {
+	case "http", "":
+		return httpinput.ParseBinding(config)
+	case "flow":
+		return flowinput.ParseBinding(config)
+	default:
+		return nil, nil
+	}
 }
 
 // parseProperties parses: properties { key: value, ... }

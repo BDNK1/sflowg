@@ -3,18 +3,19 @@ package httpinput
 import (
 	"fmt"
 
+	"github.com/BDNK1/sflowg/runtime"
 	"github.com/BDNK1/sflowg/runtime/validation/schema"
 )
 
-type Binding struct {
-	Body            *schema.Schema
-	PathVariables   map[string]*schema.Schema
-	QueryParameters map[string]*schema.Schema
-	Headers         map[string]*schema.Schema
-}
+const (
+	BodyNamespace            = "request.body"
+	PathVariablesNamespace   = "request.pathVariables"
+	QueryParametersNamespace = "request.queryParameters"
+	HeadersNamespace         = "request.headers"
+)
 
-func ParseBinding(config map[string]any) (*Binding, error) {
-	binding := &Binding{}
+func ParseBinding(config map[string]any) (*runtime.InputContract, error) {
+	contract := runtime.NewInputContract()
 	hasSchemas := false
 
 	if bodyRaw, ok := config["body"].(map[string]any); ok {
@@ -23,18 +24,18 @@ func ParseBinding(config map[string]any) (*Binding, error) {
 			if err != nil {
 				return nil, fmt.Errorf("body.schema: %w", err)
 			}
-			binding.Body = body
+			contract.SetRoot(BodyNamespace, body)
 			hasSchemas = true
 		}
 	}
 
 	for _, entry := range []struct {
-		key string
-		set func(map[string]*schema.Schema)
+		key       string
+		namespace string
 	}{
-		{key: "pathVariables", set: func(v map[string]*schema.Schema) { binding.PathVariables = v }},
-		{key: "queryParameters", set: func(v map[string]*schema.Schema) { binding.QueryParameters = v }},
-		{key: "headers", set: func(v map[string]*schema.Schema) { binding.Headers = v }},
+		{key: "pathVariables", namespace: PathVariablesNamespace},
+		{key: "queryParameters", namespace: QueryParametersNamespace},
+		{key: "headers", namespace: HeadersNamespace},
 	} {
 		raw, ok := config[entry.key]
 		if !ok {
@@ -48,12 +49,12 @@ func ParseBinding(config map[string]any) (*Binding, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", entry.key, err)
 		}
-		entry.set(parsed)
+		contract.SetFields(entry.namespace, parsed)
 		hasSchemas = true
 	}
 
 	if !hasSchemas {
 		return nil, nil
 	}
-	return binding, nil
+	return contract, nil
 }

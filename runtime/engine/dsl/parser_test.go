@@ -3,6 +3,9 @@ package dsl
 import (
 	"strings"
 	"testing"
+
+	"github.com/BDNK1/sflowg/runtime/validation/flowinput"
+	"github.com/BDNK1/sflowg/runtime/validation/httpinput"
 )
 
 func TestParse_Entrypoint(t *testing.T) {
@@ -65,17 +68,46 @@ func TestParse_EntrypointInputSchemas(t *testing.T) {
 	if input == nil {
 		t.Fatal("entrypoint input is nil")
 	}
-	if input.Body == nil || input.Body.Properties["customer_email"] == nil {
-		t.Fatalf("body customer_email schema not parsed: %#v", input.Body)
+	body, ok := input.RootSchema(httpinput.BodyNamespace)
+	if !ok || body.Properties["customer_email"] == nil {
+		t.Fatalf("body customer_email schema not parsed: %#v", body)
 	}
-	if input.PathVariables["id"] == nil {
+	if input.FieldSchemas(httpinput.PathVariablesNamespace)["id"] == nil {
 		t.Fatalf("path variable id schema not parsed")
 	}
-	if input.QueryParameters["limit"] == nil {
+	if input.FieldSchemas(httpinput.QueryParametersNamespace)["limit"] == nil {
 		t.Fatalf("query parameter limit schema not parsed")
 	}
-	if input.Headers["X-Tenant-ID"] == nil {
+	if input.FieldSchemas(httpinput.HeadersNamespace)["X-Tenant-ID"] == nil {
 		t.Fatalf("header X-Tenant-ID schema not parsed")
+	}
+}
+
+func TestParse_FlowEntrypointInputSchemas(t *testing.T) {
+	source := `entrypoint.flow {
+	input: {
+		order_id: { type: integer, required: true }
+		currency: { type: string, enum: [usd, eur] }
+	}
+}`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flow.Entrypoint.Type != "flow" {
+		t.Fatalf("entrypoint type = %q, want flow", flow.Entrypoint.Type)
+	}
+	input := flow.Entrypoint.Input
+	if input == nil {
+		t.Fatal("entrypoint input is nil")
+	}
+	fields := input.FieldSchemas(flowinput.InputNamespace)
+	if fields["order_id"] == nil {
+		t.Fatalf("flow input order_id schema not parsed")
+	}
+	if fields["currency"] == nil {
+		t.Fatalf("flow input currency schema not parsed")
 	}
 }
 

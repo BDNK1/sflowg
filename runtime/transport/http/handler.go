@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BDNK1/sflowg/runtime"
+	"github.com/BDNK1/sflowg/runtime/validation/httpinput"
 	validationschema "github.com/BDNK1/sflowg/runtime/validation/schema"
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel"
@@ -407,21 +408,21 @@ func validateRequestData(c *gin.Context, f *runtime.Flow, e *runtime.Execution) 
 
 	var fields []validationschema.FieldError
 
-	if input.Body != nil {
+	if bodySchema, ok := input.RootSchema(httpinput.BodyNamespace); ok {
 		raw, present := e.State().Store().Get(RequestBodyPrefix)
-		normalized, errs := validationschema.ValidateField(raw, present, input.Body, "body")
+		normalized, errs := validationschema.ValidateField(raw, present, bodySchema, "body")
 		fields = append(fields, errs...)
 		if len(errs) == 0 && normalized != nil {
 			e.State().Store().SetNested(RequestBodyPrefix, normalized)
 		}
 	}
 
-	fields = append(fields, validateNamedInputs(input.PathVariables, PathVariablesPrefix, "pathVariables", func(name string, s *validationschema.Schema) (any, bool) {
+	fields = append(fields, validateNamedInputs(input.FieldSchemas(httpinput.PathVariablesNamespace), PathVariablesPrefix, "pathVariables", func(name string, s *validationschema.Schema) (any, bool) {
 		value := c.Param(name)
 		return value, value != ""
 	}, e)...)
 
-	fields = append(fields, validateNamedInputs(input.QueryParameters, QueryParametersPrefix, "queryParameters", func(name string, s *validationschema.Schema) (any, bool) {
+	fields = append(fields, validateNamedInputs(input.FieldSchemas(httpinput.QueryParametersNamespace), QueryParametersPrefix, "queryParameters", func(name string, s *validationschema.Schema) (any, bool) {
 		values, ok := c.GetQueryArray(name)
 		if !ok {
 			return nil, false
@@ -435,7 +436,7 @@ func validateRequestData(c *gin.Context, f *runtime.Flow, e *runtime.Execution) 
 		return values[0], true
 	}, e)...)
 
-	fields = append(fields, validateNamedInputs(input.Headers, HeadersPrefix, "headers", func(name string, s *validationschema.Schema) (any, bool) {
+	fields = append(fields, validateNamedInputs(input.FieldSchemas(httpinput.HeadersNamespace), HeadersPrefix, "headers", func(name string, s *validationschema.Schema) (any, bool) {
 		values := c.Request.Header.Values(name)
 		if len(values) == 0 {
 			return nil, false

@@ -1,7 +1,5 @@
 package runtime
 
-import "github.com/BDNK1/sflowg/runtime/validation/httpinput"
-
 type Flow struct {
 	ID               string           `yaml:"id"`
 	Entrypoint       Entrypoint       `yaml:"entrypoint"`
@@ -16,9 +14,9 @@ type Flow struct {
 }
 
 type Entrypoint struct {
-	Type   string             `yaml:"type"`
-	Config map[string]any     `yaml:"config"`
-	Input  *httpinput.Binding `yaml:"-" json:"-"`
+	Type   string         `yaml:"type"`
+	Config map[string]any `yaml:"config"`
+	Input  *InputContract `yaml:"-" json:"-"`
 }
 
 type Step struct {
