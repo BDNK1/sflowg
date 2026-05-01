@@ -41,6 +41,9 @@ func NewFlowValidator() *FlowValidator { return &FlowValidator{} }
 func (v *FlowValidator) ValidateFlows(flows map[string]runtime.Flow) error {
 	edges := make(map[string][]string)
 	for flowID, flow := range flows {
+		if err := validateCoreSemantics(flow); err != nil {
+			return fmt.Errorf("flow %q: %w", flowID, err)
+		}
 		refs, err := extractFlowCallsFromFlow(flow)
 		if err != nil {
 			return fmt.Errorf("flow %q: %w", flowID, err)
@@ -66,6 +69,99 @@ func (v *FlowValidator) ValidateFlows(flows map[string]runtime.Flow) error {
 	}
 	if cycle := findFlowCallCycle(edges); len(cycle) > 0 {
 		return fmt.Errorf("flow.call cycle detected: %s", strings.Join(cycle, " -> "))
+	}
+	return nil
+}
+
+func validateCoreSemantics(flow runtime.Flow) error {
+	contract := flow.ResponseContract
+	if contract.IsZero() {
+		var ok bool
+		contract, ok = runtime.BuiltInResponseContract(flow.Entrypoint.Type)
+		if !ok {
+			return nil
+		}
+	}
+	if err := validateResponseCallsInFlow(flow, contract); err != nil {
+		return err
+	}
+	if flow.Entrypoint.Type == "kafka" {
+		if err := validateKafkaFlowSemantics(flow); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateResponseCallsInFlow(flow runtime.Flow, contract runtime.ResponseContract) error {
+	for _, step := range flow.Steps {
+		if err := ValidateResponseCalls(step.Body, contract); err != nil {
+			return fmt.Errorf("step %q: %w", step.ID, err)
+		}
+		if err := ValidateResponseCalls(step.FallbackBody, contract); err != nil {
+			return fmt.Errorf("fallback %q: %w", step.ID, err)
+		}
+		if err := ValidateResponseCalls(step.CompensateBody, contract); err != nil {
+			return fmt.Errorf("compensate %q: %w", step.ID, err)
+		}
+	}
+	if err := ValidateResponseCalls(flow.OnErrorBody, contract); err != nil {
+		return fmt.Errorf("on_error: %w", err)
+	}
+	if err := ValidateResponseCalls(flow.Return.Body, contract); err != nil {
+		return fmt.Errorf("return: %w", err)
+	}
+	return nil
+}
+
+func validateKafkaFlowSemantics(flow runtime.Flow) error {
+	valueConfig, ok := flow.Entrypoint.Config["value"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("entrypoint.kafka value must be configured")
+	}
+	valueType, ok := valueConfig["type"].(string)
+	if !ok || valueType != "json" {
+		return fmt.Errorf("entrypoint.kafka value.type must be json")
+	}
+
+	returnBody := strings.TrimSpace(strings.TrimSuffix(flow.Return.Body, ";"))
+	if returnBody != "response.ack()" && returnBody != "response.nack()" {
+		return fmt.Errorf("entrypoint.kafka requires top-level return response.ack() or response.nack()")
+	}
+
+	for _, step := range flow.Steps {
+		if step.ID == "__return" {
+			continue
+		}
+		if err := rejectKafkaAckNack(step.Body); err != nil {
+			return fmt.Errorf("step %q: %w", step.ID, err)
+		}
+		if err := rejectKafkaAckNack(step.FallbackBody); err != nil {
+			return fmt.Errorf("fallback %q: %w", step.ID, err)
+		}
+		if err := rejectKafkaAckNack(step.CompensateBody); err != nil {
+			return fmt.Errorf("compensate %q: %w", step.ID, err)
+		}
+	}
+	return nil
+}
+
+func rejectKafkaAckNack(source string) error {
+	if strings.TrimSpace(source) == "" {
+		return nil
+	}
+	program, err := risorparser.Parse(context.Background(), source, nil)
+	if err != nil {
+		return err
+	}
+	for node := range ast.Preorder(program) {
+		_, subtype, ok := responseCall(node)
+		if !ok {
+			continue
+		}
+		if subtype == "ack" || subtype == "nack" {
+			return fmt.Errorf("response.%s is only allowed in top-level return or on_error", subtype)
+		}
 	}
 	return nil
 }

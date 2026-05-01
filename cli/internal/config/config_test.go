@@ -66,3 +66,26 @@ func TestFlowConfigValidate_RejectsRemovedYAMLEngine(t *testing.T) {
 		t.Fatalf("expected dsl-only engine validation, got %v", err)
 	}
 }
+
+func TestFlowConfigValidate_AllowsNoPlugins(t *testing.T) {
+	cfg := FlowConfig{}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate failed without plugins: %v", err)
+	}
+}
+
+func TestFlowConfigApplyDefaults_KafkaNackRedeliveryDelay(t *testing.T) {
+	cfg := FlowConfig{
+		Runtime: RuntimeConfig{
+			Kafka: KafkaRuntimeConfig{Brokers: map[string]KafkaBrokerConfig{
+				"default": {Brokers: []string{"localhost:9092"}},
+			}},
+		},
+	}
+	if err := cfg.ApplyDefaults("/tmp/demo"); err != nil {
+		t.Fatalf("ApplyDefaults failed: %v", err)
+	}
+	if got := cfg.Runtime.Kafka.Brokers["default"].NackRedeliveryDelayMS; got != 100 {
+		t.Fatalf("NackRedeliveryDelayMS = %d, want 100", got)
+	}
+}

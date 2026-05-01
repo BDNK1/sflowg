@@ -8,10 +8,14 @@ import (
 // Transport owns protocol-specific serving and response dispatch.
 type Transport interface {
 	Type() string
-	ResponseSubtypes() []string
+	ResponseContract() ResponseContract
 	ValidateFlow(flow Flow) error
 	Start(ctx context.Context, runtime TransportRuntime) error
 	Shutdown(ctx context.Context) error
+}
+
+type TransportFlowSetValidator interface {
+	ValidateTransportFlows([]Flow) error
 }
 
 // TransportRuntime contains the shared runtime services a transport needs to

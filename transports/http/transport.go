@@ -28,8 +28,8 @@ func (t *Transport) Type() string {
 	return "http"
 }
 
-func (t *Transport) ResponseSubtypes() []string {
-	return []string{"json", "text", "redirect"}
+func (t *Transport) ResponseContract() runtime.ResponseContract {
+	return runtime.HTTPResponseContract()
 }
 
 func (t *Transport) ValidateFlow(flow runtime.Flow) error {

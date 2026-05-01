@@ -17,8 +17,12 @@ type fakeTransport struct {
 }
 
 func (t fakeTransport) Type() string { return t.transportType }
-func (t fakeTransport) ResponseSubtypes() []string {
-	return t.subtypes
+func (t fakeTransport) ResponseContract() ResponseContract {
+	contracts := make([]ResponseSubtypeContract, 0, len(t.subtypes))
+	for _, subtype := range t.subtypes {
+		contracts = append(contracts, ResponseSubtypeContract{Name: subtype, Args: ResponseArgsMap})
+	}
+	return NewResponseContract(t.transportType, contracts...)
 }
 func (t fakeTransport) ValidateFlow(flow Flow) error { return nil }
 func (t fakeTransport) Start(ctx context.Context, rt TransportRuntime) error {

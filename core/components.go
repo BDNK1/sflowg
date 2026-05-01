@@ -7,6 +7,7 @@ type Flow struct {
 	Properties       map[string]any   `yaml:"properties"`
 	Return           Return           `yaml:"return"`
 	DSLMode          DSLExecutionMode `yaml:"-" json:"-"`
+	ResponseContract ResponseContract `yaml:"-" json:"-"`
 	ResponseSubtypes []string         `yaml:"-" json:"-"`
 	OnErrorBody      string           `yaml:"-"`
 	OnErrorCompiled  any              `yaml:"-" json:"-"`

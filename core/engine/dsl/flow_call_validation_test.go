@@ -115,3 +115,65 @@ func TestFlowValidatorRejectsSimpleLiteralTypeMismatch(t *testing.T) {
 		t.Fatalf("expected literal type error, got %v", err)
 	}
 }
+
+func TestFlowValidatorKafkaResponseSemantics(t *testing.T) {
+	valid := runtime.Flow{
+		ID:               "consume",
+		Entrypoint:       runtime.Entrypoint{Type: "kafka", Config: kafkaEntrypointConfig()},
+		ResponseContract: runtime.KafkaResponseContract(),
+		Return:           runtime.Return{Body: `response.ack()`},
+		Steps:            []runtime.Step{{ID: "__return", Body: `response.ack()`}},
+		OnErrorBody:      `response.nack()`,
+	}
+	if err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"consume": valid}); err != nil {
+		t.Fatalf("valid kafka flow failed: %v", err)
+	}
+
+	invalidReturn := valid
+	invalidReturn.Return.Body = ""
+	if err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"consume": invalidReturn}); err == nil || !strings.Contains(err.Error(), "top-level return") {
+		t.Fatalf("expected missing top-level return error, got %v", err)
+	}
+
+	invalidStep := valid
+	invalidStep.Steps = []runtime.Step{{ID: "bad", Body: `response.ack()`}}
+	if err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"consume": invalidStep}); err == nil || !strings.Contains(err.Error(), "only allowed") {
+		t.Fatalf("expected step ack rejection, got %v", err)
+	}
+
+	invalidArg := valid
+	invalidArg.Return.Body = `response.ack({})`
+	if err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"consume": invalidArg}); err == nil || !strings.Contains(err.Error(), "expects no arguments") {
+		t.Fatalf("expected ack arg rejection, got %v", err)
+	}
+
+	invalidSubtype := valid
+	invalidSubtype.Return.Body = `response.json({})`
+	if err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"consume": invalidSubtype}); err == nil || !strings.Contains(err.Error(), "json") {
+		t.Fatalf("expected response.json rejection, got %v", err)
+	}
+}
+
+func TestFlowValidatorKafkaRequiresJSONValue(t *testing.T) {
+	flow := runtime.Flow{
+		ID:               "consume",
+		Entrypoint:       runtime.Entrypoint{Type: "kafka", Config: map[string]any{"value": map[string]any{"type": "text"}}},
+		ResponseContract: runtime.KafkaResponseContract(),
+		Return:           runtime.Return{Body: `response.ack()`},
+		Steps:            []runtime.Step{{ID: "__return", Body: `response.ack()`}},
+	}
+	err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"consume": flow})
+	if err == nil || !strings.Contains(err.Error(), "value.type must be json") {
+		t.Fatalf("expected json value type error, got %v", err)
+	}
+}
+
+func kafkaEntrypointConfig() map[string]any {
+	return map[string]any{
+		"broker":            "default",
+		"topic":             "orders",
+		"group_id":          "orders-service",
+		"auto_offset_reset": "earliest",
+		"value":             map[string]any{"type": "json"},
+	}
+}

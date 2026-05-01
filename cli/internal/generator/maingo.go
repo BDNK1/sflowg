@@ -21,6 +21,9 @@ type MainGoGenerator struct {
 	GlobalProperties  map[string]interface{} // Global properties from flow-config.yaml
 	Observability     config.ObservabilityConfig
 	Plugins           []PluginInfo
+	UseHTTP           bool
+	UseKafka          bool
+	Kafka             config.KafkaRuntimeConfig
 }
 
 // NewMainGoGenerator creates a new main.go generator
@@ -42,6 +45,15 @@ func NewMainGoGenerator(moduleName string, port string, embedFlows bool, globalP
 // AddPlugin adds a plugin to the main.go generation
 func (g *MainGoGenerator) AddPlugin(info PluginInfo) {
 	g.Plugins = append(g.Plugins, info)
+}
+
+func (g *MainGoGenerator) EnableHTTP() {
+	g.UseHTTP = true
+}
+
+func (g *MainGoGenerator) EnableKafka(cfg config.KafkaRuntimeConfig) {
+	g.UseKafka = true
+	g.Kafka = cfg
 }
 
 // Generate creates the main.go content using template

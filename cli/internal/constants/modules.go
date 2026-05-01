@@ -10,6 +10,12 @@ const (
 
 	// PluginsBasePath is the base path for core plugins
 	PluginsBasePath = BaseModulePath + "/plugins"
+
+	// HTTPTransportModulePath is the external HTTP transport module.
+	HTTPTransportModulePath = BaseModulePath + "/transports/http"
+
+	// KafkaTransportModulePath is the external Kafka transport module.
+	KafkaTransportModulePath = BaseModulePath + "/transports/kafka"
 )
 
 // Application runtime defaults

@@ -35,7 +35,8 @@ export PATH="$(pwd)/../bin:$PATH"
 
 # in stripe-integration folder
 sflowg build . \
-  --runtime-path ../../../runtime \
+  --runtime-path ../../../core \
+  --transport-path ../../../transports \
   --core-plugins-path ../../../plugins
 ./stripe-integration
 ```

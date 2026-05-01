@@ -30,6 +30,7 @@ sflowg build [project-dir] [flags]
 | Flag | Description |
 |------|-------------|
 | `--runtime-path <path>` | Use local runtime module (development) |
+| `--transport-path <path>` | Use local transport modules directory (development) |
 | `--core-plugins-path <path>` | Use local core plugins directory (development) |
 | `--embed-flows` | Embed flow files into binary (production) |
 | `--help` | Show help |
@@ -45,7 +46,8 @@ sflowg build ./my-project
 
 # Development mode with local runtime
 sflowg build . \
-  --runtime-path ../runtime \
+  --runtime-path ../core \
+  --transport-path ../transports \
   --core-plugins-path ../plugins
 
 # Production build with embedded flows
@@ -182,7 +184,8 @@ return response.json({
 ```bash
 # With local SFlowG source
 sflowg build . \
-  --runtime-path /path/to/sflowg/runtime \
+  --runtime-path /path/to/sflowg/core \
+  --transport-path /path/to/sflowg/transports \
   --core-plugins-path /path/to/sflowg/plugins
 
 # Or with published modules
@@ -211,7 +214,7 @@ sflowg build ./project          # Specific project
 sflowg build . --embed-flows    # Production mode
 
 # Development flags
-sflowg build . --runtime-path ../runtime
+sflowg build . --runtime-path ../core --transport-path ../transports
 sflowg build . --core-plugins-path ../plugins
 
 # Run binary

@@ -20,34 +20,35 @@ func NewCompiler() *Compiler {
 
 func (c *Compiler) CompileFlow(ctx context.Context, flow *runtime.Flow, container *runtime.Container) error {
 	frameworkKeys, frameworkEnv := collectFrameworkInfo(container)
-	frameworkEnv["response"] = buildResponseTemplateModule(flow.ResponseSubtypes)
+	contract := responseContractForFlow(flow)
+	frameworkEnv["response"] = buildResponseTemplateModule(contract)
 	knownStoreKeys := collectKnownStoreKeys(flow)
 
 	for i := range flow.Steps {
 		step := &flow.Steps[i]
 
-		storeKeys, compiled, err := c.compileBody(ctx, step.Body, knownStoreKeys, frameworkKeys, frameworkEnv, flow.ResponseSubtypes)
+		storeKeys, compiled, err := c.compileBody(ctx, step.Body, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
 		if err != nil {
 			return fmt.Errorf("compile step %s: %w", step.ID, err)
 		}
 		step.StoreKeys = storeKeys
 		step.Compiled = compiled
 
-		fallbackStoreKeys, fallbackCompiled, err := c.compileBody(ctx, step.FallbackBody, knownStoreKeys, frameworkKeys, frameworkEnv, flow.ResponseSubtypes)
+		fallbackStoreKeys, fallbackCompiled, err := c.compileBody(ctx, step.FallbackBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
 		if err != nil {
 			return fmt.Errorf("compile fallback for step %s: %w", step.ID, err)
 		}
 		step.FallbackStoreKeys = fallbackStoreKeys
 		step.FallbackCompiled = fallbackCompiled
 
-		_, compensateCompiled, err := c.compileBody(ctx, step.CompensateBody, knownStoreKeys, frameworkKeys, frameworkEnv, flow.ResponseSubtypes)
+		_, compensateCompiled, err := c.compileBody(ctx, step.CompensateBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
 		if err != nil {
 			return fmt.Errorf("compile compensation for step %s: %w", step.ID, err)
 		}
 		step.CompensateCompiled = compensateCompiled
 	}
 
-	_, onErrorCompiled, err := c.compileBody(ctx, flow.OnErrorBody, knownStoreKeys, frameworkKeys, frameworkEnv, flow.ResponseSubtypes)
+	_, onErrorCompiled, err := c.compileBody(ctx, flow.OnErrorBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
 	if err != nil {
 		return fmt.Errorf("compile on_error: %w", err)
 	}
@@ -62,13 +63,13 @@ func (c *Compiler) compileBody(
 	knownStoreKeys []string,
 	frameworkKeys map[string]struct{},
 	frameworkEnv map[string]any,
-	responseSubtypes []string,
+	contract runtime.ResponseContract,
 ) ([]string, any, error) {
 	if strings.TrimSpace(body) == "" {
 		return nil, nil, nil
 	}
 
-	if err := ValidateResponseCalls(body, responseSubtypes); err != nil {
+	if err := ValidateResponseCalls(body, contract); err != nil {
 		return nil, nil, err
 	}
 
@@ -98,6 +99,10 @@ func collectKnownStoreKeys(flow *runtime.Flow) []string {
 		"error":        {},
 		"compensation": {},
 	}
+	if flow.Entrypoint.Type == "kafka" {
+		keys = append(keys, "message")
+		seen["message"] = struct{}{}
+	}
 
 	for _, step := range flow.Steps {
 		if _, ok := seen[step.ID]; ok {
@@ -123,7 +128,7 @@ func collectFrameworkInfo(container *runtime.Container) (map[string]struct{}, ma
 	}
 
 	frameworkEnv := map[string]any{
-		"response":      buildResponseTemplateModule(nil),
+		"response":      buildResponseTemplateModule(runtime.HTTPResponseContract()),
 		"flow":          buildFlowTemplateModule(),
 		"log":           buildLogTemplateModule(),
 		"metric":        buildMetricTemplateModule(container),
@@ -189,15 +194,27 @@ func buildPluginTemplateModules(container *runtime.Container) map[string]any {
 	return result
 }
 
-func buildResponseTemplateModule(subtypes []string) map[string]any {
-	if len(subtypes) == 0 {
-		subtypes = []string{"json"}
-	}
+func buildResponseTemplateModule(contract runtime.ResponseContract) map[string]any {
+	subtypes := contract.Subtypes()
 	methods := make(map[string]any, len(subtypes))
 	for _, subtype := range subtypes {
-		methods[subtype] = func(args ...any) error { return nil }
+		subtype := subtype
+		methods[subtype] = func(args ...any) error {
+			_, err := contract.ValidateArgs(subtype, args)
+			return err
+		}
 	}
 	return methods
+}
+
+func responseContractForFlow(flow *runtime.Flow) runtime.ResponseContract {
+	if !flow.ResponseContract.IsZero() {
+		return flow.ResponseContract
+	}
+	if contract, ok := runtime.BuiltInResponseContract(flow.Entrypoint.Type); ok {
+		return contract
+	}
+	return runtime.HTTPResponseContract()
 }
 
 func buildLogTemplateModule() map[string]any {

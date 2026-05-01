@@ -1,8 +1,13 @@
 # Flow Syntax Reference
 
-Complete reference for writing SFlowG `.flow` files.
+SFlowG flow files use the `.flow` DSL. A flow declares one entrypoint, optional
+properties, zero or more steps, optional `on_error`, and usually a final
+`return response.*(...)`.
 
-## Flow Structure
+Step bodies are Risor code. Entrypoint blocks and property blocks use SFlowG's
+simple map syntax.
+
+## Flow Shape
 
 ```sflowg
 entrypoint.http {
@@ -12,6 +17,7 @@ entrypoint.http {
         type: json
         schema: {
             customer_email: { type: string, required: true, format: email }
+            amount_cents: { type: integer, required: true, minimum: 1 }
         }
     }
 }
@@ -21,10 +27,12 @@ properties {
 }
 
 step create_order {
-    postgres.get({
-        query: "INSERT INTO orders (...) VALUES (...)",
-        params: [request.body.customer_email]
+    let result = postgres.get({
+        query: "INSERT INTO orders (customer_email, amount_cents, currency) VALUES ($1, $2, $3) RETURNING id",
+        params: [request.body.customer_email, request.body.amount_cents, properties.default_currency]
     })
+
+    result
 }
 
 return response.json({
@@ -33,518 +41,283 @@ return response.json({
 })
 ```
 
-## DSL Logging
-
-DSL flows can emit structured user logs from step bodies with the built-in `log` module.
-
-Available methods:
-
-- `log.debug(message, data?)`
-- `log.info(message, data?)`
-- `log.warn(message, data?)`
-- `log.error(message, data?)`
-
-Example:
-
-```sflowg
-step charge_card {
-    log.info("charging customer", {
-        order_id: request.body.order_id,
-        amount: request.body.amount,
-    })
-
-    result := http.request({
-        method: "POST",
-        url: properties.paymentProviderURL,
-        body: request.body
-    })
-
-    if result.status_code != 200 {
-        log.warn("payment provider returned non-200", {
-            status_code: result.status_code
-        })
-    }
-}
-```
-
-User logs are emitted with:
-
-- `source=user`
-- `execution_id`
-- `flow_id`
-- `step_id` when called from a step body
-
-Structured payloads are allowed, but large string-like values are truncated using the runtime logging limit.
-
-## DSL Metrics
-
-DSL flows can emit custom user metrics from step bodies with the built-in `metric` module.
-
-### Dynamic Metric API
-
-Create and record metrics inline without prior declaration:
-
-- `metric.counter(name, value?, labels?)` - Monotonic counter. Value defaults to `1` when omitted.
-- `metric.updowncounter(name, value, labels?)` - Counter that can increase or decrease.
-- `metric.histogram(name, value, labels?)` - Records a value into a distribution.
-- `metric.gauge(name, value, labels?)` - Records an instantaneous value.
-
-Example:
-
-```sflowg
-step charge_card {
-    metric.counter("payment_attempts")
-    metric.counter("queued_jobs", 1, {"queue": "payments"})
-
-    result := http.request({
-        method: "POST",
-        url: properties.paymentProviderURL,
-        body: request.body
-    })
-
-    metric.histogram("payment_duration_ms", result.duration_ms, {
-        provider: "stripe",
-        currency: request.body.currency,
-    })
-
-    if result.status_code != 200 {
-        metric.counter("payment_failures", 1, {
-            status_code: result.status_code,
-        })
-    }
-}
-```
-
-### Predeclared Handle API
-
-When metrics are declared in `flow-config.yaml` under `observability.metrics.user.declarations`, they are available as predeclared handles on the `metric` object. Each handle exposes a method matching its instrument type:
-
-- `metric.<name>.inc(value?, labels?)` - Increment a counter. Value defaults to `1` when omitted.
-- `metric.<name>.add(value, labels?)` - Add to an up-down counter.
-- `metric.<name>.observe(value, labels?)` - Record a histogram observation.
-- `metric.<name>.set(value, labels?)` - Set a gauge value.
-
-Example:
-
-```sflowg
-step charge_card {
-    metric.payment_attempts.inc()
-
-    result := http.request({
-        method: "POST",
-        url: properties.paymentProviderURL,
-        body: request.body
-    })
-
-    metric.payment_duration_ms.observe(result.duration_ms, {
-        provider: "stripe",
-    })
-}
-```
-
-### Auto-Attached Attributes
-
-All user metrics automatically include the following attributes:
-
-- `flow.id` - The ID of the flow emitting the metric
-- `step.id` - The ID of the step emitting the metric
-- `path` - The entrypoint path of the flow
-
-These attributes are added by the runtime and do not need to be specified in `labels`.
-
-### OTel Output Prefix
-
-All user metric names are prefixed with `sflowg.user.` in OpenTelemetry output. For example, a metric named `payment_attempts` is exported as `sflowg.user.payment_attempts`.
-
-### Error Handling
-
-Invalid metric calls (unknown handle, wrong argument types, invalid label values) are dropped and logged as warnings. They never fail the step or abort flow execution.
-
-## Entrypoint
-
-Defines how the flow is triggered. Currently supports HTTP entrypoints.
-
-### HTTP Entrypoint
-
-```sflowg
-entrypoint.http {
-    method: GET|POST
-    path: /api/resource/:param
-    headers: [Header-Name]
-    pathVariables: [param]
-    queryParameters: [limit, offset]
-    body: { type: json }
-}
-```
-
-**Fields:**
-
-| Field             | Description                               | Required |
-|-------------------|-------------------------------------------|----------|
-| `method`          | HTTP method (`GET` or `POST`)             | Yes      |
-| `path`            | URL path with optional `:param` variables | Yes      |
-| `headers`         | Headers to extract or validate            | No       |
-| `pathVariables`   | Path parameters to extract or validate    | No       |
-| `queryParameters` | Query parameters to extract or validate   | No       |
-| `body.type`       | Request body type (`json`)                | No       |
-| `body.schema`     | Optional JSON body schema                 | No       |
-
-**Accessing request data in steps:**
-
-```yaml
-# Path variables
-request.pathVariables.orderId
-
-# Query parameters
-request.queryParameters.limit
-
-# Headers
-request.headers.Authorization
-request.headers.X-Request-ID
-
-# Body (for POST)
-request.body.field
-request.body.nested.field
-
-# Raw body (for webhook signature verification)
-request.rawBody                 # Exact string as received
-```
-
-### HTTP Input Schemas
-
-HTTP list forms extract string values without validation:
-
-```sflowg
-entrypoint.http {
-    method: GET
-    path: /api/orders/:id
-    pathVariables: [id]
-    queryParameters: [limit]
-    headers: [Authorization]
-}
-```
-
-Object forms add validation and normalization before steps run:
-
-```sflowg
-entrypoint.http {
-    method: POST
-    path: /api/orders/:id
-
-    pathVariables: {
-        id: { type: integer, required: true, minimum: 1 }
-    }
-
-    queryParameters: {
-        limit: { type: integer, default: 50, minimum: 1 }
-        include: { type: array, items: { type: string } }
-    }
-
-    headers: {
-        X-Tenant-ID: { type: string, format: uuid, required: true }
-    }
-
-    body: {
-        type: json
-        schema: {
-            customer_email: { type: string, required: true, format: email }
-            amount_cents: { type: integer, required: true, minimum: 1 }
-            currency: { type: string, enum: [usd, eur], default: usd }
-        }
-    }
-}
-```
-
-Validated values stay in the same namespaces:
-
-- `request.body`
-- `request.pathVariables`
-- `request.queryParameters`
-- `request.headers`
-- `request.rawBody`
-
-Path variables, query parameters, and headers start as strings and can be coerced to `integer`, `number`, `boolean`, or validated strings. Use `type: string, format: uuid` for UUID values. Repeated query parameters and multi-value headers can be validated as arrays.
-
-#### Schema Types
-
-- `object`
-- `array`
-- `string`
-- `integer`
-- `number`
-- `boolean`
-
-#### Schema Constraints
-
-| Constraint | Applies To | Description |
-|------------|------------|-------------|
-| `required` | all types | Missing value fails validation unless `default` is provided |
-| `default` | all types | Value used when input is absent; applied before `required` |
-| `enum` | `string` | Value must match one listed option |
-| `minimum` | `integer`, `number` | Inclusive lower bound |
-| `maximum` | `integer`, `number` | Inclusive upper bound |
-| `minLength` | `string` | Minimum string length |
-| `maxLength` | `string` | Maximum string length |
-| `pattern` | `string` | Regular expression match |
-| `format` | `string` | One of `email`, `uuid`, `url`, `date`, `date-time` |
-| `properties` | `object` | Nested object fields |
-| `items` | `array` | Array item schema |
-
-Unknown object fields are preserved in Phase 1.
-
-When an input schema fails, steps do not run. The runtime raises a boundary `SCHEMA_VIOLATION` error. A flow-level `on_error` block can handle it and set a response. Validation field errors are available at `error.meta.fields`.
-
-```sflowg
-on_error {
-    if error.code == "SCHEMA_VIOLATION" {
-        return response.json({
-            status: 400,
-            body: {
-                error: "invalid_request",
-                fields: error.meta.fields,
-            }
-        })
-    }
-
-    return response.json({
-        status: 500,
-        body: { error: error.code }
-    })
-}
-```
-
-If the flow does not handle the error, HTTP returns `400 application/problem+json`:
-
-```json
-{
-  "title": "Request validation failed",
-  "status": 400,
-  "detail": "One or more inputs did not match the flow contract.",
-  "errors": [
-    {
-      "path": "body.customer_email",
-      "pointer": "#/body/customer_email",
-      "constraint": "required",
-      "detail": "body.customer_email is required"
-    }
-  ]
-}
-```
+Top-level blocks:
+
+- `entrypoint.http`, `entrypoint.kafka`, or `entrypoint.flow`
+- `properties`
+- `step`
+- `on_error`
+- `return`
+
+Line comments start with `//`.
+
+## Entrypoints
+
+Entrypoints define how a flow is triggered and which root object is available
+inside steps. See [Entrypoints](./ENTRYPOINTS.md) for field-level contracts,
+runtime packaging, and examples.
+
+| Entrypoint | Trigger | Root object | Response contract |
+|---|---|---|---|
+| `entrypoint.http` | HTTP request | `request` | `response.json(map)`, `response.text(map)`, `response.redirect(map)` |
+| `entrypoint.kafka` | Kafka message | `message` | `response.ack()`, `response.nack()` |
+| `entrypoint.flow` | `flow.call` from another flow | `input` | `response.value(map)`, `response.error(map)` |
+
+HTTP and Kafka are external transport modules. Flow entrypoints are an internal
+core concept for subflows. Boundary input schema details live in
+[Entrypoints](./ENTRYPOINTS.md#input-schemas).
 
 ## Properties
 
-Flow-level variables accessible in all steps.
+Flow properties are available under `properties`.
 
-```yaml
-properties:
-  # Literals
-  maxRetries: 3
-  taxRate: 0.15
-
-  # Environment variable (required — panics if not set)
-  apiKey: ${API_KEY}
-
-  # Environment variable with default value
-  apiUrl: ${API_URL:http://localhost:3000}
-
-  # Plain string (no env var substitution)
-  region: us-east-1
+```sflowg
+properties {
+    default_currency: "usd"
+    retry_delay_ms: 500
+    api_key: env("API_KEY")
+    api_url: env("API_URL", "http://localhost:3000")
+}
 ```
 
-Properties support `${VAR}` and `${VAR:default}` syntax for environment variable substitution. Non-string values (numbers, booleans) are used as-is.
+`env("NAME")` and `env("NAME", "default")` are resolved at startup. Flow
+properties are merged with global properties from `flow-config.yaml`; flow
+properties win.
 
-Access in steps: `properties.maxRetries`
+Access:
 
-Properties are merged with global properties from `flow-config.yaml`. Flow properties override global properties.
+```sflowg
+properties.default_currency
+properties.api_url
+```
 
 ## Steps
 
-Steps are executed sequentially. Each step has:
+Steps run sequentially until a step sets a response or all steps complete.
 
-```yaml
-- id: step_name              # Required: unique identifier
-  type: step_type            # Required: assign, switch, or plugin.task
-  condition: expression      # Optional: skip if false
-  args: # Step-specific arguments
-    key: value
-  retry: # Optional: retry configuration
-    maxRetries: 3
-    delay: 1000
-    backoff: true
-    condition: expression
+```sflowg
+step fetch_order {
+    postgres.get({
+        query: "SELECT id, status FROM orders WHERE id = $1",
+        params: [request.pathVariables.id]
+    })
+}
 ```
 
-### Step Types
+The last expression in a step becomes the step result and is stored under the
+step ID:
 
-#### assign
+```sflowg
+step extract_request {
+    {
+        amount: request.body.amount,
+        currency: request.body.currency ?? properties.default_currency,
+    }
+}
 
-Assigns values to variables.
-
-```yaml
-- id: extract_data
-  type: assign
-  args:
-    # Simple assignment
-    orderId: request.pathVariables.orderId
-
-    # Expressions
-    total: price * quantity
-
-    # Ternary
-    status: 'amount > 100 ? "premium" : "standard"'
-
-    # String concatenation
-    message: '"Hello, " + name + "!"'
-
-    # Nested structures
-    response:
-      success: true
-      data:
-        id: orderId
-        total: total
+step use_extracted {
+    log.info("currency", extract_request.currency)
+}
 ```
 
-Access results: `extract_data.orderId`, `extract_data.response.data.id`
+Plugin tasks are normal function calls:
 
-#### switch
-
-Conditional branching based on expressions.
-
-```yaml
-- id: route
-  type: switch
-  args:
-    # Branch name: condition expression
-    process_premium: amount > 1000
-    process_standard: amount <= 1000
-    handle_invalid: amount < 0
+```sflowg
+postgres.get({ query: "...", params: [...] })
+postgres.exec({ query: "...", params: [...] })
+http.request({ method: "POST", url: properties.url, body: request.body })
 ```
 
-When a condition evaluates to `true`, execution jumps to a step with matching ID.
+### Conditions
 
-```yaml
-steps:
-  - id: route
-    type: switch
-    args:
-      premium_flow: amount > 1000
-      standard_flow: amount <= 1000
+Use `condition` in step options to skip a step when false:
 
-  - id: premium_flow
-    type: assign
-    args:
-      discount: 0.1
-
-  - id: standard_flow
-    type: assign
-    args:
-      discount: 0
+```sflowg
+step not_found(condition: fetch_order.found == false) {
+    response.json({
+        status: 404,
+        body: { error: "order not found" }
+    })
+}
 ```
 
-#### Plugin Tasks
+### Retry
 
-Call plugin methods using `plugin.task` syntax.
+Retry options are part of the step options:
 
-```yaml
-# HTTP request
-- id: get_user
-  type: http.request
-  args:
-    method: GET
-    url: '"https://api.example.com/users/" + userId'
-
-# Custom plugin task
-- id: process_payment
-  type: payment.processPayment
-  args:
-    amount: total
-    currency: '"USD"'
+```sflowg
+step create_payment(retry: {
+    max_attempts: 3,
+    delay: 500,
+    backoff: "exponential",
+    max_delay: 5000,
+    jitter: true,
+    when: error.type == "transient",
+    non_retryable: ["INVALID_INPUT"]
+}) {
+    let result = http.request({
+        method: "POST",
+        url: properties.payment_url,
+        body: request.body
+    })
+    if (result.status_code >= 500) {
+        raise("transient", "PAYMENT_SERVICE_UNAVAILABLE", "payment service temporarily unavailable")
+    }
+    result
+}
 ```
 
-Access results: `get_user.result`, `process_payment.result`
+Retry fields:
 
-### Conditional Execution
+| Field | Description |
+|---|---|
+| `max_attempts` | Maximum attempts including the first attempt |
+| `delay` | Base delay in milliseconds |
+| `backoff` | `none`, `linear`, or `exponential` |
+| `max_delay` | Maximum delay in milliseconds |
+| `jitter` | Add small random delay variation |
+| `when` | Expression evaluated with `error` in scope |
+| `non_retryable` | Error codes that must not retry |
 
-Skip steps based on conditions:
+### Fallback
 
-```yaml
-- id: send_notification
-  type: http.request
-  condition: shouldNotify == true && status == "success"
-  args:
-    url: notificationUrl
-    method: POST
+A fallback runs if the primary step exhausts retries or fails without retrying.
+
+```sflowg
+step create_payment(retry: { max_attempts: 3, delay: 500, backoff: "exponential" }) {
+    let result = http.request({
+        url: properties.payment_url,
+        method: "POST",
+        body: request.body
+    })
+    if (result.status_code >= 500) {
+        raise("transient", "PAYMENT_SERVICE_UNAVAILABLE", "payment service temporarily unavailable")
+    }
+    result
+} fallback {
+    response.json({
+        status: 202,
+        body: { queued: true }
+    })
+}
 ```
 
-### Retry Configuration
+The fallback body can inspect the failure as `error`.
 
-Retry failed steps:
+### Compensation
 
-```yaml
-- id: call_api
-  type: http.request
-  args:
-    url: apiUrl
-    method: POST
-  retry:
-    maxRetries: 3          # Maximum retry attempts
-    delay: 1000            # Initial delay in milliseconds
-    backoff: true          # Exponential backoff (delay doubles each retry)
-    condition: call_api.result.statusCode >= 500  # Retry only if condition is true
+`compensate` bodies run in reverse order when a later step fails and the flow
+enters failure handling.
+
+```sflowg
+step insert_payment {
+    postgres.get({
+        query: "INSERT INTO payments (...) VALUES (...) RETURNING id",
+        params: [...]
+    })
+} compensate {
+    postgres.exec({
+        query: "DELETE FROM payments WHERE id = $1",
+        params: [insert_payment.row.id]
+    })
+}
 ```
 
-## Return
+Compensation receives:
 
-Defines the response sent back to the client. HTTP flows support:
+- `compensation.step`
+- `compensation.path`
 
-- `response.json(...)`
-- `response.text(...)`
-- `response.redirect(...)`
+## Error Handling
 
-Responses are entrypoint-aware. For example, `response.ack()` is invalid in an HTTP flow and fails startup validation.
+Use `raise` to fail the current step with a flow error:
 
-### JSON Response
+```sflowg
+raise("PAYMENT_NOT_FOUND", "payment record was not found")
+raise("transient", "STRIPE_SERVICE_ERROR", "Stripe API temporarily unavailable")
+```
+
+Forms:
+
+- `raise(code, message)` defaults to permanent error type
+- `raise(type, code, message)` sets an explicit error type
+
+`on_error` is a flow-level recovery block:
+
+```sflowg
+on_error {
+    let error_response = match error.type {
+        "timeout" => {
+            status: 504,
+            code: "TIMEOUT",
+            message: "request timed out"
+        }
+        "transient" => {
+            status: 503,
+            code: error.code,
+            message: error.message
+        }
+        _ => {
+            status: 500,
+            code: error.code,
+            message: error.message
+        }
+    }
+
+    response.json({
+        status: error_response.status,
+        body: {
+            error: {
+                code: error_response.code,
+                message: error_response.message
+            }
+        }
+    })
+}
+```
+
+`error` contains fields such as:
+
+- `error.type`
+- `error.code`
+- `error.message`
+- `error.step`
+- `error.retries`
+- `error.meta`
+
+## Responses
+
+Responses are entrypoint-specific. Calls are validated at build/startup and at
+runtime.
+
+### HTTP Responses
+
+HTTP supports:
+
+- `response.json(map)`
+- `response.text(map)`
+- `response.redirect(map)`
+
+Each call takes exactly one map argument.
 
 ```sflowg
 return response.json({
     status: 200,
     headers: {
-        X-Request-ID: request_id
+        "X-Request-ID": request.headers["X-Request-ID"]
     },
     body: {
-        field: value,
-        nested: {
-            data: step.result
-        }
+        ok: true
     }
 })
 ```
-
-**Dynamic status codes:**
-
-```sflowg
-return response.json({
-    status: success ? 200 : 400,
-    body: {
-        success: success,
-        message: message
-    }
-})
-```
-
-### Text Response
 
 ```sflowg
 return response.text({
     status: 200,
-    headers: {
-        Cache-Control: "no-cache"
-    },
-    body: rendered_text
+    body: rendered.html
 })
 ```
-
-### Redirect
 
 ```sflowg
 return response.redirect({
@@ -553,167 +326,123 @@ return response.redirect({
 })
 ```
 
-## Expression Syntax
+### Flow Responses
 
-SFlowG uses [expr-lang](https://expr-lang.org/) for expressions.
+Subflows support:
 
-### Core Rule: YAML Strings vs Literals
+- `response.value(map)`
+- `response.error(map)`
 
-YAML string values are evaluated as expressions. Non-string values (numbers, booleans) are treated as literals.
-
-```yaml
-args:
-  # String → evaluated as expression
-  total: price * quantity          # expression
-  name: '"Alice"'                  # string literal (quoted inside quotes)
-
-  # Non-string → literal value
-  count: 42                        # integer literal
-  enabled: true                    # boolean literal
-  rate: 0.15                       # float literal
+```sflowg
+return response.value({
+    currency: input.requested_currency || input.default_currency
+})
 ```
 
-Undefined variables in expressions evaluate to `nil` (not an error).
+### Kafka Responses
 
-### Data Types
+Kafka supports:
 
-```yaml
-# Strings (must be quoted in expressions)
-message: '"Hello, World!"'
-greeting: '"Hello, " + name + "!"'
+- `response.ack()`
+- `response.nack()`
 
-# Numbers
-count: 42
-price: 19.99
-total: price * quantity
+These take no arguments. A Kafka flow must have a top-level return of one of
+those calls.
 
-# Booleans
-enabled: true
-isValid: amount > 0
+```sflowg
+on_error {
+    log.error("kafka order failed", error)
+    response.nack()
+}
 
-# Null checks
-hasValue: value != null
+return response.ack()
 ```
 
-### Operators
+## Built-Ins
 
-**Arithmetic:**
+### Logging
 
-```yaml
-sum: a + b
-diff: a - b
-product: a * b
-quotient: a / b
-remainder: a % b
+```sflowg
+log.debug("message", {key: "value"})
+log.info("message", {key: "value"})
+log.warn("message", {key: "value"})
+log.error("message", {key: "value"})
 ```
 
-**Comparison:**
+User logs include execution and flow context.
 
-```yaml
-equal: a == b
-notEqual: a != b
-greater: a > b
-less: a < b
-greaterOrEqual: a >= b
-lessOrEqual: a <= b
+### Metrics
+
+Dynamic metric API:
+
+```sflowg
+metric.counter("orders_created", 1, {"currency": request.body.currency})
+metric.updowncounter("queue_depth", -1, {"queue": "payments"})
+metric.histogram("payment_duration_ms", duration_ms, {"provider": "stripe"})
+metric.gauge("active_workers", 4)
 ```
 
-**Logical:**
+Predeclared metric handles from `flow-config.yaml`:
 
-```yaml
-and: a && b
-or: a || b
-not: '!a'
+```sflowg
+metric.payment_attempts.inc(1, {"provider": "stripe", "outcome": "success"})
+metric.payment_duration_ms.observe(duration_ms, {"provider": "stripe"})
+metric.queue_depth.add(-1, {"queue": "payments"})
+metric.active_workers.set(4)
 ```
 
-**Ternary:**
+Metric failures are logged and do not fail the step.
 
-```yaml
-result: 'condition ? valueIfTrue : valueIfFalse'
+### Flow Calls
 
-# Nested ternary
-status: >
-  code == 200 ? "success" :
-  code == 400 ? "bad_request" :
-  code == 500 ? "server_error" :
-  "unknown"
+```sflowg
+flow.call("subflow_name", {
+    arg_name: value
+})
 ```
 
-**Null coalescing (`??`):**
+### Formatting and Encoding
 
-```yaml
-# Returns left side if non-nil, otherwise right side
-name: 'user.name ?? "Anonymous"'
-config: 'override ?? defaults'
+```sflowg
+sprintf("order-%v", request.pathVariables.id)
+base64_encode(request.rawBody)
 ```
 
-**Optional chaining (`?.`):**
+## Risor Notes
 
-```yaml
-# Safely access nested properties — returns nil if any part is nil
-city: 'user?.address?.city'
-email: 'response?.data?.email ?? "unknown"'
+Step bodies use Risor syntax. Common patterns from the examples:
+
+```sflowg
+let value = request.body.currency ?? "usd"
+
+if (result.status_code >= 500) {
+    raise("transient", "UPSTREAM_UNAVAILABLE", "temporary failure")
+}
+
+let status = match request.body.event_type {
+    "payment_intent.succeeded" => "paid"
+    "payment_intent.payment_failed" => "payment_failed"
+    _ => "unknown"
+}
+
+let email = request.body.customer_email?.to_lower()?.trim_space()
 ```
 
-**Checking if a variable is defined:**
+Missing map attributes resolve to `nil`, so nil checks and optional chaining are
+safe for request, message, step result, and property objects.
 
-```yaml
-# defined() returns true if the variable exists (even if nil)
-condition: 'defined(user) && user.active'
-```
+## Examples
 
-### Accessing Data
+See:
 
-```yaml
-# Assign step results
-stepId.fieldName
-stepId.nested.field
-
-# Task (plugin) results — stored under .result
-stepId.result.statusCode
-stepId.result.body.id
-stepId.result.nested.field
-
-# Request data
-request.body.field
-request.pathVariables.id
-request.queryParameters.page
-request.headers.Authorization
-
-# Properties
-properties.apiUrl
-properties.maxRetries
-
-# Null-safe access
-'user?.address?.city ?? "unknown"'
-'value != null ? value.field : "default"'
-```
-
-### Built-in Functions
-
-```yaml
-# Current timestamp
-timestamp: now()
-
-# String functions
-upper: upper(name)
-lower: lower(name)
-trim: trim(input)
-len: len(array)
-
-# Type conversion
-str: string(number)
-num: int(stringValue)
-float: float(value)
-
-# Base64 encoding/decoding
-encoded: base64_encode(value)
-decoded: base64_decode(encoded_value)
-```
+- [Ecommerce example](./examples/ecom/README.md)
+- [Stripe integration example](./examples/stripe-integration/README.md)
+- [Kafka consumer example](./examples/kafka-consumer/README.md)
 
 ## Related Documentation
 
-- [Getting Started](./GETTING_STARTED.md) - Build your first flow
-- [Configuration](./FLOW_CONFIG.md) - Project configuration
-- [CLI Reference](./CLI.md) - Build and run flows
-- [Plugin Development](./PLUGIN_DEVELOPMENT.md) - Create custom tasks
+- [Entrypoints](./ENTRYPOINTS.md)
+- [Getting Started](./GETTING_STARTED.md)
+- [Flow Config](./FLOW_CONFIG.md)
+- [CLI Reference](./CLI.md)
+- [Plugin Development](./PLUGIN_DEVELOPMENT.md)

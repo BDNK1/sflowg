@@ -245,7 +245,8 @@ func (a *App) groupFlowsByTransport() (map[string][]Flow, []Transport, error) {
 		if err := transport.ValidateFlow(flow); err != nil {
 			return nil, nil, fmt.Errorf("validating %s entrypoint for flow %q: %w", transportType, flow.ID, err)
 		}
-		flow.ResponseSubtypes = transport.ResponseSubtypes()
+		flow.ResponseContract = transport.ResponseContract()
+		flow.ResponseSubtypes = flow.ResponseContract.Subtypes()
 		a.Flows[flowID] = flow
 		grouped[transportType] = append(grouped[transportType], flow)
 	}
@@ -253,6 +254,11 @@ func (a *App) groupFlowsByTransport() (map[string][]Flow, []Transport, error) {
 	var active []Transport
 	for _, transport := range a.transports.order {
 		if len(grouped[transport.Type()]) > 0 {
+			if validator, ok := transport.(TransportFlowSetValidator); ok {
+				if err := validator.ValidateTransportFlows(grouped[transport.Type()]); err != nil {
+					return nil, nil, fmt.Errorf("validating %s flow set: %w", transport.Type(), err)
+				}
+			}
 			active = append(active, transport)
 		}
 	}

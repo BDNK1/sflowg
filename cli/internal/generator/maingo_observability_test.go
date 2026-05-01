@@ -45,6 +45,7 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 			},
 		},
 	)
+	gen.EnableHTTP()
 
 	content, err := gen.Generate()
 	if err != nil {
@@ -53,7 +54,7 @@ func TestGenerate_IncludesObservabilityConfig(t *testing.T) {
 
 	checks := []string{
 		`"github.com/BDNK1/sflowg/core/bootstrap"`,
-		`httptransport "github.com/BDNK1/sflowg/core/transport/http"`,
+		`httptransport "github.com/BDNK1/sflowg/transports/http"`,
 		"if err := bootstrap.Run(ctx, bootstrap.Config{",
 		"Observability:    observabilityCfg,",
 		"Transports: []bootstrap.Transport{",
@@ -92,6 +93,7 @@ func TestGenerate_DelegatesRuntimeAssemblyToBootstrap(t *testing.T) {
 		nil,
 		config.ObservabilityConfig{},
 	)
+	gen.EnableHTTP()
 
 	content, err := gen.Generate()
 	if err != nil {
@@ -141,6 +143,7 @@ func TestGenerate_IncludesUserMetricsDeclarations(t *testing.T) {
 			},
 		},
 	)
+	gen.EnableHTTP()
 
 	content, err := gen.Generate()
 	if err != nil {

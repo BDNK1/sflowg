@@ -12,7 +12,6 @@ import (
 	"github.com/BDNK1/sflowg/core"
 	dslengine "github.com/BDNK1/sflowg/core/engine/dsl"
 	"github.com/BDNK1/sflowg/core/observability"
-	flowtransport "github.com/BDNK1/sflowg/core/transport/flow"
 )
 
 type Container = runtime.Container
@@ -94,7 +93,7 @@ func Run(ctx context.Context, cfg Config) (err error) {
 			return fmt.Errorf("register %s transport: %w", transport.Type(), err)
 		}
 	}
-	if err := app.RegisterTransport(flowtransport.New()); err != nil {
+	if err := app.RegisterTransport(runtime.NewFlowTransport()); err != nil {
 		return fmt.Errorf("register flow transport: %w", err)
 	}
 

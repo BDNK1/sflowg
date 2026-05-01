@@ -41,7 +41,8 @@ export PATH="$(pwd)/../bin:$PATH"
 
 # From this example folder
 sflowg build . \
-  --runtime-path ../../../runtime \
+  --runtime-path ../../../core \
+  --transport-path ../../../transports \
   --core-plugins-path ../../../plugins
 ./ecommerce-api
 ```

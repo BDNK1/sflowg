@@ -7,6 +7,7 @@ import (
 	"github.com/BDNK1/sflowg/core"
 	"github.com/BDNK1/sflowg/core/validation/flowinput"
 	"github.com/BDNK1/sflowg/core/validation/httpinput"
+	"github.com/BDNK1/sflowg/core/validation/kafkainput"
 )
 
 // Parse parses a .flow DSL source into a core.Flow.
@@ -154,6 +155,8 @@ func parseEntrypointInput(epType string, config map[string]any) (*runtime.InputC
 		return httpinput.ParseBinding(config)
 	case "flow":
 		return flowinput.ParseBinding(config)
+	case "kafka":
+		return kafkainput.ParseBinding(config)
 	default:
 		return nil, nil
 	}

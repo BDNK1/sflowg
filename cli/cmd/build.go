@@ -23,6 +23,7 @@ import (
 var (
 	runtimePath     string
 	corePluginsPath string
+	transportPath   string
 	embedFlows      bool
 )
 
@@ -41,7 +42,7 @@ a single executable binary with all dependencies compiled in.
 Example:
   sflowg build .
   sflowg build ./my-project
-  sflowg build . --runtime-path ../runtime --core-plugins-path ../plugins
+  sflowg build . --runtime-path ../core --transport-path ../transports --core-plugins-path ../plugins
 `,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runBuild,
@@ -50,6 +51,7 @@ Example:
 func init() {
 	buildCmd.Flags().StringVar(&runtimePath, "runtime-path", "", "Path to local runtime module (for development)")
 	buildCmd.Flags().StringVar(&corePluginsPath, "core-plugins-path", "", "Path to local core plugins directory (for development)")
+	buildCmd.Flags().StringVar(&transportPath, "transport-path", "", "Path to local transport modules directory (for development)")
 	buildCmd.Flags().BoolVar(&embedFlows, "embed-flows", false, "Embed flow files into the binary (production mode)")
 }
 
@@ -108,6 +110,17 @@ func runBuild(_ *cobra.Command, args []string) error {
 	cfg, err := config.Load(projectDir)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	flowScan, err := scanProjectFlows(projectDir)
+	if err != nil {
+		return err
+	}
+	if !flowScan.HasSupported {
+		return fmt.Errorf("no valid flow files with supported entrypoints found (supported: http, flow, kafka)")
+	}
+	if flowScan.HasKafka && len(cfg.Runtime.Kafka.Brokers) == 0 {
+		return fmt.Errorf("Kafka flows require runtime.kafka.brokers configuration")
 	}
 
 	// 2. Create temp workspace
@@ -229,6 +242,29 @@ func runBuild(_ *cobra.Command, args []string) error {
 		fmt.Printf("  Core Plugins: %s\n", absPluginsPath)
 	}
 
+	var absTransportPath string
+	if transportPath != "" {
+		absTransportPath, err = filepath.Abs(transportPath)
+		if err != nil {
+			return fmt.Errorf("failed to resolve transport path: %w", err)
+		}
+		if flowScan.HasKafka {
+			kafkaPath := filepath.Join(absTransportPath, "kafka")
+			if err := validateRuntimePath(kafkaPath); err != nil {
+				return fmt.Errorf("invalid Kafka transport path %s: %w", kafkaPath, err)
+			}
+		}
+		if flowScan.HasHTTP {
+			httpPath := filepath.Join(absTransportPath, "http")
+			if err := validateRuntimePath(httpPath); err != nil {
+				return fmt.Errorf("invalid HTTP transport path %s: %w", httpPath, err)
+			}
+		}
+		if flowScan.HasHTTP || flowScan.HasKafka {
+			fmt.Printf("  Transports: %s\n", absTransportPath)
+		}
+	}
+
 	// 6. Resolve dynamic versions (latest) before go.mod generation
 	// so generated go.mod is concrete and deterministic.
 	resolvedRuntimeVersion, resolvedPlugins, err := resolveModuleVersions(
@@ -245,6 +281,20 @@ func runBuild(_ *cobra.Command, args []string) error {
 	// 7. Generate go.mod (phase 1: dependency resolution)
 	fmt.Println("\nGenerating go.mod...")
 	goModGen := generator.NewGoModGenerator(ws.UUID, resolvedRuntimeVersion, absRuntimePath)
+	httpTransport, err := externalTransportInfo(flowScan.HasHTTP, "HTTP", constants.HTTPTransportModulePath, "http", resolvedRuntimeVersion, absRuntimePath, absTransportPath)
+	if err != nil {
+		return err
+	}
+	if httpTransport != nil {
+		goModGen.SetHTTPTransport(*httpTransport)
+	}
+	kafkaTransport, err := externalTransportInfo(flowScan.HasKafka, "Kafka", constants.KafkaTransportModulePath, "kafka", resolvedRuntimeVersion, absRuntimePath, absTransportPath)
+	if err != nil {
+		return err
+	}
+	if kafkaTransport != nil {
+		goModGen.SetKafkaTransport(*kafkaTransport)
+	}
 
 	for _, plugin := range resolvedPlugins {
 		pluginInfo := generator.PluginInfo{
@@ -353,6 +403,12 @@ func runBuild(_ *cobra.Command, args []string) error {
 	// 10. Generate main.go
 	fmt.Println("\nGenerating main.go...")
 	mainGoGen := generator.NewMainGoGenerator(goModGen.ModuleName, cfg.Runtime.Port, embedFlows, cfg.Properties, cfg.Observability)
+	if flowScan.HasHTTP {
+		mainGoGen.EnableHTTP()
+	}
+	if flowScan.HasKafka {
+		mainGoGen.EnableKafka(cfg.Runtime.Kafka)
+	}
 
 	for _, plugin := range analyzedPlugins {
 		pluginInfo := generator.PluginInfo{
@@ -432,16 +488,86 @@ func validateEmbeddedFlows(flowsDir string) error {
 			if err != nil {
 				return err
 			}
-			switch flow.Entrypoint.Type {
-			case "http", "":
-				flow.ResponseSubtypes = []string{"json", "text", "redirect"}
-			case "flow":
-				flow.ResponseSubtypes = []string{"value", "error"}
+			if err := attachBuiltInResponseContract(&flow, file); err != nil {
+				return err
 			}
 			flows[flow.ID] = flow
 		}
 	}
 	return dslengine.NewFlowValidator().ValidateFlows(flows)
+}
+
+type projectFlowScan struct {
+	HasSupported bool
+	HasHTTP      bool
+	HasKafka     bool
+}
+
+func scanProjectFlows(projectDir string) (projectFlowScan, error) {
+	loader := dslengine.NewFlowLoader()
+	flowsDir := filepath.Join(projectDir, "flows")
+	flows := map[string]runtime.Flow{}
+	var result projectFlowScan
+
+	for _, ext := range loader.Extensions() {
+		matches, err := filepath.Glob(filepath.Join(flowsDir, ext))
+		if err != nil {
+			return result, err
+		}
+		for _, file := range matches {
+			flow, err := loader.Load(file)
+			if err != nil {
+				return result, fmt.Errorf("error loading flow from %s: %w", file, err)
+			}
+			if err := attachBuiltInResponseContract(&flow, file); err != nil {
+				return result, err
+			}
+			flows[flow.ID] = flow
+			result.HasSupported = true
+			if flow.Entrypoint.Type == "" || flow.Entrypoint.Type == "http" {
+				result.HasHTTP = true
+			}
+			if flow.Entrypoint.Type == "kafka" {
+				result.HasKafka = true
+			}
+		}
+	}
+	if len(flows) == 0 {
+		return result, nil
+	}
+	if err := dslengine.NewFlowValidator().ValidateFlows(flows); err != nil {
+		return result, fmt.Errorf("flow validation failed: %w", err)
+	}
+	return result, nil
+}
+
+func attachBuiltInResponseContract(flow *runtime.Flow, file string) error {
+	contract, ok := runtime.BuiltInResponseContract(flow.Entrypoint.Type)
+	if !ok {
+		return fmt.Errorf("unsupported flow entrypoint %q in %s (flow %q); supported entrypoints: http, flow, kafka", flow.Entrypoint.Type, file, flow.ID)
+	}
+	flow.ResponseContract = contract
+	flow.ResponseSubtypes = contract.Subtypes()
+	return nil
+}
+
+func externalTransportInfo(enabled bool, label string, modulePath string, dirName string, resolvedRuntimeVersion string, absRuntimePath string, absTransportPath string) (*generator.TransportInfo, error) {
+	if !enabled {
+		return nil, nil
+	}
+	if absRuntimePath != "" && absTransportPath == "" {
+		return nil, fmt.Errorf("%s flows with --runtime-path require --transport-path pointing to the local transports directory", label)
+	}
+
+	info := &generator.TransportInfo{
+		ModulePath: modulePath,
+		Version:    resolvedRuntimeVersion,
+	}
+	if absTransportPath != "" {
+		info.LocalPath = filepath.Join(absTransportPath, dirName)
+		info.Version = "v0.0.0"
+	}
+	return info, nil
 }
 
 func resolveModuleDir(workspacePath, modulePath string) (string, error) {

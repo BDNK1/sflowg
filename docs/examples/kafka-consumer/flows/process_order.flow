@@ -1,0 +1,39 @@
+entrypoint.kafka {
+  topic: orders.events
+  group_id: sflowg-kafka-consumer-example
+  auto_offset_reset: earliest
+  value: {
+    type: json
+    schema: {
+      order_id: { type: string, required: true }
+      customer_email: { type: string, required: true, format: email }
+      amount_cents: { type: integer, required: true, minimum: 1 }
+      currency: { type: string, default: usd, enum: [usd, eur] }
+    }
+  }
+}
+
+step process_order {
+  log.info("kafka order received", {
+    order_id: message.value.order_id,
+    customer_email: message.value.customer_email,
+    amount_cents: message.value.amount_cents,
+    currency: message.value.currency,
+    topic: message.topic,
+    partition: message.partition,
+    offset: message.offset,
+    timestamp: message.timestamp,
+  })
+
+  {
+    order_id: message.value.order_id,
+    accepted: true,
+  }
+}
+
+on_error {
+  log.error("kafka order failed", error)
+  response.nack()
+}
+
+return response.ack()

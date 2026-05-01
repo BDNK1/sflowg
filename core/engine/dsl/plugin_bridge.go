@@ -55,20 +55,15 @@ func BuildPluginGlobals(exec *runtime.Execution) map[string]any {
 func BuildResponseGlobals(exec *runtime.Execution) map[string]any {
 	responseMethods := make(map[string]any)
 
-	subtypes := exec.Flow.ResponseSubtypes
-	if len(subtypes) == 0 {
-		subtypes = []string{"json"}
-	}
+	contract := responseContractForFlow(exec.Flow)
+	subtypes := contract.Subtypes()
 
 	for _, subtype := range subtypes {
 		subtype := subtype
-		entrypointType := exec.Flow.Entrypoint.Type
-		if entrypointType == "" {
-			entrypointType = "http"
-		}
+		entrypointType := contract.EntrypointType
 		handlerName := entrypointType + "." + subtype
 		responseMethods[subtype] = func(args ...any) error {
-			argsMap, err := normalizeResponseArgsFor(entrypointType, subtype, args)
+			argsMap, err := contract.ValidateArgs(subtype, args)
 			if err != nil {
 				return err
 			}
@@ -112,46 +107,4 @@ func BuildFlowCallGlobals(invoker runtime.SubflowInvoker, exec *runtime.Executio
 			},
 		},
 	}
-}
-
-func normalizeResponseArgsFor(entrypointType, subtype string, args []any) (map[string]any, error) {
-	if entrypointType == "flow" && subtype == "error" {
-		if len(args) != 1 {
-			return nil, fmt.Errorf("response.error expects one map argument")
-		}
-		m, ok := args[0].(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("response.error expects map argument, got %T", args[0])
-		}
-		return m, nil
-	}
-	return normalizeResponseArgs(args)
-}
-
-// normalizeResponseArgs converts the variadic args from a Risor function call
-// into a map[string]any suitable for response handlers.
-// Supports: response.json({status: 200, body: {...}}) → single map arg
-// Also: response.json(200, {id: "..."}) → {status: 200, body: {...}}
-func normalizeResponseArgs(args []any) (map[string]any, error) {
-	if len(args) == 0 {
-		return map[string]any{}, nil
-	}
-
-	// Single map argument
-	if len(args) == 1 {
-		if m, ok := args[0].(map[string]any); ok {
-			return m, nil
-		}
-		return nil, fmt.Errorf("expected map argument, got %T", args[0])
-	}
-
-	// Two arguments: status code + body
-	if len(args) == 2 {
-		result := map[string]any{}
-		result["status"] = args[0]
-		result["body"] = args[1]
-		return result, nil
-	}
-
-	return nil, fmt.Errorf("expected 1 or 2 arguments, got %d", len(args))
 }

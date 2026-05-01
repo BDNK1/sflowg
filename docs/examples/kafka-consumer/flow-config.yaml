@@ -1,0 +1,15 @@
+name: kafka-consumer-example
+runtime:
+  port: "18080"
+  kafka:
+    brokers:
+      default:
+        brokers: ["localhost:19092"]
+        client_id: "kafka-consumer-example"
+        nack_redelivery_delay_ms: 100
+observability:
+  logging:
+    format: json
+    sources:
+      framework: info
+      user: info

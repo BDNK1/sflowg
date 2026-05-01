@@ -1,0 +1,149 @@
+package runtime
+
+import (
+	"fmt"
+	"slices"
+)
+
+type ResponseArgRule int
+
+const (
+	ResponseArgsMap ResponseArgRule = iota
+	ResponseArgsNone
+)
+
+type ResponseSubtypeContract struct {
+	Name string
+	Args ResponseArgRule
+}
+
+type ResponseContract struct {
+	EntrypointType string
+	subtypes       []ResponseSubtypeContract
+	byName         map[string]ResponseSubtypeContract
+}
+
+func NewResponseContract(entrypointType string, subtypes ...ResponseSubtypeContract) ResponseContract {
+	byName := make(map[string]ResponseSubtypeContract, len(subtypes))
+	names := make([]ResponseSubtypeContract, len(subtypes))
+	copy(names, subtypes)
+	for _, subtype := range names {
+		byName[subtype.Name] = subtype
+	}
+	return ResponseContract{
+		EntrypointType: entrypointType,
+		subtypes:       names,
+		byName:         byName,
+	}
+}
+
+func HTTPResponseContract() ResponseContract {
+	return NewResponseContract("http",
+		ResponseSubtypeContract{Name: "json", Args: ResponseArgsMap},
+		ResponseSubtypeContract{Name: "text", Args: ResponseArgsMap},
+		ResponseSubtypeContract{Name: "redirect", Args: ResponseArgsMap},
+	)
+}
+
+func FlowResponseContract() ResponseContract {
+	return NewResponseContract("flow",
+		ResponseSubtypeContract{Name: "value", Args: ResponseArgsMap},
+		ResponseSubtypeContract{Name: "error", Args: ResponseArgsMap},
+	)
+}
+
+func KafkaResponseContract() ResponseContract {
+	return NewResponseContract("kafka",
+		ResponseSubtypeContract{Name: "ack", Args: ResponseArgsNone},
+		ResponseSubtypeContract{Name: "nack", Args: ResponseArgsNone},
+	)
+}
+
+func BuiltInResponseContract(entrypointType string) (ResponseContract, bool) {
+	switch entrypointType {
+	case "", "http":
+		return HTTPResponseContract(), true
+	case "flow":
+		return FlowResponseContract(), true
+	case "kafka":
+		return KafkaResponseContract(), true
+	default:
+		return ResponseContract{}, false
+	}
+}
+
+func (c ResponseContract) Subtypes() []string {
+	if len(c.subtypes) == 0 {
+		return []string{"json"}
+	}
+	result := make([]string, 0, len(c.subtypes))
+	for _, subtype := range c.subtypes {
+		result = append(result, subtype.Name)
+	}
+	return result
+}
+
+func (c ResponseContract) IsZero() bool {
+	return c.EntrypointType == "" && len(c.subtypes) == 0
+}
+
+func (c ResponseContract) HasSubtype(name string) bool {
+	if len(c.subtypes) == 0 {
+		return name == "json"
+	}
+	_, ok := c.byName[name]
+	return ok
+}
+
+func (c ResponseContract) ValidateArgs(subtype string, args []any) (map[string]any, error) {
+	if len(c.subtypes) == 0 {
+		c = HTTPResponseContract()
+	}
+	spec, ok := c.byName[subtype]
+	if !ok {
+		return nil, fmt.Errorf("response.%s is not valid for this entrypoint", subtype)
+	}
+	switch spec.Args {
+	case ResponseArgsNone:
+		if len(args) != 0 {
+			return nil, fmt.Errorf("response.%s expects no arguments", subtype)
+		}
+		return map[string]any{}, nil
+	case ResponseArgsMap:
+		if len(args) != 1 {
+			return nil, fmt.Errorf("response.%s expects one map argument", subtype)
+		}
+		m, ok := args[0].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("response.%s expects map argument, got %T", subtype, args[0])
+		}
+		return m, nil
+	default:
+		return nil, fmt.Errorf("response.%s has unsupported argument rule", subtype)
+	}
+}
+
+func (c ResponseContract) ValidateStaticArgCount(subtype string, count int) error {
+	if len(c.subtypes) == 0 {
+		c = HTTPResponseContract()
+	}
+	spec, ok := c.byName[subtype]
+	if !ok {
+		return fmt.Errorf("response.%s is not valid for this entrypoint", subtype)
+	}
+	switch spec.Args {
+	case ResponseArgsNone:
+		if count != 0 {
+			return fmt.Errorf("response.%s expects no arguments", subtype)
+		}
+	case ResponseArgsMap:
+		if count != 1 {
+			return fmt.Errorf("response.%s expects one map argument", subtype)
+		}
+	}
+	return nil
+}
+
+func (c ResponseContract) EqualSubtypes(names []string) bool {
+	return slices.Equal(c.Subtypes(), names)
+}

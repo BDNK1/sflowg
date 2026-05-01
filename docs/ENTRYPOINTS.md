@@ -1,0 +1,344 @@
+# Entrypoints
+
+Entrypoints define how a flow is triggered, what boundary input is validated,
+which root object is available in step code, and which response calls are valid.
+
+Supported entrypoints:
+
+| Entrypoint | Trigger | Runtime support |
+|---|---|---|
+| `entrypoint.http` | HTTP request | External `transports/http` module |
+| `entrypoint.kafka` | Kafka message | External `transports/kafka` module |
+| `entrypoint.flow` | `flow.call` from another flow | Built into core |
+
+HTTP and Kafka transports are registered by generated applications only when
+matching flows exist. Subflows are not an external transport.
+
+## HTTP
+
+HTTP flows are served by the external HTTP transport module.
+
+```sflowg
+entrypoint.http {
+    method: GET
+    path: /api/orders/:id
+    pathVariables: {
+        id: { type: integer, required: true, minimum: 1 }
+    }
+    queryParameters: {
+        include: { type: array, items: { type: string } }
+    }
+    headers: {
+        X-Request-ID: { type: string }
+    }
+}
+```
+
+Fields:
+
+| Field | Required | Description |
+|---|---:|---|
+| `method` | Yes | `GET` or `POST` |
+| `path` | Yes | Route path, including `:name` variables |
+| `timeout` | No | Flow timeout in milliseconds |
+| `pathVariables` | No | List or schema map for route variables |
+| `queryParameters` | No | List or schema map for query values |
+| `headers` | No | List or schema map for request headers |
+| `body` | No | Body declaration; currently `type: json` |
+
+HTTP does not parse request bodies implicitly. `request.body` and
+`request.rawBody` exist only when `body: { type: json }` is declared.
+
+```sflowg
+entrypoint.http {
+    method: POST
+    path: /api/webhooks/stripe
+    headers: {
+        Stripe-Signature: { type: string, required: true, minLength: 1 }
+    }
+    body: {
+        type: json
+        schema: {
+            id: { type: string, required: true }
+            type: { type: string, required: true }
+        }
+    }
+}
+```
+
+HTTP namespaces:
+
+- `request.body`
+- `request.rawBody`
+- `request.pathVariables`
+- `request.queryParameters`
+- `request.headers`
+
+Header names with dashes can be read with index syntax:
+
+```sflowg
+request.headers["Stripe-Signature"]
+request.headers["X-Request-ID"]
+```
+
+HTTP response calls:
+
+- `response.json(map)`
+- `response.text(map)`
+- `response.redirect(map)`
+
+Each HTTP response call takes exactly one map argument.
+
+```sflowg
+return response.json({
+    status: 200,
+    body: { ok: true }
+})
+```
+
+## Kafka
+
+Kafka flows are served by the external Kafka transport module. Broker
+connection settings live in `flow-config.yaml`; the flow entrypoint declares
+which topic and consumer group the flow uses.
+
+```sflowg
+entrypoint.kafka {
+    broker: default
+    topic: orders.events
+    group_id: orders-service
+    auto_offset_reset: earliest
+    value: {
+        type: json
+        schema: {
+            order_id: { type: string, required: true }
+            amount_cents: { type: integer, required: true, minimum: 1 }
+            currency: { type: string, default: usd, enum: [usd, eur] }
+        }
+    }
+}
+```
+
+Fields:
+
+| Field | Required | Description |
+|---|---:|---|
+| `broker` | No | Named broker config from `flow-config.yaml`; defaults to `default` |
+| `topic` | Yes | Kafka topic to subscribe to |
+| `group_id` | Yes | Kafka consumer group |
+| `auto_offset_reset` | Yes | `earliest` or `latest` |
+| `value.type` | Yes | Must be `json` in v1 |
+| `value.schema` | No | Optional schema for parsed JSON payload |
+
+Kafka runtime config:
+
+```yaml
+runtime:
+  kafka:
+    brokers:
+      default:
+        brokers: ["localhost:9092"]
+        client_id: "orders-service"
+        nack_redelivery_delay_ms: 100
+```
+
+Kafka v1 treats keys, values, and headers as UTF-8 text. Invalid UTF-8 or
+invalid JSON is a boundary validation error. The original payload text is
+available as `message.rawValue`; the parsed JSON payload is available as
+`message.value`.
+
+Kafka namespaces:
+
+- `message.key`
+- `message.value`
+- `message.rawValue`
+- `message.headers`
+- `message.topic`
+- `message.partition`
+- `message.offset`
+- `message.timestamp`
+
+`message.timestamp` is an ISO-8601 string.
+
+Kafka flows must have a top-level terminal return:
+
+```sflowg
+return response.ack()
+```
+
+or:
+
+```sflowg
+return response.nack()
+```
+
+`response.ack()` and `response.nack()` take no arguments. They are also allowed
+in `on_error`, where they can override the default error outcome. Normal steps,
+fallbacks, and compensation bodies cannot return Kafka ack/nack responses.
+
+Kafka boundary failures and unhandled execution errors default to `nack`.
+Duplicate `(broker, topic, group_id)` subscriptions in one app are rejected at
+startup.
+
+## Flow
+
+`entrypoint.flow` declares an internal subflow callable with `flow.call`. It is
+built into core and is not an external transport.
+
+```sflowg
+entrypoint.flow {
+    input: {
+        requested_currency: { type: string, enum: [usd, eur] }
+        default_currency: { type: string, required: true, enum: [usd, eur] }
+    }
+}
+
+return response.value({
+    currency: input.requested_currency || input.default_currency
+})
+```
+
+Call it from another flow:
+
+```sflowg
+step resolve_currency {
+    flow.call("resolve_order_currency", {
+        requested_currency: request.body.currency,
+        default_currency: properties.default_currency
+    })
+}
+```
+
+Subflow input is available under `input`.
+
+Flow response calls:
+
+- `response.value(map)`
+- `response.error(map)`
+
+Each flow response call takes exactly one map argument.
+
+## Input Schemas
+
+Schemas are supported for HTTP inputs, Kafka `message.value`, and flow inputs.
+They are part of the entrypoint boundary: validation runs before normal steps
+and normalized values stay in the entrypoint root object.
+
+Schema locations:
+
+| Entrypoint | Schema location | Runtime value |
+|---|---|---|
+| `entrypoint.http` | `pathVariables`, `queryParameters`, `headers`, `body.schema` | `request.*` |
+| `entrypoint.kafka` | `value.schema` | `message.value` |
+| `entrypoint.flow` | `input` | `input` |
+
+Types:
+
+- `object`
+- `array`
+- `string`
+- `integer`
+- `number`
+- `boolean`
+
+Constraints:
+
+| Constraint | Applies To | Description |
+|---|---|---|
+| `required` | all types | Missing value fails validation unless `default` exists |
+| `default` | all types | Value used when input is absent |
+| `enum` | `string` | Value must match an allowed string |
+| `minimum` | `integer`, `number` | Inclusive lower bound |
+| `maximum` | `integer`, `number` | Inclusive upper bound |
+| `minLength` | `string` | Minimum string length |
+| `maxLength` | `string` | Maximum string length |
+| `pattern` | `string` | Regular expression match |
+| `format` | `string` | `email`, `uuid`, `url`, `date`, or `date-time` |
+| `properties` | `object` | Nested object fields |
+| `items` | `array` | Array item schema |
+
+Object schemas can use either explicit `properties`:
+
+```sflowg
+metadata: {
+    type: object
+    properties: {
+        order_id: { type: string, required: true }
+    }
+}
+```
+
+or the shorthand used by examples:
+
+```sflowg
+schema: {
+    customer_email: { type: string, required: true, format: email }
+    amount_cents: { type: integer, required: true, minimum: 1 }
+}
+```
+
+HTTP list forms extract string values without schema validation:
+
+```sflowg
+entrypoint.http {
+    method: GET
+    path: /api/orders/:id
+    pathVariables: [id]
+    queryParameters: [limit]
+    headers: [Authorization]
+}
+```
+
+HTTP object forms validate and normalize values before steps run:
+
+```sflowg
+entrypoint.http {
+    method: GET
+    path: /api/orders/:id
+    pathVariables: {
+        id: { type: integer, required: true, minimum: 1 }
+    }
+    queryParameters: {
+        limit: { type: integer, default: 50, minimum: 1 }
+        include: { type: array, items: { type: string } }
+    }
+}
+```
+
+Path variables, query parameters, and headers start as strings and can be
+coerced to `integer`, `number`, `boolean`, or validated strings. Repeated query
+parameters and multi-value headers can be validated as arrays.
+
+If validation fails, normal steps do not run and the runtime raises a boundary
+`SCHEMA_VIOLATION` error. `on_error` can handle it.
+
+```sflowg
+on_error {
+    if (error.code == "SCHEMA_VIOLATION") {
+        response.json({
+            status: 400,
+            body: {
+                error: "invalid_request",
+                fields: error.meta.fields,
+            }
+        })
+    } else {
+        response.json({
+            status: 500,
+            body: { error: error.code }
+        })
+    }
+}
+```
+
+If an HTTP flow does not handle a schema violation, the transport returns
+`400 application/problem+json`.
+
+Kafka schema and boundary failures default to `nack` unless `on_error` returns
+`response.ack()` or `response.nack()`.
+
+## Validation
+
+Response calls and input schemas are entrypoint-specific and are validated at
+build/startup and at runtime. The CLI can validate HTTP, Kafka, and flow
+response semantics without importing external transport modules.

@@ -6,6 +6,7 @@ import (
 
 	"github.com/BDNK1/sflowg/core/validation/flowinput"
 	"github.com/BDNK1/sflowg/core/validation/httpinput"
+	"github.com/BDNK1/sflowg/core/validation/kafkainput"
 )
 
 func TestParse_Entrypoint(t *testing.T) {
@@ -36,6 +37,39 @@ func TestParse_Entrypoint(t *testing.T) {
 	}
 	if len(headers) != 2 {
 		t.Errorf("headers len = %d, want 2", len(headers))
+	}
+}
+
+func TestParse_KafkaEntrypointValueSchema(t *testing.T) {
+	source := `entrypoint.kafka {
+	broker: default
+	topic: orders
+	group_id: orders-service
+	auto_offset_reset: earliest
+	value: {
+		type: json
+		schema: {
+			order_id: { type: string, required: true }
+			amount: { type: integer, default: 0 }
+		}
+	}
+}
+return response.ack()`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if flow.Entrypoint.Type != "kafka" {
+		t.Fatalf("entrypoint type = %q, want kafka", flow.Entrypoint.Type)
+	}
+	input := flow.Entrypoint.Input
+	if input == nil {
+		t.Fatal("entrypoint input is nil")
+	}
+	value, ok := input.RootSchema(kafkainput.ValueNamespace)
+	if !ok || value.Properties["order_id"] == nil || value.Properties["amount"] == nil {
+		t.Fatalf("message.value schema not parsed: %#v", value)
 	}
 }
 

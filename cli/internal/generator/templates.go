@@ -15,7 +15,12 @@ import (
 	"strings"
 
 	"{{.RuntimeModulePath}}/bootstrap"
-	httptransport "{{.RuntimeModulePath}}/transport/http"
+{{- if .UseHTTP}}
+	httptransport "github.com/BDNK1/sflowg/transports/http"
+{{- end}}
+{{- if .UseKafka}}
+	kafkatransport "github.com/BDNK1/sflowg/transports/kafka"
+{{- end}}
 {{- range .Plugins}}
 {{- if eq .Type 3}}
 	"{{$.ModuleName}}/vendored"
@@ -36,8 +41,12 @@ func main() {
 	loadEnvFile()
 
 	// Parse command-line flags
+{{- if not .EmbedFlows}}
 	flowsPath := flag.String("flows", "", "Path to flows directory (default: auto-detect)")
+{{- end}}
+{{- if .UseHTTP}}
 	port := flag.String("port", "{{.Port}}", "Server port")
+{{- end}}
 	flag.Parse()
 
 	ctx := context.Background()
@@ -316,7 +325,26 @@ func main() {
 		ValidateFlows:    {{if .EmbedFlows}}false{{else}}true{{end}},
 		RegisterPlugins:  registerPlugins,
 		Transports: []bootstrap.Transport{
+{{- if .UseHTTP}}
 			httptransport.New(httptransport.Config{Addr: ":" + *port}),
+{{- end}}
+{{- if .UseKafka}}
+			kafkatransport.New(kafkatransport.Config{
+				Brokers: map[string]kafkatransport.BrokerConfig{
+{{- range $name, $broker := .Kafka.Brokers}}
+					"{{$name}}": {
+						Brokers: []string{
+{{- range $broker.Brokers}}
+							{{printf "%q" .}},
+{{- end}}
+						},
+						ClientID: {{printf "%q" $broker.ClientID}},
+						NackRedeliveryDelayMS: {{$broker.NackRedeliveryDelayMS}},
+					},
+{{- end}}
+				},
+			}),
+{{- end}}
 		},
 	}); err != nil {
 		panic(fmt.Sprintf("Server error: %v", err))

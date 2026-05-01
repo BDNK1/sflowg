@@ -2,20 +2,16 @@ package dsl
 
 import (
 	"context"
-	"fmt"
-	"slices"
 	"strings"
 
+	"github.com/BDNK1/sflowg/core"
 	"github.com/deepnoodle-ai/risor/v2/pkg/ast"
 	risorparser "github.com/deepnoodle-ai/risor/v2/pkg/parser"
 )
 
-func ValidateResponseCalls(source string, allowedSubtypes []string) error {
+func ValidateResponseCalls(source string, contract runtime.ResponseContract) error {
 	if strings.TrimSpace(source) == "" {
 		return nil
-	}
-	if len(allowedSubtypes) == 0 {
-		allowedSubtypes = []string{"json"}
 	}
 
 	program, err := risorparser.Parse(context.Background(), source, nil)
@@ -24,41 +20,46 @@ func ValidateResponseCalls(source string, allowedSubtypes []string) error {
 	}
 
 	for node := range ast.Preorder(program) {
-		subtype, ok := responseCallSubtype(node)
+		call, subtype, ok := responseCall(node)
 		if !ok {
 			continue
 		}
-		if !slices.Contains(allowedSubtypes, subtype) {
-			return fmt.Errorf("response.%s is not valid for this entrypoint", subtype)
+		if err := contract.ValidateStaticArgCount(subtype, len(call.Args)); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 func responseCallSubtype(node ast.Node) (string, bool) {
+	_, subtype, ok := responseCall(node)
+	return subtype, ok
+}
+
+func responseCall(node ast.Node) (*ast.Call, string, bool) {
 	if objectCall, ok := node.(*ast.ObjectCall); ok {
 		ident, ok := objectCall.X.(*ast.Ident)
 		if !ok || ident.Name != "response" || objectCall.Call == nil {
-			return "", false
+			return nil, "", false
 		}
 		method, ok := objectCall.Call.Fun.(*ast.Ident)
 		if !ok {
-			return "", false
+			return nil, "", false
 		}
-		return method.Name, true
+		return objectCall.Call, method.Name, true
 	}
 
 	call, ok := node.(*ast.Call)
 	if !ok {
-		return "", false
+		return nil, "", false
 	}
 	getAttr, ok := call.Fun.(*ast.GetAttr)
 	if !ok || getAttr.Attr == nil {
-		return "", false
+		return nil, "", false
 	}
 	ident, ok := getAttr.X.(*ast.Ident)
 	if !ok || ident.Name != "response" {
-		return "", false
+		return nil, "", false
 	}
-	return getAttr.Attr.Name, true
+	return call, getAttr.Attr.Name, true
 }

@@ -22,9 +22,20 @@ type FlowConfig struct {
 
 // RuntimeConfig represents runtime configuration
 type RuntimeConfig struct {
-	Port    string `yaml:"port"`              // Optional: HTTP server port, defaults to "8080"
-	Version string `yaml:"version,omitempty"` // Optional: runtime module version, defaults to "latest"
-	Engine  string `yaml:"engine,omitempty"`  // Optional: only "dsl" is supported
+	Port    string             `yaml:"port"`              // Optional: HTTP server port, defaults to "8080"
+	Version string             `yaml:"version,omitempty"` // Optional: runtime module version, defaults to "latest"
+	Engine  string             `yaml:"engine,omitempty"`  // Optional: only "dsl" is supported
+	Kafka   KafkaRuntimeConfig `yaml:"kafka,omitempty"`
+}
+
+type KafkaRuntimeConfig struct {
+	Brokers map[string]KafkaBrokerConfig `yaml:"brokers,omitempty"`
+}
+
+type KafkaBrokerConfig struct {
+	Brokers               []string `yaml:"brokers"`
+	ClientID              string   `yaml:"client_id,omitempty"`
+	NackRedeliveryDelayMS int      `yaml:"nack_redelivery_delay_ms,omitempty"`
 }
 
 type ObservabilityConfig = bootstrap.ObservabilityConfig
@@ -98,10 +109,6 @@ func Load(projectDir string) (*FlowConfig, error) {
 
 // Validate checks that the config has all required fields
 func (c *FlowConfig) Validate() error {
-	if len(c.Plugins) == 0 {
-		return fmt.Errorf("at least one plugin must be specified")
-	}
-
 	for i, plugin := range c.Plugins {
 		if plugin.Source == "" {
 			return fmt.Errorf("plugin #%d: source field is required", i)
@@ -141,6 +148,12 @@ func (c *FlowConfig) ApplyDefaults(projectDir string) error {
 	}
 	if c.Runtime.Engine == "" {
 		c.Runtime.Engine = "dsl"
+	}
+	for name, broker := range c.Runtime.Kafka.Brokers {
+		if broker.NackRedeliveryDelayMS == 0 {
+			broker.NackRedeliveryDelayMS = 100
+		}
+		c.Runtime.Kafka.Brokers[name] = broker
 	}
 
 	if err := bootstrap.ApplyObservabilityDefaults(&c.Observability); err != nil {

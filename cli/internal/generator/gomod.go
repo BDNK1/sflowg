@@ -20,6 +20,14 @@ type GoModGenerator struct {
 	RuntimeVersion string
 	RuntimePath    string // Absolute path to runtime module
 	Plugins        []PluginInfo
+	HTTPTransport  *TransportInfo
+	KafkaTransport *TransportInfo
+}
+
+type TransportInfo struct {
+	ModulePath string
+	Version    string
+	LocalPath  string
 }
 
 // PluginInfo contains information about a plugin for go.mod generation
@@ -57,6 +65,14 @@ func (g *GoModGenerator) AddPlugin(info PluginInfo) {
 	g.Plugins = append(g.Plugins, info)
 }
 
+func (g *GoModGenerator) SetHTTPTransport(info TransportInfo) {
+	g.HTTPTransport = &info
+}
+
+func (g *GoModGenerator) SetKafkaTransport(info TransportInfo) {
+	g.KafkaTransport = &info
+}
+
 // Generate creates the go.mod content
 func (g *GoModGenerator) Generate() string {
 	var sb strings.Builder
@@ -85,6 +101,20 @@ func (g *GoModGenerator) Generate() string {
 		}
 		sb.WriteString(fmt.Sprintf("\t%s %s\n", plugin.ModulePath, version))
 	}
+	if g.HTTPTransport != nil {
+		version := g.HTTPTransport.Version
+		if version == "" || version == "latest" {
+			version = unresolvedVersion
+		}
+		sb.WriteString(fmt.Sprintf("\t%s %s\n", g.HTTPTransport.ModulePath, version))
+	}
+	if g.KafkaTransport != nil {
+		version := g.KafkaTransport.Version
+		if version == "" || version == "latest" {
+			version = unresolvedVersion
+		}
+		sb.WriteString(fmt.Sprintf("\t%s %s\n", g.KafkaTransport.ModulePath, version))
+	}
 
 	sb.WriteString(")\n\n")
 
@@ -100,6 +130,20 @@ func (g *GoModGenerator) Generate() string {
 			}
 			sb.WriteString(fmt.Sprintf("\t%s => %s\n", plugin.ModulePath, plugin.LocalPath))
 		}
+	}
+	if g.HTTPTransport != nil && g.HTTPTransport.LocalPath != "" {
+		if !hasReplace {
+			sb.WriteString("replace (\n")
+			hasReplace = true
+		}
+		sb.WriteString(fmt.Sprintf("\t%s => %s\n", g.HTTPTransport.ModulePath, g.HTTPTransport.LocalPath))
+	}
+	if g.KafkaTransport != nil && g.KafkaTransport.LocalPath != "" {
+		if !hasReplace {
+			sb.WriteString("replace (\n")
+			hasReplace = true
+		}
+		sb.WriteString(fmt.Sprintf("\t%s => %s\n", g.KafkaTransport.ModulePath, g.KafkaTransport.LocalPath))
 	}
 
 	// Add runtime replace directive (only if RuntimePath is set - development mode)
