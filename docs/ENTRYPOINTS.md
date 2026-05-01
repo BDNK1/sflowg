@@ -89,6 +89,8 @@ HTTP response calls:
 - `response.redirect(map)`
 
 Each HTTP response call takes exactly one map argument.
+HTTP flows must have a top-level terminal `return response.*(...)` with one of
+the valid HTTP response calls.
 
 ```sflowg
 return response.json({
@@ -218,6 +220,8 @@ Flow response calls:
 - `response.error(map)`
 
 Each flow response call takes exactly one map argument.
+Subflows must have a top-level terminal `return response.*(...)` with one of
+the valid flow response calls.
 
 ## Cron
 
@@ -273,6 +277,28 @@ Cron is response-less:
 
 Cron v1 uses five-field cron expressions, so schedules have minute granularity.
 Seconds fields such as `*/20 * * * * *` are rejected.
+
+## Response Completion Semantics
+
+Response completion is part of the entrypoint contract:
+
+| Entrypoint | Requires response | Valid responses |
+|---|---:|---|
+| `entrypoint.http` | Yes | `response.json(map)`, `response.text(map)`, `response.redirect(map)` |
+| `entrypoint.kafka` | Yes | `response.ack()`, `response.nack()` |
+| `entrypoint.flow` | Yes | `response.value(map)`, `response.error(map)` |
+| `entrypoint.cron` | No | none |
+
+For response-required entrypoints, normal completion without a response fails
+with `RUNTIME_ERROR` and `error.meta.reason == "missing_response"`. Producing a
+response subtype that is not valid for the entrypoint fails with
+`RUNTIME_ERROR` and `error.meta.reason == "invalid_response"`.
+
+Missing or invalid response errors can run the flow's `on_error` block once.
+If `on_error` completes for HTTP, Kafka, or Flow, it must set a valid response.
+If `on_error` itself completes without a required response or with an invalid
+response, the flow fails with that runtime response error and does not recurse
+into `on_error` again. Cron `on_error` may complete without setting a response.
 
 ## Input Schemas
 

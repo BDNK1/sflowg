@@ -13,7 +13,14 @@ step cancel_stale_orders {
     })
 
     let result = postgres.exec({
-        query: "UPDATE orders SET status = 'canceled', canceled_at = NOW(), paid_at = NULL WHERE status NOT IN ('paid', 'canceled') AND created_at < NOW() - INTERVAL '24 hours'",
+        query: `
+            UPDATE orders
+            SET status = 'canceled',
+                canceled_at = NOW(),
+                paid_at = NULL
+            WHERE status NOT IN ('paid', 'canceled')
+              AND created_at < NOW() - INTERVAL '24 hours'
+        `,
         params: []
     })
 

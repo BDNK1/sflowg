@@ -29,6 +29,11 @@ type App struct {
 	flowValidator    FlowSetValidator
 }
 
+type preparedFlows struct {
+	flows            map[string]Flow
+	activeTransports []Transport
+}
+
 // NewApp creates a new application with the given container and engine components.
 // Passing a non-nil compiler enables compiled DSL mode; nil keeps interpreted DSL mode.
 // The container must be initialized with a logger before calling NewApp.
@@ -91,28 +96,17 @@ func (a *App) Start(ctx context.Context, flowsDir string) error {
 		return cleanupStartupError(err)
 	}
 
-	// Load flows at startup (runtime resolution)
-	if err := a.loadFlows(flowsDir); err != nil {
-		return cleanupStartupError(err)
-	}
 	a.Container.Logger().Info("DSL execution mode", "mode", a.dslMode())
-	grouped, activeTransports, err := a.groupFlowsByTransport()
+	prepared, err := a.prepareFlows(ctx, flowsDir)
 	if err != nil {
 		return cleanupStartupError(err)
 	}
-	if a.flowValidator != nil {
-		if err := a.flowValidator.ValidateFlows(a.Flows); err != nil {
-			return cleanupStartupError(fmt.Errorf("validating flows: %w", err))
-		}
-	}
+	a.Flows = prepared.flows
+	activeTransports := prepared.activeTransports
 	if len(activeTransports) == 0 {
 		return cleanupStartupError(fmt.Errorf("no transports to start"))
 	}
-	if a.compiler != nil {
-		if err := a.compileFlows(ctx); err != nil {
-			return cleanupStartupError(err)
-		}
-	}
+	grouped := groupFlowsByTransport(a.Flows, activeTransports)
 
 	// Create executor for flow execution
 	executor := a.Executor()
@@ -163,10 +157,41 @@ func (a *App) Start(ctx context.Context, flowsDir string) error {
 	}
 }
 
-// loadFlows loads flow definitions from the specified directory using the configured FlowLoader.
-func (a *App) loadFlows(flowsDir string) error {
+func (a *App) prepareFlows(ctx context.Context, flowsDir string) (preparedFlows, error) {
+	loaded, err := a.loadFlowMap(flowsDir)
+	if err != nil {
+		return preparedFlows{}, err
+	}
+
+	annotated, activeTransports, err := a.annotateFlowsByTransport(loaded)
+	if err != nil {
+		return preparedFlows{}, err
+	}
+
+	if a.flowValidator != nil {
+		if err := a.flowValidator.ValidateFlows(annotated); err != nil {
+			return preparedFlows{}, fmt.Errorf("validating flows: %w", err)
+		}
+	}
+
+	prepared := annotated
+	if a.compiler != nil {
+		prepared, err = a.compileFlowMap(ctx, annotated)
+		if err != nil {
+			return preparedFlows{}, err
+		}
+	}
+
+	return preparedFlows{
+		flows:            prepared,
+		activeTransports: activeTransports,
+	}, nil
+}
+
+// loadFlowMap loads flow definitions from the specified directory using the configured FlowLoader.
+func (a *App) loadFlowMap(flowsDir string) (map[string]Flow, error) {
 	if flowsDir == "" {
-		return fmt.Errorf("flows directory not specified")
+		return nil, fmt.Errorf("flows directory not specified")
 	}
 
 	// Collect files matching all loader extensions
@@ -174,29 +199,31 @@ func (a *App) loadFlows(flowsDir string) error {
 	for _, ext := range a.loader.Extensions() {
 		matched, err := filepath.Glob(filepath.Join(flowsDir, ext))
 		if err != nil {
-			return fmt.Errorf("error reading flows directory: %w", err)
+			return nil, fmt.Errorf("error reading flows directory: %w", err)
 		}
 		files = append(files, matched...)
 	}
 
 	if len(files) == 0 {
-		return fmt.Errorf("no flow files found in %s", flowsDir)
+		return nil, fmt.Errorf("no flow files found in %s", flowsDir)
 	}
 
+	flows := make(map[string]Flow, len(files))
 	for _, file := range files {
 		flow, err := a.loader.Load(file)
 		if err != nil {
-			return fmt.Errorf("error loading flow from %s: %w", file, err)
+			return nil, fmt.Errorf("error loading flow from %s: %w", file, err)
 		}
 		resolvedProps, err := configutil.ResolvePropertyMap(flow.Properties)
 		if err != nil {
-			return fmt.Errorf("error resolving properties for flow %s: %w", flow.ID, err)
+			return nil, fmt.Errorf("error resolving properties for flow %s: %w", flow.ID, err)
 		}
 		flow.Properties = resolvedProps
-		a.registerFlow(flow)
+		flow.DSLMode = a.dslMode()
+		flows[flow.ID] = flow
 	}
 
-	return nil
+	return flows, nil
 }
 
 // Initialize initializes the container (calls plugin Initialize methods).
@@ -233,21 +260,20 @@ func (a *App) shutdown(ctx context.Context, activeTransports []Transport) error 
 	return nil
 }
 
-func (a *App) groupFlowsByTransport() (map[string][]Flow, []Transport, error) {
+func (a *App) annotateFlowsByTransport(flows map[string]Flow) (map[string]Flow, []Transport, error) {
+	annotated := make(map[string]Flow, len(flows))
 	grouped := make(map[string][]Flow)
-	for flowID := range a.Flows {
-		flow := a.Flows[flowID]
+	for flowID, flow := range flows {
 		transportType := flow.Entrypoint.Type
 		transport, ok := a.transports.Get(transportType)
 		if !ok {
 			return nil, nil, fmt.Errorf("missing transport for entrypoint %q in flow %q", transportType, flow.ID)
 		}
-		if err := transport.ValidateFlow(flow); err != nil {
-			return nil, nil, fmt.Errorf("validating %s entrypoint for flow %q: %w", transportType, flow.ID, err)
+		flow, err := annotateFlowWithEntrypointSpec(flow, transport)
+		if err != nil {
+			return nil, nil, err
 		}
-		flow.ResponseContract = transport.ResponseContract()
-		flow.ResponseSubtypes = flow.ResponseContract.Subtypes()
-		a.Flows[flowID] = flow
+		annotated[flowID] = flow
 		grouped[transportType] = append(grouped[transportType], flow)
 	}
 
@@ -262,12 +288,31 @@ func (a *App) groupFlowsByTransport() (map[string][]Flow, []Transport, error) {
 			active = append(active, transport)
 		}
 	}
-	return grouped, active, nil
+	return annotated, active, nil
 }
 
-func (a *App) registerFlow(flow Flow) {
-	flow.DSLMode = a.dslMode()
-	a.Flows[flow.ID] = flow
+func annotateFlowWithEntrypointSpec(flow Flow, spec EntrypointSpec) (Flow, error) {
+	if err := spec.ValidateFlow(flow); err != nil {
+		return Flow{}, fmt.Errorf("validating %s entrypoint for flow %q: %w", spec.Type(), flow.ID, err)
+	}
+	flow.ResponseContract = spec.ResponseContract()
+	flow.ResponseSubtypes = flow.ResponseContract.Subtypes()
+	return flow, nil
+}
+
+func groupFlowsByTransport(flows map[string]Flow, activeTransports []Transport) map[string][]Flow {
+	grouped := make(map[string][]Flow, len(activeTransports))
+	activeTypes := make(map[string]struct{}, len(activeTransports))
+	for _, transport := range activeTransports {
+		activeTypes[transport.Type()] = struct{}{}
+	}
+	for _, flow := range flows {
+		if _, ok := activeTypes[flow.Entrypoint.Type]; !ok {
+			continue
+		}
+		grouped[flow.Entrypoint.Type] = append(grouped[flow.Entrypoint.Type], flow)
+	}
+	return grouped
 }
 
 func (a *App) dslMode() DSLExecutionMode {
@@ -277,15 +322,15 @@ func (a *App) dslMode() DSLExecutionMode {
 	return DSLExecutionModeInterpreted
 }
 
-func (a *App) compileFlows(ctx context.Context) error {
-	for flowID := range a.Flows {
-		flow := a.Flows[flowID]
+func (a *App) compileFlowMap(ctx context.Context, flows map[string]Flow) (map[string]Flow, error) {
+	compiled := make(map[string]Flow, len(flows))
+	for flowID, flow := range flows {
 		if err := a.compiler.CompileFlow(ctx, &flow, a.Container); err != nil {
-			return fmt.Errorf("compiling flow %s: %w", flowID, err)
+			return nil, fmt.Errorf("compiling flow %s: %w", flowID, err)
 		}
-		a.Flows[flowID] = flow
+		compiled[flowID] = flow
 	}
-	return nil
+	return compiled, nil
 }
 
 func (a *App) LookupFlow(name string) (*Flow, bool) {

@@ -50,6 +50,19 @@ func (fakeLoader) Load(filePath string) (Flow, error) {
 	}, nil
 }
 
+type onErrorLoader struct{}
+
+func (onErrorLoader) Extensions() []string { return []string{"*.flow"} }
+func (onErrorLoader) Load(filePath string) (Flow, error) {
+	transportType := fileBaseWithoutExt(filePath)
+	return Flow{
+		ID:          transportType,
+		Entrypoint:  Entrypoint{Type: transportType},
+		Steps:       []Step{{ID: "respond", Body: `response.json({status: 200})`}},
+		OnErrorBody: `response.json({status: 500})`,
+	}, nil
+}
+
 type fakeEvaluator struct{}
 
 func (fakeEvaluator) Eval(*Execution, string) (any, error) { return nil, nil }
@@ -67,6 +80,20 @@ type fakeStepRunner struct{}
 
 func (fakeStepRunner) RunStep(context.Context, *Execution, StepInput) (StepOutput, error) {
 	return StepOutput{}, nil
+}
+
+type fakeCompiler struct{}
+
+func (fakeCompiler) CompileFlow(_ context.Context, flow *Flow, _ *Container) error {
+	if flow.ResponseContract.IsZero() {
+		return errors.New("compiler received flow without response contract")
+	}
+	flow.OnErrorCompiled = "compiled on_error"
+	for i := range flow.Steps {
+		flow.Steps[i].Compiled = "compiled step"
+		flow.Steps[i].StoreKeys = []string{}
+	}
+	return nil
 }
 
 type deadlineCapturingStepRunner struct {
@@ -88,7 +115,7 @@ func (p shutdownOnlyPlugin) Shutdown(Logger) error {
 	return nil
 }
 
-func TestGroupFlowsByTransport_SetsResponseSubtypes(t *testing.T) {
+func TestValidateAndAnnotateFlowsByTransport_SetsResponseSubtypes(t *testing.T) {
 	app := &App{
 		Container:  NewContainer(NewLogger(nil)),
 		Flows:      map[string]Flow{"payments": {ID: "payments", Entrypoint: Entrypoint{Type: "http"}, Steps: []Step{{ID: "respond", Body: `response.json({status: 200})`}}}},
@@ -98,12 +125,111 @@ func TestGroupFlowsByTransport_SetsResponseSubtypes(t *testing.T) {
 		t.Fatalf("RegisterTransport failed: %v", err)
 	}
 
-	_, _, err := app.groupFlowsByTransport()
+	annotated, active, err := app.annotateFlowsByTransport(app.Flows)
 	if err != nil {
-		t.Fatalf("groupFlowsByTransport failed: %v", err)
+		t.Fatalf("annotateFlowsByTransport failed: %v", err)
 	}
-	if got := app.Flows["payments"].ResponseSubtypes; len(got) != 3 || got[0] != "json" {
+	if len(active) != 1 || active[0].Type() != "http" {
+		t.Fatalf("active transports = %#v, want http", active)
+	}
+	if got := annotated["payments"].ResponseSubtypes; len(got) != 3 || got[0] != "json" {
 		t.Fatalf("response subtypes = %#v", got)
+	}
+	if got := app.Flows["payments"].ResponseSubtypes; len(got) != 0 {
+		t.Fatalf("annotateFlowsByTransport should not mutate input app flows, got %#v", got)
+	}
+}
+
+func TestPrepareFlows_DoesNotPublishIntermediateFlows(t *testing.T) {
+	flowsDir := writeFlowFiles(t, "http")
+	app := NewApp(
+		NewContainer(NewLogger(nil)),
+		onErrorLoader{},
+		fakeEvaluator{},
+		fakeStepExecutor{},
+		fakeStepRunner{},
+		fakeCompiler{},
+		func() ValueStore { return NewValueStore() },
+	)
+	if err := app.RegisterTransport(fakeTransport{transportType: "http", subtypes: []string{"json"}}); err != nil {
+		t.Fatalf("RegisterTransport failed: %v", err)
+	}
+
+	prepared, err := app.prepareFlows(context.Background(), flowsDir)
+	if err != nil {
+		t.Fatalf("prepareFlows failed: %v", err)
+	}
+	if len(app.Flows) != 0 {
+		t.Fatalf("prepareFlows should not publish intermediate flows, got %#v", app.Flows)
+	}
+	flow := prepared.flows["http"]
+	if flow.OnErrorCompiled == nil {
+		t.Fatal("prepared flow is missing compiled on_error")
+	}
+	if flow.ResponseContract.IsZero() {
+		t.Fatal("prepared flow is missing response contract")
+	}
+}
+
+func TestGroupFlowsByTransport_UsesProvidedFinalFlows(t *testing.T) {
+	flows := map[string]Flow{
+		"http": {
+			ID:              "http",
+			Entrypoint:      Entrypoint{Type: "http"},
+			OnErrorCompiled: "compiled on_error",
+			Steps:           []Step{{ID: "respond", Compiled: "compiled step"}},
+		},
+	}
+	grouped := groupFlowsByTransport(flows, []Transport{fakeTransport{transportType: "http"}})
+	if got := grouped["http"]; len(got) != 1 {
+		t.Fatalf("grouped http flows = %#v", got)
+	}
+	if grouped["http"][0].OnErrorCompiled == nil {
+		t.Fatal("grouped flow lost compiled on_error")
+	}
+	if flows["http"].OnErrorCompiled == nil {
+		t.Fatal("groupFlowsByTransport should not mutate input flows")
+	}
+}
+
+func TestAppStart_TransportReceivesCompiledFlowFields(t *testing.T) {
+	flowsDir := writeFlowFiles(t, "http")
+	received := make(chan Flow, 1)
+	app := NewApp(
+		NewContainer(NewLogger(nil)),
+		onErrorLoader{},
+		fakeEvaluator{},
+		fakeStepExecutor{},
+		fakeStepRunner{},
+		fakeCompiler{},
+		func() ValueStore { return NewValueStore() },
+	)
+	if err := app.RegisterTransport(fakeTransport{
+		transportType: "http",
+		subtypes:      []string{"json"},
+		start: func(ctx context.Context, rt TransportRuntime) error {
+			received <- rt.Flows[0]
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}); err != nil {
+		t.Fatalf("RegisterTransport failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- app.Start(ctx, flowsDir) }()
+
+	flow := <-received
+	cancel()
+	if !errors.Is(<-done, context.Canceled) {
+		t.Fatalf("expected context canceled")
+	}
+	if flow.OnErrorCompiled == nil {
+		t.Fatal("transport received flow without compiled on_error")
+	}
+	if flow.Steps[0].Compiled == nil {
+		t.Fatal("transport received flow without compiled step")
 	}
 }
 

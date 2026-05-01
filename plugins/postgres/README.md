@@ -42,6 +42,10 @@ Executes a SELECT query and returns a single row.
 | `query` | string | ✅ | SQL SELECT query with $1, $2 placeholders |
 | `params` | array | ❌ | Query parameters |
 
+The plugin currently supports positional PostgreSQL placeholders (`$1`, `$2`,
+...) with `params` as an array. Keep request data and other user-controlled
+values in `params`; do not interpolate them directly into SQL strings.
+
 **Output:**
 
 | Field | Type | Description |
@@ -51,25 +55,29 @@ Executes a SELECT query and returns a single row.
 
 **Example:**
 
-```yaml
-- id: get_payment
-  type: postgres.get
-  args:
-    query: '"SELECT id, amount, status FROM payments WHERE id = $1"'
-    params:
-      - request.body.payment_id
+```sflowg
+step get_payment as postgres.get {
+    query: `
+        SELECT id, amount, status
+        FROM payments
+        WHERE id = $1
+    `
+    params: [request.body.payment_id]
+}
 
-- id: check_found
-  type: switch
-  args:
-    not_found: get_payment.result.found == false
-    process: get_payment.result.found == true
+step process(condition: get_payment.found == true) {
+    {
+        amount: get_payment.row.amount,
+        status: get_payment.row.status
+    }
+}
 
-- id: process
-  type: assign
-  args:
-    amount: get_payment.result.row.amount
-    status: get_payment.result.row.status
+step not_found(condition: get_payment.found == false) {
+    response.json({
+        status: 404,
+        body: { error: "payment not found" }
+    })
+}
 ```
 
 ### `postgres.exec`
@@ -81,7 +89,7 @@ Executes INSERT, UPDATE, or DELETE queries.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `query` | string | ✅ | SQL query with $1, $2 placeholders |
-| `params` | array | Query parameters |
+| `params` | array | ❌ | Query parameters |
 
 **Output:**
 
@@ -91,42 +99,65 @@ Executes INSERT, UPDATE, or DELETE queries.
 
 **Example:**
 
-```yaml
-- id: insert_payment
-  type: postgres.exec
-  args:
-    query: '"INSERT INTO payments (id, amount, status, created_at) VALUES ($1, $2, $3, NOW())"'
-    params:
-      - generate_id.result.id
-      - request.body.amount
-      - '"pending"'
+```sflowg
+step insert_payment as postgres.exec {
+    query: `
+        INSERT INTO payments (id, amount, status, created_at)
+        VALUES ($1, $2, $3, NOW())
+    `
+    params: [generate_id.id, request.body.amount, "pending"]
+}
 
-- id: update_status
-  type: postgres.exec
-  args:
-    query: '"UPDATE payments SET status = $1 WHERE id = $2"'
-    params:
-      - '"completed"'
-      - payment_id
+step update_status as postgres.exec {
+    query: `
+        UPDATE payments
+        SET status = $1
+        WHERE id = $2
+    `
+    params: ["completed", payment_id]
+}
 ```
 
 ### Using RETURNING
 
 PostgreSQL supports `RETURNING` clause to get values from INSERT/UPDATE:
 
-```yaml
-- id: insert_with_returning
-  type: postgres.get
-  args:
-    query: '"INSERT INTO payments (amount) VALUES ($1) RETURNING id, created_at"'
-    params:
-      - request.body.amount
+```sflowg
+step insert_with_returning as postgres.get {
+    query: `
+        INSERT INTO payments (amount)
+        VALUES ($1)
+        RETURNING id, created_at
+    `
+    params: [request.body.amount]
+}
 
-- id: use_id
-  type: assign
-  args:
-    new_id: insert_with_returning.result.row.id
+step use_id {
+    { new_id: insert_with_returning.row.id }
+}
 ```
+
+## Named Parameter Convention
+
+SFlowG recommends that query-like plugins support named placeholders with a
+`params` map when the underlying client can do so safely:
+
+```sflowg
+step get_payment as customdb.get {
+    query: `
+        SELECT id, amount, status
+        FROM payments
+        WHERE id = :payment_id
+    `
+    params: {
+        payment_id: request.body.payment_id
+    }
+}
+```
+
+This is a plugin convention, not language syntax. The postgres plugin does not
+currently implement named placeholders; use `$1`, `$2`, ... with array params
+unless this plugin's input contract changes.
 
 ## Type Handling
 
@@ -153,13 +184,12 @@ postgres.exec: query failed: pq: duplicate key value violates unique constraint
 
 Use retry configuration for transient errors:
 
-```yaml
-- id: insert_payment
-  type: postgres.exec
-  args:
-    query: '"INSERT INTO payments ..."'
-  retry:
-    max_retries: 3
-    delay: 100
-    backoff: true
+```sflowg
+step insert_payment(retry: { max_attempts: 3, delay: 100, backoff: "exponential" }) as postgres.exec {
+    query: `
+        INSERT INTO payments (...)
+        VALUES (...)
+    `
+    params: [...]
+}
 ```

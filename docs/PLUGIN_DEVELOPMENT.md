@@ -247,6 +247,47 @@ func (p *MyPlugin) Process(exec *plugin.Execution, args plugin.Input) (plugin.Ou
 }
 ```
 
+### Query-Like Arguments
+
+Plugins that accept SQL, search queries, or other placeholder-based strings
+should keep binding semantics inside the plugin contract. Prefer these argument
+shapes:
+
+```sflowg
+step positional_query as postgres.get {
+    query: `
+        SELECT id, email
+        FROM users
+        WHERE id = $1
+    `
+    params: [request.pathVariables.id]
+}
+```
+
+For plugins that can implement named binding, also support a `params` map and
+document the placeholder syntax:
+
+```sflowg
+step named_query as customdb.get {
+    query: `
+        SELECT id, email
+        FROM users
+        WHERE email = :email
+          AND status = :status
+    `
+    params: {
+        email: request.body.email,
+        status: "active"
+    }
+}
+```
+
+Named placeholders are a plugin-authoring convention, not a framework feature.
+Each plugin must translate its documented placeholder syntax to the underlying
+client safely. Do not ask flow authors to interpolate user-controlled values
+with `${expr}` inside query strings; interpolation happens before plugin
+execution and bypasses parameter binding.
+
 ### Using Execution Context
 
 ```go

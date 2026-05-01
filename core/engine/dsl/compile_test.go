@@ -80,6 +80,25 @@ func TestCompileFlow_CompilesAllBodies(t *testing.T) {
 	}
 }
 
+func TestCompileFlow_AcceptsHeaderCallPluginSugar(t *testing.T) {
+	flow, err := Parse(`step fetch_order as postgres.get {
+	query: "select 1"
+	params: []
+}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	flow.ID = "payments"
+
+	compiler := NewCompiler()
+	if err := compiler.CompileFlow(context.Background(), &flow, newCompileTestContainer(t)); err != nil {
+		t.Fatalf("CompileFlow() error = %v", err)
+	}
+	if _, ok := flow.Steps[0].Compiled.(*bytecode.Code); !ok {
+		t.Fatalf("body was not compiled: %#v", flow.Steps[0].Compiled)
+	}
+}
+
 func TestCompileFlow_BodiesWithoutStoreReadsUseEmptyStoreKeysSlice(t *testing.T) {
 	flow := &runtime.Flow{
 		ID: "payments",

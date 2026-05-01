@@ -5,11 +5,16 @@ import (
 	"fmt"
 )
 
-// Transport owns protocol-specific serving and response dispatch.
-type Transport interface {
+// EntrypointSpec describes the compile/startup contract for one entrypoint type.
+type EntrypointSpec interface {
 	Type() string
 	ResponseContract() ResponseContract
 	ValidateFlow(flow Flow) error
+}
+
+// Transport owns protocol-specific serving and response dispatch.
+type Transport interface {
+	EntrypointSpec
 	Start(ctx context.Context, runtime TransportRuntime) error
 	Shutdown(ctx context.Context) error
 }

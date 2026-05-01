@@ -7,11 +7,15 @@ entrypoint.http {
     timeout: 8000
 }
 
-step fetch_order {
-    postgres.get({
-        query: "SELECT id, customer_email, customer_name, amount_cents, currency, status, stripe_payment_id, stripe_payment_intent_id, stripe_client_secret FROM orders WHERE id = $1",
-        params: [request.pathVariables.id]
-    })
+step fetch_order as postgres.get {
+    query: `
+        SELECT id, customer_email, customer_name, amount_cents, currency,
+               status, stripe_payment_id, stripe_payment_intent_id,
+               stripe_client_secret
+        FROM orders
+        WHERE id = $1
+    `
+    params: [request.pathVariables.id]
 }
 
 step not_found(condition: fetch_order.found == false) {
@@ -41,7 +45,7 @@ step payment_pending_with_checkout(condition: fetch_order.row.status == "payment
         body: {
             order: fetch_order.row,
             stripe: {
-                checkout_url: properties.stripe_integration_url + "/checkout/order/" + sprintf("%v", fetch_order.row.id),
+                checkout_url: `${properties.stripe_integration_url}/checkout/order/${fetch_order.row.id}`,
                 payment_intent_id: fetch_order.row.stripe_payment_intent_id,
                 status: "requires_payment_method",
                 existing_payment: true
@@ -88,7 +92,11 @@ step create_payment(retry: { max_attempts: 3, delay: 500, backoff: "exponential"
 } fallback {
     metric.payment_attempts.inc(1, {"provider": "stripe", "outcome": "queued"})
     let queued = postgres.exec({
-        query: "UPDATE orders SET status = 'payment_retry_pending' WHERE id = $1",
+        query: `
+            UPDATE orders
+            SET status = 'payment_retry_pending'
+            WHERE id = $1
+        `,
         params: [request.pathVariables.id]
     })
     if (queued.affected_rows == 0) {
@@ -123,7 +131,17 @@ step payment_error(condition: create_payment.status_code != 201 || create_paymen
 step save_payment_intent {
     metric.payment_attempts.inc(1, {"provider": "stripe", "outcome": "success"})
     postgres.get({
-        query: "UPDATE orders SET status = 'payment_pending', stripe_payment_id = $1, stripe_payment_intent_id = $2, stripe_client_secret = $3 WHERE id = $4 RETURNING id, customer_email, customer_name, amount_cents, currency, status, stripe_payment_id, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at",
+        query: `
+            UPDATE orders
+            SET status = 'payment_pending',
+                stripe_payment_id = $1,
+                stripe_payment_intent_id = $2,
+                stripe_client_secret = $3
+            WHERE id = $4
+            RETURNING id, customer_email, customer_name, amount_cents, currency,
+                      status, stripe_payment_id, stripe_payment_intent_id,
+                      stripe_client_secret, created_at, paid_at, canceled_at
+        `,
         params: [create_payment.body.data.order_id, create_payment.body.data.payment_intent_id, create_payment.body.data.client_secret, request.pathVariables.id]
     })
 }

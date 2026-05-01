@@ -96,11 +96,19 @@ step handle_supported_event {
 
 step update_payment_status {
     let updated = postgres.exec({
-        query: "UPDATE payments SET status = $1, stripe_status = $2, error_message = $3, error_code = $4, updated_at = NOW() WHERE stripe_payment_intent_id = $5",
+        query: `
+            UPDATE payments
+            SET status = $1,
+                stripe_status = $2,
+                error_message = $3,
+                error_code = $4,
+                updated_at = NOW()
+            WHERE stripe_payment_intent_id = $5
+        `,
         params: [handle_supported_event.event_action.status, handle_supported_event.payment_intent_status, handle_supported_event.event_action.error_message, handle_supported_event.event_action.error_code, handle_supported_event.payment_intent_id]
     })
     if (updated.affected_rows == 0) {
-        raise("PAYMENT_NOT_FOUND", "no payment found for payment_intent_id: " + handle_supported_event.payment_intent_id)
+        raise("PAYMENT_NOT_FOUND", `no payment found for payment_intent_id: ${handle_supported_event.payment_intent_id}`)
     }
 
     {
@@ -132,7 +140,7 @@ step notify_ecom_order_status(
         raise("transient", "ECOM_CALLBACK_UNAVAILABLE", "ecommerce callback temporarily unavailable")
     }
     if (result.status_code not in [200, 202]) {
-        raise("ECOM_CALLBACK_FAILED", "ecommerce callback failed with status " + sprintf("%v", result.status_code))
+        raise("ECOM_CALLBACK_FAILED", `ecommerce callback failed with status ${result.status_code}`)
     }
     {
         notified: true,

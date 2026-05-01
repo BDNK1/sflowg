@@ -190,6 +190,195 @@ func TestParse_Step(t *testing.T) {
 	}
 }
 
+func TestParse_StepHeaderCallPlugin(t *testing.T) {
+	source := `step fetch_order as postgres.get {
+	query: "SELECT * FROM orders WHERE id = $1"
+	params: [request.pathVariables.id]
+}`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := `postgres.get({query: "SELECT * FROM orders WHERE id = $1",
+	params: [request.pathVariables.id]})`
+	if got := flow.Steps[0].Body; got != want {
+		t.Fatalf("step body = %q, want %q", got, want)
+	}
+}
+
+func TestParse_StepHeaderCallSubflow(t *testing.T) {
+	source := `step resolve_currency as subflow.resolve_order_currency {
+	requested_currency: request.body.currency
+	default_currency: properties.default_currency
+}`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := `flow.call("resolve_order_currency", {requested_currency: request.body.currency,
+	default_currency: properties.default_currency})`
+	if got := flow.Steps[0].Body; got != want {
+		t.Fatalf("step body = %q, want %q", got, want)
+	}
+}
+
+func TestParse_StepHeaderCallPreservesRawRisorMapBody(t *testing.T) {
+	source := `step create_payment as http.request {
+	method: "POST"
+	url: properties.payment_url + "/" + request.pathVariables.id
+	body: {
+		amount: request.body.amount,
+		customer: {
+			email: request.body.email
+		}
+	}
+	headers: {
+		"X-Trace-ID": sprintf("order-%v", request.pathVariables.id)
+	}
+}`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	body := flow.Steps[0].Body
+	for _, want := range []string{
+		`http.request({method: "POST"`,
+		`url: properties.payment_url + "/" + request.pathVariables.id`,
+		`email: request.body.email`,
+		`"X-Trace-ID": sprintf("order-%v", request.pathVariables.id)`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("step body %q does not contain %q", body, want)
+		}
+	}
+}
+
+func TestParse_StepHeaderCallWithOptions(t *testing.T) {
+	source := `step call_api(condition: request.body.enabled, timeout: 2000, retry: { max_attempts: 2, delay: 100 }) as http.request {
+	method: "POST"
+	url: properties.api_url
+}`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	step := flow.Steps[0]
+	if step.Condition != "request.body.enabled" {
+		t.Fatalf("condition = %q", step.Condition)
+	}
+	if step.Timeout != 2000 {
+		t.Fatalf("timeout = %d, want 2000", step.Timeout)
+	}
+	if step.Retry == nil || step.Retry.MaxAttempts != 2 || step.Retry.Delay != 100 {
+		t.Fatalf("retry = %#v", step.Retry)
+	}
+	wantBody := `http.request({method: "POST",
+	url: properties.api_url})`
+	if step.Body != wantBody {
+		t.Fatalf("body = %q, want %q", step.Body, wantBody)
+	}
+}
+
+func TestParse_StepHeaderCallKeepsLineCommentsValid(t *testing.T) {
+	source := `step fetch_order as postgres.get {
+	query: "select 1" // primary lookup
+	params: []
+}`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := `postgres.get({query: "select 1" ,// primary lookup
+	params: []})`
+	if flow.Steps[0].Body != want {
+		t.Fatalf("body = %q, want %q", flow.Steps[0].Body, want)
+	}
+}
+
+func TestParse_StepHeaderCallWithSuffixes(t *testing.T) {
+	source := `step charge as stripe.charge {
+	amount: request.body.amount
+} fallback {
+	response.json({status: 202})
+} compensate {
+	stripe.refund({charge_id: charge.id})
+}`
+
+	flow, err := Parse(source)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	step := flow.Steps[0]
+	if step.Body != `stripe.charge({amount: request.body.amount})` {
+		t.Fatalf("body = %q", step.Body)
+	}
+	if step.FallbackBody == "" {
+		t.Fatal("fallback body should not be empty")
+	}
+	if step.CompensateBody == "" {
+		t.Fatal("compensate body should not be empty")
+	}
+}
+
+func TestParse_StepHeaderCallRejectsMalformedTargets(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		wantErr string
+	}{
+		{
+			name:    "missing target",
+			source:  `step x as {}`,
+			wantErr: "missing step call target after as",
+		},
+		{
+			name:    "no dot",
+			source:  `step x as postgres {}`,
+			wantErr: "must be plugin.method or subflow.<flow_id>",
+		},
+		{
+			name:    "too many dots",
+			source:  `step x as postgres.get.one {}`,
+			wantErr: "must be plugin.method or subflow.<flow_id>",
+		},
+		{
+			name:    "empty plugin",
+			source:  `step x as .get {}`,
+			wantErr: "must not have empty segments",
+		},
+		{
+			name:    "empty method",
+			source:  `step x as postgres. {}`,
+			wantErr: "must not have empty segments",
+		},
+		{
+			name:    "manual flow call",
+			source:  `step x as flow.call {}`,
+			wantErr: "as flow.call is not supported",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse(tt.source)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestParse_StepWithCondition(t *testing.T) {
 	source := `step handle_error(condition: create_customer.status_code != 200) {
 	response.json({status: 400, body: {error: "failed"}})

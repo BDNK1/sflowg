@@ -50,11 +50,15 @@ step ignored_event(condition: map_event.handled != true) {
     })
 }
 
-step update_order {
-    postgres.exec({
-        query: "UPDATE orders SET status = $1, paid_at = CASE WHEN $2 THEN NOW() ELSE NULL END, canceled_at = CASE WHEN $3 THEN NOW() ELSE NULL END WHERE id = $4",
-        params: [map_event.status, map_event.set_paid_at, map_event.set_canceled_at, request.body.order_id]
-    })
+step update_order as postgres.exec {
+    query: `
+        UPDATE orders
+        SET status = $1,
+            paid_at = CASE WHEN $2 THEN NOW() ELSE NULL END,
+            canceled_at = CASE WHEN $3 THEN NOW() ELSE NULL END
+        WHERE id = $4
+    `
+    params: [map_event.status, map_event.set_paid_at, map_event.set_canceled_at, request.body.order_id]
 }
 
 step order_not_found(condition: update_order.affected_rows == 0) {

@@ -36,22 +36,30 @@ step extract_request {
     }
 }
 
-step insert_payment {
-    postgres.get({
-        query: "INSERT INTO payments (amount, currency, description, customer_email, customer_name, metadata_order_id, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING id, created_at",
-        params: [
-            extract_request.amount,
-            extract_request.currency,
-            extract_request.description,
-            extract_request.customer_email,
-            extract_request.customer_name,
-            extract_request.metadata_order_id,
-            "pending"
-        ]
-    })
+step insert_payment as postgres.get {
+    query: `
+        INSERT INTO payments
+            (amount, currency, description, customer_email, customer_name,
+             metadata_order_id, status, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        RETURNING id, created_at
+    `
+    params: [
+        extract_request.amount,
+        extract_request.currency,
+        extract_request.description,
+        extract_request.customer_email,
+        extract_request.customer_name,
+        extract_request.metadata_order_id,
+        "pending"
+    ]
 } compensate {
     postgres.exec({
-        query: "DELETE FROM payments WHERE id = $1 AND status = 'pending'",
+        query: `
+            DELETE FROM payments
+            WHERE id = $1
+              AND status = 'pending'
+        `,
         params: [insert_payment.row.id]
     })
 }
@@ -93,23 +101,29 @@ step create_payment_intent(retry: { max_attempts: 3, delay: 500, backoff: "expon
     result
 }
 
-step update_payment_success {
-    postgres.exec({
-        query: "UPDATE payments SET stripe_payment_intent_id = $1, stripe_client_secret = $2, stripe_status = $3, status = $4, updated_at = NOW() WHERE id = $5",
-        params: [
-            create_payment_intent.body.id,
-            create_payment_intent.body.client_secret,
-            create_payment_intent.body.status,
-            "requires_payment_method",
-            store_payment_id.payment_id
-        ]
-    })
+step update_payment_success as postgres.exec {
+    query: `
+        UPDATE payments
+        SET stripe_payment_intent_id = $1,
+            stripe_client_secret = $2,
+            stripe_status = $3,
+            status = $4,
+            updated_at = NOW()
+        WHERE id = $5
+    `
+    params: [
+        create_payment_intent.body.id,
+        create_payment_intent.body.client_secret,
+        create_payment_intent.body.status,
+        "requires_payment_method",
+        store_payment_id.payment_id
+    ]
 }
 
 return response.json({
     status: 201,
     headers: {
-        "X-Order-ID": sprintf("%v", extract_request.metadata_order_id)
+        "X-Order-ID": `${extract_request.metadata_order_id}`
     },
     body: {
         success: true,
@@ -120,14 +134,20 @@ return response.json({
             status: create_payment_intent.body.status,
             amount: extract_request.amount,
             currency: extract_request.currency,
-            checkout_url: properties.public_base_url + "/checkout/order/" + sprintf("%v", extract_request.metadata_order_id)
+            checkout_url: `${properties.public_base_url}/checkout/order/${extract_request.metadata_order_id}`
         }
     }
 })
 
 on_error {
     postgres.exec({
-        query: "UPDATE payments SET status = 'failed', error_message = $1, updated_at = NOW() WHERE status = 'pending'",
+        query: `
+            UPDATE payments
+            SET status = 'failed',
+                error_message = $1,
+                updated_at = NOW()
+            WHERE status = 'pending'
+        `,
         params: [error.message]
     })
 

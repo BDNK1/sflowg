@@ -13,11 +13,18 @@ entrypoint.http {
 
 step get_payment {
     let result = postgres.get({
-        query: "SELECT id, metadata_order_id, amount, currency, stripe_client_secret, stripe_payment_intent_id, status FROM payments WHERE metadata_order_id = $1 ORDER BY created_at DESC LIMIT 1",
+        query: `
+            SELECT id, metadata_order_id, amount, currency, stripe_client_secret,
+                   stripe_payment_intent_id, status
+            FROM payments
+            WHERE metadata_order_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+        `,
         params: [request.pathVariables.order_id]
     })
     if (result.found == false) {
-        raise("PAYMENT_NOT_FOUND", "order " + sprintf("%v", request.pathVariables.order_id) + " does not have a payment record")
+        raise("PAYMENT_NOT_FOUND", `order ${request.pathVariables.order_id} does not have a payment record`)
     }
     result
 }
@@ -51,11 +58,16 @@ step show_checkout {
     })
 }
 
+return response.text({
+    status: 500,
+    body: "checkout flow completed without rendering"
+})
+
 on_error {
     let error_response = match error.code {
         "PAYMENT_NOT_FOUND" => {
             status: 404,
-            body: "<html><body><h1>Payment Not Found</h1><p>No payment record for order ID: " + sprintf("%v", request.pathVariables.order_id) + ".</p></body></html>"
+            body: `<html><body><h1>Payment Not Found</h1><p>No payment record for order ID: ${request.pathVariables.order_id}.</p></body></html>`
         }
         _ => {
             status: 500,

@@ -8,11 +8,13 @@ entrypoint.http {
     }
 }
 
-step fetch_order {
-    postgres.get({
-        query: "SELECT id, status FROM orders WHERE id = $1",
-        params: [request.pathVariables.id]
-    })
+step fetch_order as postgres.get {
+    query: `
+        SELECT id, status
+        FROM orders
+        WHERE id = $1
+    `
+    params: [request.pathVariables.id]
 }
 
 step not_found(condition: fetch_order.found == false) {
@@ -38,7 +40,16 @@ step already_paid(condition: fetch_order.row.status == "paid") {
 
 step mark_canceled {
     let result = postgres.get({
-        query: "UPDATE orders SET status = 'canceled', canceled_at = NOW(), paid_at = NULL WHERE id = $1 RETURNING id, customer_email, customer_name, amount_cents, currency, status, stripe_payment_id, stripe_payment_intent_id, stripe_client_secret, created_at, paid_at, canceled_at",
+        query: `
+            UPDATE orders
+            SET status = 'canceled',
+                canceled_at = NOW(),
+                paid_at = NULL
+            WHERE id = $1
+            RETURNING id, customer_email, customer_name, amount_cents, currency,
+                      status, stripe_payment_id, stripe_payment_intent_id,
+                      stripe_client_secret, created_at, paid_at, canceled_at
+        `,
         params: [request.pathVariables.id]
     })
     if (result.found == false) {

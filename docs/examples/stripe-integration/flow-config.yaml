@@ -8,7 +8,7 @@ runtime:
 
 properties:
   # Stripe API configuration
-  stripe_api_url: "https://api.stripe.com/v1"
+  stripe_api_url: ${STRIPE_API_URL:https://api.stripe.com/v1}
   stripe_secret_key: ${STRIPE_SECRET_KEY}
   stripe_webhook_secret: ${STRIPE_WEBHOOK_SECRET}
 

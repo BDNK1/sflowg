@@ -17,6 +17,8 @@ import (
 //	entrypoint.http { method: POST, path: /api/payments, timeout: 5000, ... }
 //	properties { key: value, ... }
 //	step step_name(condition: expr, timeout: 2000, retry: { ... }) { risor code }
+//	step step_name(condition: expr) as plugin.method { risor map body }
+//	step step_name as subflow.flow_id { risor map body }
 //	  fallback { risor code }          // optional suffix block
 //	  compensate { risor code }        // optional suffix block
 //	on_error { risor code }            // flow-level error handler
@@ -192,6 +194,8 @@ func (p *parser) parseProperties() (map[string]any, error) {
 // parseStep parses:
 //
 //	step NAME(condition: ..., timeout: N, retry: {...}) { body }
+//	step NAME(condition: ..., timeout: N, retry: {...}) as plugin.method { map_body }
+//	step NAME as subflow.flow_id { map_body }
 //	  fallback { body }    // optional
 //	  compensate { body }  // optional
 func (p *parser) parseStep() (runtime.Step, error) {
@@ -222,10 +226,27 @@ func (p *parser) parseStep() (runtime.Step, error) {
 
 	p.skipWhitespace()
 
+	headerCallTarget := ""
+	if p.peekKeyword() == "as" {
+		p.readWord() // consume "as"
+		p.skipWhitespace()
+		headerCallTarget = p.readWord()
+		if headerCallTarget == "" {
+			return step, fmt.Errorf("missing step call target after as")
+		}
+		if err := validateStepHeaderCallTarget(headerCallTarget); err != nil {
+			return step, err
+		}
+		p.skipWhitespace()
+	}
+
 	// Read the primary step body
 	body, err := p.readBracedBlock()
 	if err != nil {
 		return step, fmt.Errorf("parsing step body: %w", err)
+	}
+	if headerCallTarget != "" {
+		body = lowerStepHeaderCall(headerCallTarget, body)
 	}
 	step.Body = body
 
@@ -255,6 +276,155 @@ func (p *parser) parseStep() (runtime.Step, error) {
 	}
 
 	return step, nil
+}
+
+func validateStepHeaderCallTarget(target string) error {
+	if target == "flow.call" {
+		return fmt.Errorf("as flow.call is not supported; use subflow.<flow_id> or manual flow.call(...)")
+	}
+
+	parts := strings.Split(target, ".")
+	if len(parts) != 2 {
+		return fmt.Errorf("step call target %q must be plugin.method or subflow.<flow_id>", target)
+	}
+	if parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("step call target %q must not have empty segments", target)
+	}
+	if parts[0] == "subflow" && parts[1] == "" {
+		return fmt.Errorf("subflow step call target must include a flow ID")
+	}
+	return nil
+}
+
+func lowerStepHeaderCall(target, rawMapBody string) string {
+	mapBody := normalizeHeaderCallMapBody(rawMapBody)
+	parts := strings.SplitN(target, ".", 2)
+	if parts[0] == "subflow" {
+		return fmt.Sprintf("flow.call(%q, {%s})", parts[1], mapBody)
+	}
+	return fmt.Sprintf("%s({%s})", target, mapBody)
+}
+
+func normalizeHeaderCallMapBody(raw string) string {
+	var b strings.Builder
+	b.Grow(len(raw) + 8)
+
+	depth := 0
+	inString := false
+	stringChar := byte(0)
+	pendingEntry := false
+
+	for i := 0; i < len(raw); i++ {
+		ch := raw[i]
+
+		if inString {
+			b.WriteByte(ch)
+			if ch == '\\' && i+1 < len(raw) {
+				i++
+				b.WriteByte(raw[i])
+				continue
+			}
+			if ch == stringChar {
+				inString = false
+			}
+			continue
+		}
+
+		if ch == '/' && i+1 < len(raw) && raw[i+1] == '/' {
+			commentEnd := i + 2
+			for commentEnd < len(raw) && raw[commentEnd] != '\n' {
+				commentEnd++
+			}
+			if depth == 0 && pendingEntry && hasTopLevelMapKeyAfter(raw, commentEnd+1) {
+				b.WriteByte(',')
+				pendingEntry = false
+			}
+			b.WriteString(raw[i:commentEnd])
+			i = commentEnd - 1
+			continue
+		}
+
+		switch ch {
+		case '"', '\'', '`':
+			inString = true
+			stringChar = ch
+		case '{', '[', '(':
+			depth++
+		case '}', ']', ')':
+			if depth > 0 {
+				depth--
+			}
+		case ':':
+			if depth == 0 {
+				pendingEntry = true
+			}
+		case ',':
+			if depth == 0 {
+				pendingEntry = false
+			}
+		case '\n':
+			if pendingEntry && hasTopLevelMapKeyAfter(raw, i+1) {
+				b.WriteByte(',')
+				pendingEntry = false
+			}
+		}
+
+		b.WriteByte(ch)
+	}
+
+	return b.String()
+}
+
+func hasTopLevelMapKeyAfter(source string, pos int) bool {
+	for pos < len(source) {
+		for pos < len(source) && (source[pos] == ' ' || source[pos] == '\t' || source[pos] == '\r' || source[pos] == '\n') {
+			pos++
+		}
+		if pos+1 < len(source) && source[pos] == '/' && source[pos+1] == '/' {
+			for pos < len(source) && source[pos] != '\n' {
+				pos++
+			}
+			continue
+		}
+		break
+	}
+	if pos >= len(source) {
+		return false
+	}
+
+	if source[pos] == '"' || source[pos] == '\'' || source[pos] == '`' {
+		quote := source[pos]
+		pos++
+		for pos < len(source) {
+			if source[pos] == '\\' {
+				pos += 2
+				continue
+			}
+			if source[pos] == quote {
+				pos++
+				for pos < len(source) && (source[pos] == ' ' || source[pos] == '\t') {
+					pos++
+				}
+				return pos < len(source) && source[pos] == ':'
+			}
+			if source[pos] == '\n' {
+				return false
+			}
+			pos++
+		}
+		return false
+	}
+
+	if !isWordChar(source[pos]) {
+		return false
+	}
+	for pos < len(source) && isWordChar(source[pos]) {
+		pos++
+	}
+	for pos < len(source) && (source[pos] == ' ' || source[pos] == '\t') {
+		pos++
+	}
+	return pos < len(source) && source[pos] == ':'
 }
 
 // parseOnError parses: on_error { risor code }

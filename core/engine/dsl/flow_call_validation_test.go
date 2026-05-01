@@ -116,6 +116,42 @@ func TestFlowValidatorRejectsSimpleLiteralTypeMismatch(t *testing.T) {
 	}
 }
 
+func TestFlowValidatorDiscoversHeaderCallSubflowSugar(t *testing.T) {
+	caller, err := Parse(`step call_sub as subflow.sub {
+	x: 1
+}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	caller.ID = "caller"
+	caller.Entrypoint = runtime.Entrypoint{Type: "http"}
+
+	sub := runtime.Flow{
+		ID:         "sub",
+		Entrypoint: runtime.Entrypoint{Type: "flow", Input: runtime.NewInputContract()},
+	}
+
+	if err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"caller": caller, "sub": sub}); err != nil {
+		t.Fatalf("ValidateFlows() error = %v", err)
+	}
+}
+
+func TestFlowValidatorRejectsUndefinedHeaderCallSubflowSugar(t *testing.T) {
+	caller, err := Parse(`step call_sub as subflow.missing {
+	x: 1
+}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	caller.ID = "caller"
+	caller.Entrypoint = runtime.Entrypoint{Type: "http"}
+
+	err = NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"caller": caller})
+	if err == nil || !strings.Contains(err.Error(), `undefined subflow "missing"`) {
+		t.Fatalf("expected missing subflow error, got %v", err)
+	}
+}
+
 func TestFlowValidatorKafkaResponseSemantics(t *testing.T) {
 	valid := runtime.Flow{
 		ID:               "consume",

@@ -29,7 +29,11 @@ properties {
 
 step create_order {
     let result = postgres.get({
-        query: "INSERT INTO orders (customer_email, amount_cents, currency) VALUES ($1, $2, $3) RETURNING id",
+        query: `
+            INSERT INTO orders (customer_email, amount_cents, currency)
+            VALUES ($1, $2, $3)
+            RETURNING id
+        `,
         params: [request.body.customer_email, request.body.amount_cents, properties.default_currency]
     })
 
@@ -100,7 +104,11 @@ Steps run sequentially until a step sets a response or all steps complete.
 ```sflowg
 step fetch_order {
     postgres.get({
-        query: "SELECT id, status FROM orders WHERE id = $1",
+        query: `
+            SELECT id, status
+            FROM orders
+            WHERE id = $1
+        `,
         params: [request.pathVariables.id]
     })
 }
@@ -128,6 +136,124 @@ Plugin tasks are normal function calls:
 postgres.get({ query: "...", params: [...] })
 postgres.exec({ query: "...", params: [...] })
 http.request({ method: "POST", url: properties.url, body: request.body })
+```
+
+### Multi-Line Strings and Query Parameters
+
+Use backtick template strings for long strings such as SQL. Backtick strings may
+span multiple lines and support `${expr}` interpolation:
+
+```sflowg
+step insert_payment as postgres.get {
+    query: `
+        INSERT INTO payments
+            (amount, currency, description, customer_email, customer_name,
+             metadata_order_id, status, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        RETURNING id, created_at
+    `
+    params: [
+        input.amount, input.currency, input.description,
+        input.customer_email, input.customer_name, input.order_id,
+        "pending"
+    ]
+}
+```
+
+Single-line quoted strings still work; backticks are recommended when the
+string benefits from line breaks or interpolation.
+
+Do not use `${expr}` interpolation for user-controllable SQL values. Risor
+expands interpolation before the plugin sees the query, so it bypasses database
+parameter binding:
+
+```sflowg
+query: `SELECT * FROM orders WHERE id = ${input.id}` // SQL injection risk
+
+query: `SELECT * FROM orders WHERE id = $1`
+params: [input.id]
+```
+
+Use interpolation only for known-safe values such as constants or trusted
+configuration. Use `$N` placeholders with `params` for request data, message
+data, flow input, and any other user-controllable value.
+
+Query-like plugins may also document named placeholders as a plugin-specific
+convention:
+
+```sflowg
+step insert_payment as sql.query {
+    query: `
+        INSERT INTO payments (email, amount, currency, status)
+        VALUES (:email, :amount, :currency, :status)
+    `
+    params: {
+        email: request.body.customer_email,
+        amount: request.body.amount,
+        currency: request.body.currency,
+        status: "pending"
+    }
+}
+```
+
+Named parameters are not DSL syntax. They only work when the target plugin
+explicitly supports them.
+
+### Header Call Sugar
+
+For a step that only calls one plugin method or subflow, put the call target in
+the step header:
+
+```sflowg
+step fetch_order as postgres.get {
+    query: `
+        SELECT *
+        FROM orders
+        WHERE id = $1
+    `
+    params: [request.pathVariables.id]
+}
+
+step resolve_currency as subflow.resolve_order_currency {
+    requested_currency: request.body.currency
+    default_currency: properties.default_currency
+}
+```
+
+This is equivalent to writing:
+
+```sflowg
+step fetch_order {
+    postgres.get({
+        query: `
+            SELECT *
+            FROM orders
+            WHERE id = $1
+        `,
+        params: [request.pathVariables.id]
+    })
+}
+
+step resolve_currency {
+    flow.call("resolve_order_currency", {
+        requested_currency: request.body.currency,
+        default_currency: properties.default_currency
+    })
+}
+```
+
+The block is lowered as Risor map body source; top-level entries may be separated
+by newlines as shown above. Use normal `step { ... }` syntax for multi-statement
+logic, local variables, conditionals, loops, or manual `flow.call(...)` calls.
+
+Step options still go before `as`:
+
+```sflowg
+step call_api(condition: request.body.enabled, retry: { max_attempts: 3 }) as http.request {
+    method: "POST"
+    url: properties.api_url
+    body: request.body
+}
 ```
 
 ### Conditions
@@ -214,12 +340,19 @@ enters failure handling.
 ```sflowg
 step insert_payment {
     postgres.get({
-        query: "INSERT INTO payments (...) VALUES (...) RETURNING id",
+        query: `
+            INSERT INTO payments (...)
+            VALUES (...)
+            RETURNING id
+        `,
         params: [...]
     })
 } compensate {
     postgres.exec({
-        query: "DELETE FROM payments WHERE id = $1",
+        query: `
+            DELETE FROM payments
+            WHERE id = $1
+        `,
         params: [insert_payment.row.id]
     })
 }
@@ -292,6 +425,14 @@ on_error {
 Responses are entrypoint-specific. Calls are validated at build/startup and at
 runtime.
 
+HTTP, Kafka, and Flow entrypoints require a valid response when the flow
+completes. Missing responses fail with `RUNTIME_ERROR` and
+`error.meta.reason == "missing_response"`; invalid response subtypes fail with
+`RUNTIME_ERROR` and `error.meta.reason == "invalid_response"`. These errors can
+run `on_error` once. For response-required entrypoints, `on_error` must also
+complete with a valid response. Cron is response-less and may complete without
+any response.
+
 ### HTTP Responses
 
 HTTP supports:
@@ -301,6 +442,7 @@ HTTP supports:
 - `response.redirect(map)`
 
 Each call takes exactly one map argument.
+HTTP flows must have a top-level terminal `return response.*(...)`.
 
 ```sflowg
 return response.json({
@@ -334,6 +476,8 @@ Subflows support:
 
 - `response.value(map)`
 - `response.error(map)`
+
+Subflows must have a top-level terminal `return response.*(...)`.
 
 ```sflowg
 return response.value({
