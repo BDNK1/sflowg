@@ -21,6 +21,9 @@ import (
 {{- if .UseKafka}}
 	kafkatransport "github.com/BDNK1/sflowg/transports/kafka"
 {{- end}}
+{{- if .UseCron}}
+	crontransport "github.com/BDNK1/sflowg/transports/cron"
+{{- end}}
 {{- range .Plugins}}
 {{- if eq .Type 3}}
 	"{{$.ModuleName}}/vendored"
@@ -344,6 +347,9 @@ func main() {
 {{- end}}
 				},
 			}),
+{{- end}}
+{{- if .UseCron}}
+			crontransport.New(),
 {{- end}}
 		},
 	}); err != nil {

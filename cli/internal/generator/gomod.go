@@ -22,6 +22,7 @@ type GoModGenerator struct {
 	Plugins        []PluginInfo
 	HTTPTransport  *TransportInfo
 	KafkaTransport *TransportInfo
+	CronTransport  *TransportInfo
 }
 
 type TransportInfo struct {
@@ -73,6 +74,10 @@ func (g *GoModGenerator) SetKafkaTransport(info TransportInfo) {
 	g.KafkaTransport = &info
 }
 
+func (g *GoModGenerator) SetCronTransport(info TransportInfo) {
+	g.CronTransport = &info
+}
+
 // Generate creates the go.mod content
 func (g *GoModGenerator) Generate() string {
 	var sb strings.Builder
@@ -115,6 +120,13 @@ func (g *GoModGenerator) Generate() string {
 		}
 		sb.WriteString(fmt.Sprintf("\t%s %s\n", g.KafkaTransport.ModulePath, version))
 	}
+	if g.CronTransport != nil {
+		version := g.CronTransport.Version
+		if version == "" || version == "latest" {
+			version = unresolvedVersion
+		}
+		sb.WriteString(fmt.Sprintf("\t%s %s\n", g.CronTransport.ModulePath, version))
+	}
 
 	sb.WriteString(")\n\n")
 
@@ -144,6 +156,13 @@ func (g *GoModGenerator) Generate() string {
 			hasReplace = true
 		}
 		sb.WriteString(fmt.Sprintf("\t%s => %s\n", g.KafkaTransport.ModulePath, g.KafkaTransport.LocalPath))
+	}
+	if g.CronTransport != nil && g.CronTransport.LocalPath != "" {
+		if !hasReplace {
+			sb.WriteString("replace (\n")
+			hasReplace = true
+		}
+		sb.WriteString(fmt.Sprintf("\t%s => %s\n", g.CronTransport.ModulePath, g.CronTransport.LocalPath))
 	}
 
 	// Add runtime replace directive (only if RuntimePath is set - development mode)

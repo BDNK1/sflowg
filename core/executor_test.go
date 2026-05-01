@@ -392,3 +392,101 @@ func TestCompensation_FailureDoesNotLeakPartialState(t *testing.T) {
 		t.Fatal("expected failed compensation store changes to remain isolated")
 	}
 }
+
+func TestExecuteSteps_RequiredResponseMissingFailsRuntimeError(t *testing.T) {
+	flow := &Flow{
+		ID:               "payments",
+		Entrypoint:       Entrypoint{Type: "http"},
+		ResponseContract: HTTPResponseContract(),
+		Steps:            []Step{{ID: "work"}},
+	}
+	exec, executor := newExecutorTestHarness(t, flow, &scriptedStepExecutor{})
+
+	err := executor.ExecuteSteps(exec)
+	fe, ok := err.(*FlowError)
+	if !ok {
+		t.Fatalf("expected FlowError, got %T %v", err, err)
+	}
+	if fe.Code != string(ErrorCodeRuntimeError) || fe.Meta["reason"] != "missing_response" {
+		t.Fatalf("unexpected response error: %#v", fe)
+	}
+}
+
+func TestExecuteSteps_InvalidResponseFailsRuntimeError(t *testing.T) {
+	stepExecutor := &scriptedStepExecutor{
+		runStep: func(ctx context.Context, execution *Execution, step Step) (string, error) {
+			execution.State().SetResponse(&ResponseDescriptor{Subtype: "ack", HandlerName: "kafka.ack"})
+			return "", nil
+		},
+	}
+	flow := &Flow{
+		ID:               "payments",
+		Entrypoint:       Entrypoint{Type: "http"},
+		ResponseContract: HTTPResponseContract(),
+		Steps:            []Step{{ID: "respond"}},
+	}
+	exec, executor := newExecutorTestHarness(t, flow, stepExecutor)
+
+	err := executor.ExecuteSteps(exec)
+	fe, ok := err.(*FlowError)
+	if !ok {
+		t.Fatalf("expected FlowError, got %T %v", err, err)
+	}
+	if fe.Meta["reason"] != "invalid_response" {
+		t.Fatalf("unexpected response error: %#v", fe)
+	}
+}
+
+func TestExecuteSteps_ResponseErrorCanBeHandledByOnErrorOnce(t *testing.T) {
+	stepExecutor := &scriptedStepExecutor{
+		runOnError: func(execution *Execution, body string, fe *FlowError) error {
+			if fe.Meta["reason"] != "missing_response" {
+				t.Fatalf("on_error got reason %v, want missing_response", fe.Meta["reason"])
+			}
+			execution.State().SetResponse(&ResponseDescriptor{Subtype: "json", HandlerName: "http.json"})
+			return nil
+		},
+	}
+	flow := &Flow{
+		ID:               "payments",
+		Entrypoint:       Entrypoint{Type: "http"},
+		ResponseContract: HTTPResponseContract(),
+		OnErrorBody:      "recover",
+		Steps:            []Step{{ID: "work"}},
+	}
+	exec, executor := newExecutorTestHarness(t, flow, stepExecutor)
+
+	if err := executor.ExecuteSteps(exec); err != nil {
+		t.Fatalf("expected on_error to handle missing response, got %v", err)
+	}
+	if got := exec.State().Response(); got == nil || got.Subtype != "json" {
+		t.Fatalf("expected json response from on_error, got %#v", got)
+	}
+}
+
+func TestOnErrorWithoutResponseHandlesCronFailure(t *testing.T) {
+	stepExecutor := &scriptedStepExecutor{
+		runStep: func(ctx context.Context, execution *Execution, step Step) (string, error) {
+			return "", &FlowError{Type: ErrorTypePermanent, Code: "FAIL", Message: "boom", Step: step.ID}
+		},
+		runOnError: func(execution *Execution, body string, fe *FlowError) error {
+			execution.State().Store().Set("handled", true)
+			return nil
+		},
+	}
+	flow := &Flow{
+		ID:               "reconcile",
+		Entrypoint:       Entrypoint{Type: "cron"},
+		ResponseContract: CronResponseContract(),
+		OnErrorBody:      "recover",
+		Steps:            []Step{{ID: "work"}},
+	}
+	exec, executor := newExecutorTestHarness(t, flow, stepExecutor)
+
+	if err := executor.ExecuteSteps(exec); err != nil {
+		t.Fatalf("expected cron on_error without response to handle failure, got %v", err)
+	}
+	if got, ok := exec.State().Store().Get("handled"); !ok || got != true {
+		t.Fatalf("expected recovery store to merge, got %v present=%v", got, ok)
+	}
+}

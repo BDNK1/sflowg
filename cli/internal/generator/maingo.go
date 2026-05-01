@@ -23,6 +23,7 @@ type MainGoGenerator struct {
 	Plugins           []PluginInfo
 	UseHTTP           bool
 	UseKafka          bool
+	UseCron           bool
 	Kafka             config.KafkaRuntimeConfig
 }
 
@@ -54,6 +55,10 @@ func (g *MainGoGenerator) EnableHTTP() {
 func (g *MainGoGenerator) EnableKafka(cfg config.KafkaRuntimeConfig) {
 	g.UseKafka = true
 	g.Kafka = cfg
+}
+
+func (g *MainGoGenerator) EnableCron() {
+	g.UseCron = true
 }
 
 // Generate creates the main.go content using template

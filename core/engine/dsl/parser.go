@@ -157,6 +157,8 @@ func parseEntrypointInput(epType string, config map[string]any) (*runtime.InputC
 		return flowinput.ParseBinding(config)
 	case "kafka":
 		return kafkainput.ParseBinding(config)
+	case "cron":
+		return nil, nil
 	default:
 		return nil, nil
 	}

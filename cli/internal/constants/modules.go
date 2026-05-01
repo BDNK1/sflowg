@@ -16,6 +16,9 @@ const (
 
 	// KafkaTransportModulePath is the external Kafka transport module.
 	KafkaTransportModulePath = BaseModulePath + "/transports/kafka"
+
+	// CronTransportModulePath is the external Cron transport module.
+	CronTransportModulePath = BaseModulePath + "/transports/cron"
 )
 
 // Application runtime defaults

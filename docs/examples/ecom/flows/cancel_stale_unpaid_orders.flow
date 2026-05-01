@@ -1,0 +1,35 @@
+// Cancel unpaid orders older than 24 hours.
+
+entrypoint.cron {
+    schedule: "*/5 * * * *"
+    timezone: UTC
+    timeout: 10000
+}
+
+step cancel_stale_orders {
+    log.info("canceling stale unpaid orders", {
+        scheduled_at: trigger.scheduled_at,
+        fire_count: trigger.fire_count
+    })
+
+    let result = postgres.exec({
+        query: "UPDATE orders SET status = 'canceled', canceled_at = NOW(), paid_at = NULL WHERE status NOT IN ('paid', 'canceled') AND created_at < NOW() - INTERVAL '24 hours'",
+        params: []
+    })
+
+    metric.counter("stale_unpaid_orders_canceled", result.affected_rows)
+
+    log.info("stale unpaid order cancellation completed", {
+        canceled_count: result.affected_rows
+    })
+
+    result
+}
+
+on_error {
+    log.error("stale unpaid order cancellation failed", {
+        code: error.code,
+        message: error.message,
+        type: error.type
+    })
+}

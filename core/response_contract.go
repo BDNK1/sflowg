@@ -18,9 +18,10 @@ type ResponseSubtypeContract struct {
 }
 
 type ResponseContract struct {
-	EntrypointType string
-	subtypes       []ResponseSubtypeContract
-	byName         map[string]ResponseSubtypeContract
+	EntrypointType   string
+	RequiresResponse bool
+	subtypes         []ResponseSubtypeContract
+	byName           map[string]ResponseSubtypeContract
 }
 
 func NewResponseContract(entrypointType string, subtypes ...ResponseSubtypeContract) ResponseContract {
@@ -31,9 +32,10 @@ func NewResponseContract(entrypointType string, subtypes ...ResponseSubtypeContr
 		byName[subtype.Name] = subtype
 	}
 	return ResponseContract{
-		EntrypointType: entrypointType,
-		subtypes:       names,
-		byName:         byName,
+		EntrypointType:   entrypointType,
+		RequiresResponse: true,
+		subtypes:         names,
+		byName:           byName,
 	}
 }
 
@@ -59,6 +61,15 @@ func KafkaResponseContract() ResponseContract {
 	)
 }
 
+func CronResponseContract() ResponseContract {
+	return ResponseContract{
+		EntrypointType:   "cron",
+		RequiresResponse: false,
+		subtypes:         []ResponseSubtypeContract{},
+		byName:           map[string]ResponseSubtypeContract{},
+	}
+}
+
 func BuiltInResponseContract(entrypointType string) (ResponseContract, bool) {
 	switch entrypointType {
 	case "", "http":
@@ -67,15 +78,14 @@ func BuiltInResponseContract(entrypointType string) (ResponseContract, bool) {
 		return FlowResponseContract(), true
 	case "kafka":
 		return KafkaResponseContract(), true
+	case "cron":
+		return CronResponseContract(), true
 	default:
 		return ResponseContract{}, false
 	}
 }
 
 func (c ResponseContract) Subtypes() []string {
-	if len(c.subtypes) == 0 {
-		return []string{"json"}
-	}
 	result := make([]string, 0, len(c.subtypes))
 	for _, subtype := range c.subtypes {
 		result = append(result, subtype.Name)
@@ -84,21 +94,15 @@ func (c ResponseContract) Subtypes() []string {
 }
 
 func (c ResponseContract) IsZero() bool {
-	return c.EntrypointType == "" && len(c.subtypes) == 0
+	return c.EntrypointType == "" && !c.RequiresResponse && len(c.subtypes) == 0
 }
 
 func (c ResponseContract) HasSubtype(name string) bool {
-	if len(c.subtypes) == 0 {
-		return name == "json"
-	}
 	_, ok := c.byName[name]
 	return ok
 }
 
 func (c ResponseContract) ValidateArgs(subtype string, args []any) (map[string]any, error) {
-	if len(c.subtypes) == 0 {
-		c = HTTPResponseContract()
-	}
 	spec, ok := c.byName[subtype]
 	if !ok {
 		return nil, fmt.Errorf("response.%s is not valid for this entrypoint", subtype)
@@ -124,9 +128,6 @@ func (c ResponseContract) ValidateArgs(subtype string, args []any) (map[string]a
 }
 
 func (c ResponseContract) ValidateStaticArgCount(subtype string, count int) error {
-	if len(c.subtypes) == 0 {
-		c = HTTPResponseContract()
-	}
 	spec, ok := c.byName[subtype]
 	if !ok {
 		return fmt.Errorf("response.%s is not valid for this entrypoint", subtype)

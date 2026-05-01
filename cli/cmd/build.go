@@ -21,9 +21,9 @@ import (
 )
 
 var (
-	runtimePath     string
+	corePath        string
 	corePluginsPath string
-	transportPath   string
+	transportsPath  string
 	embedFlows      bool
 )
 
@@ -42,16 +42,16 @@ a single executable binary with all dependencies compiled in.
 Example:
   sflowg build .
   sflowg build ./my-project
-  sflowg build . --runtime-path ../core --transport-path ../transports --core-plugins-path ../plugins
+  sflowg build . --core-path ../core --transports-path ../transports --core-plugins-path ../plugins
 `,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runBuild,
 }
 
 func init() {
-	buildCmd.Flags().StringVar(&runtimePath, "runtime-path", "", "Path to local runtime module (for development)")
+	buildCmd.Flags().StringVar(&corePath, "core-path", "", "Path to local core runtime module (for development)")
 	buildCmd.Flags().StringVar(&corePluginsPath, "core-plugins-path", "", "Path to local core plugins directory (for development)")
-	buildCmd.Flags().StringVar(&transportPath, "transport-path", "", "Path to local transport modules directory (for development)")
+	buildCmd.Flags().StringVar(&transportsPath, "transports-path", "", "Path to local transport modules directory (for development)")
 	buildCmd.Flags().BoolVar(&embedFlows, "embed-flows", false, "Embed flow files into the binary (production mode)")
 }
 
@@ -117,7 +117,7 @@ func runBuild(_ *cobra.Command, args []string) error {
 		return err
 	}
 	if !flowScan.HasSupported {
-		return fmt.Errorf("no valid flow files with supported entrypoints found (supported: http, flow, kafka)")
+		return fmt.Errorf("no valid flow files with supported entrypoints found (supported: http, flow, kafka, cron)")
 	}
 	if flowScan.HasKafka && len(cfg.Runtime.Kafka.Brokers) == 0 {
 		return fmt.Errorf("Kafka flows require runtime.kafka.brokers configuration")
@@ -208,9 +208,9 @@ func runBuild(_ *cobra.Command, args []string) error {
 
 	// 5. Prepare runtime path for development mode
 	var absRuntimePath string
-	if runtimePath != "" {
+	if corePath != "" {
 		// Development mode: use local runtime
-		absRuntimePath, err = filepath.Abs(runtimePath)
+		absRuntimePath, err = filepath.Abs(corePath)
 		if err != nil {
 			return fmt.Errorf("failed to resolve runtime path: %w", err)
 		}
@@ -243,11 +243,15 @@ func runBuild(_ *cobra.Command, args []string) error {
 	}
 
 	var absTransportPath string
-	if transportPath != "" {
-		absTransportPath, err = filepath.Abs(transportPath)
+	if transportsPath != "" {
+		absTransportPath, err = filepath.Abs(transportsPath)
 		if err != nil {
 			return fmt.Errorf("failed to resolve transport path: %w", err)
 		}
+	} else if absRuntimePath != "" {
+		absTransportPath = filepath.Clean(filepath.Join(absRuntimePath, "..", "transports"))
+	}
+	if absTransportPath != "" {
 		if flowScan.HasKafka {
 			kafkaPath := filepath.Join(absTransportPath, "kafka")
 			if err := validateRuntimePath(kafkaPath); err != nil {
@@ -260,7 +264,13 @@ func runBuild(_ *cobra.Command, args []string) error {
 				return fmt.Errorf("invalid HTTP transport path %s: %w", httpPath, err)
 			}
 		}
-		if flowScan.HasHTTP || flowScan.HasKafka {
+		if flowScan.HasCron {
+			cronPath := filepath.Join(absTransportPath, "cron")
+			if err := validateRuntimePath(cronPath); err != nil {
+				return fmt.Errorf("invalid Cron transport path %s: %w", cronPath, err)
+			}
+		}
+		if flowScan.HasHTTP || flowScan.HasKafka || flowScan.HasCron {
 			fmt.Printf("  Transports: %s\n", absTransportPath)
 		}
 	}
@@ -294,6 +304,13 @@ func runBuild(_ *cobra.Command, args []string) error {
 	}
 	if kafkaTransport != nil {
 		goModGen.SetKafkaTransport(*kafkaTransport)
+	}
+	cronTransport, err := externalTransportInfo(flowScan.HasCron, "Cron", constants.CronTransportModulePath, "cron", resolvedRuntimeVersion, absRuntimePath, absTransportPath)
+	if err != nil {
+		return err
+	}
+	if cronTransport != nil {
+		goModGen.SetCronTransport(*cronTransport)
 	}
 
 	for _, plugin := range resolvedPlugins {
@@ -409,6 +426,9 @@ func runBuild(_ *cobra.Command, args []string) error {
 	if flowScan.HasKafka {
 		mainGoGen.EnableKafka(cfg.Runtime.Kafka)
 	}
+	if flowScan.HasCron {
+		mainGoGen.EnableCron()
+	}
 
 	for _, plugin := range analyzedPlugins {
 		pluginInfo := generator.PluginInfo{
@@ -501,6 +521,7 @@ type projectFlowScan struct {
 	HasSupported bool
 	HasHTTP      bool
 	HasKafka     bool
+	HasCron      bool
 }
 
 func scanProjectFlows(projectDir string) (projectFlowScan, error) {
@@ -530,6 +551,9 @@ func scanProjectFlows(projectDir string) (projectFlowScan, error) {
 			if flow.Entrypoint.Type == "kafka" {
 				result.HasKafka = true
 			}
+			if flow.Entrypoint.Type == "cron" {
+				result.HasCron = true
+			}
 		}
 	}
 	if len(flows) == 0 {
@@ -544,7 +568,7 @@ func scanProjectFlows(projectDir string) (projectFlowScan, error) {
 func attachBuiltInResponseContract(flow *runtime.Flow, file string) error {
 	contract, ok := runtime.BuiltInResponseContract(flow.Entrypoint.Type)
 	if !ok {
-		return fmt.Errorf("unsupported flow entrypoint %q in %s (flow %q); supported entrypoints: http, flow, kafka", flow.Entrypoint.Type, file, flow.ID)
+		return fmt.Errorf("unsupported flow entrypoint %q in %s (flow %q); supported entrypoints: http, flow, kafka, cron", flow.Entrypoint.Type, file, flow.ID)
 	}
 	flow.ResponseContract = contract
 	flow.ResponseSubtypes = contract.Subtypes()
@@ -555,13 +579,12 @@ func externalTransportInfo(enabled bool, label string, modulePath string, dirNam
 	if !enabled {
 		return nil, nil
 	}
-	if absRuntimePath != "" && absTransportPath == "" {
-		return nil, fmt.Errorf("%s flows with --runtime-path require --transport-path pointing to the local transports directory", label)
-	}
-
 	info := &generator.TransportInfo{
 		ModulePath: modulePath,
 		Version:    resolvedRuntimeVersion,
+	}
+	if absRuntimePath != "" && absTransportPath == "" {
+		absTransportPath = filepath.Clean(filepath.Join(absRuntimePath, "..", "transports"))
 	}
 	if absTransportPath != "" {
 		info.LocalPath = filepath.Join(absTransportPath, dirName)

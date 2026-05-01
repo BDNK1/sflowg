@@ -5,7 +5,7 @@ Build your first SFlowG service in 5 minutes.
 ## Prerequisites
 
 - Go 1.21 or later installed
-- Basic familiarity with YAML
+- Basic familiarity with YAML and Risor-style expressions
 
 ## Step 1: Install the CLI
 
@@ -32,43 +32,50 @@ Create `flow-config.yaml`:
 
 ```yaml
 name: my-api
+
+runtime:
+  engine: dsl
+  port: 8080
+
 plugins:
   - source: http
 ```
 
-This configures your project to use the built-in HTTP plugin.
+This configures your project to load `.flow` files with the DSL engine and use
+the built-in HTTP plugin.
 
 ## Step 4: Create Your First Flow
 
-Create `flows/hello.yaml`:
+Create `flows/hello.flow`:
 
-```yaml
-id: hello_flow
-entrypoint:
-  type: http
-  config:
-    method: get
+```sflowg
+entrypoint.http {
+    method: GET
     path: /hello/:name
+    pathVariables: {
+        name: { type: string, required: true }
+    }
+}
 
-steps:
-  - id: build_greeting
-    type: assign
-    args:
-      greeting: '"Hello, " + request.params.name + "!"'
-      timestamp: 'now()'
+step build_greeting {
+    {
+        message: "Hello, " + request.pathVariables.name + "!"
+    }
+}
 
-return:
-  type: json
-  args:
-    message: build_greeting.greeting
-    time: build_greeting.timestamp
+return response.json({
+    status: 200,
+    body: {
+        message: build_greeting.message
+    }
+})
 ```
 
 **What this does:**
 - Creates a GET endpoint at `/hello/:name`
-- Extracts the `name` path parameter
-- Builds a greeting message using an expression
-- Returns JSON response
+- Extracts the `name` path variable into `request.pathVariables.name`
+- Runs the `build_greeting` step and stores its result under that step name
+- Returns an HTTP JSON response
 
 ## Step 5: Build
 
@@ -99,8 +106,7 @@ curl http://localhost:8080/hello/World
 Response:
 ```json
 {
-  "message": "Hello, World!",
-  "time": "2024-01-15T10:30:00Z"
+  "message": "Hello, World!"
 }
 ```
 
@@ -108,44 +114,44 @@ Response:
 
 ### Multiple Steps
 
-Create `flows/calc.yaml`:
+Create `flows/calc.flow`:
 
-```yaml
-id: calculate
-entrypoint:
-  type: http
-  config:
-    method: post
+```sflowg
+entrypoint.http {
+    method: POST
     path: /calculate
+    body: {
+        type: json
+        schema: {
+            a: { type: integer, required: true }
+            b: { type: integer, required: true }
+            operation: { type: string, required: true, enum: [add, multiply] }
+        }
+    }
+}
 
-steps:
-  - id: parse_input
-    type: assign
-    args:
-      a: request.body.a
-      b: request.body.b
-      operation: request.body.operation
+step parse_input {
+    {
+        a: request.body.a,
+        b: request.body.b,
+        operation: request.body.operation
+    }
+}
 
-  - id: compute
-    type: switch
-    args:
-      - condition: 'parse_input.operation == "add"'
-        steps:
-          - id: add
-            type: assign
-            args:
-              result: parse_input.a + parse_input.b
-      - condition: 'parse_input.operation == "multiply"'
-        steps:
-          - id: multiply
-            type: assign
-            args:
-              result: parse_input.a * parse_input.b
+step compute {
+    match parse_input.operation {
+        "add" => parse_input.a + parse_input.b
+        "multiply" => parse_input.a * parse_input.b
+        _ => raise("INVALID_OPERATION", "unsupported operation")
+    }
+}
 
-return:
-  type: json
-  args:
-    result: compute.result
+return response.json({
+    status: 200,
+    body: {
+        result: compute
+    }
+})
 ```
 
 Rebuild and test:
@@ -163,25 +169,28 @@ curl -X POST http://localhost:8080/calculate \
 
 Call external APIs using the HTTP plugin:
 
-```yaml
-id: fetch_user
-entrypoint:
-  type: http
-  config:
-    method: get
+```sflowg
+entrypoint.http {
+    method: GET
     path: /user/:id
+    pathVariables: {
+        id: { type: string, required: true }
+    }
+}
 
-steps:
-  - id: get_user
-    type: http.request
-    args:
-      method: GET
-      url: '"https://api.example.com/users/" + request.params.id'
+step get_user {
+    http.request({
+        method: "GET",
+        url: "https://api.example.com/users/" + request.pathVariables.id
+    })
+}
 
-return:
-  type: json
-  args:
-    user: get_user.response.body
+return response.json({
+    status: 200,
+    body: {
+        user: get_user.body
+    }
+})
 ```
 
 ### Environment Variables
@@ -191,9 +200,12 @@ Use environment variables in `flow-config.yaml`:
 ```yaml
 name: my-api
 
+runtime:
+  engine: dsl
+
 properties:
-  apiBaseUrl: ${API_BASE_URL:http://localhost:9000}
-  apiKey: ${API_KEY}
+  api_base_url: ${API_BASE_URL:http://localhost:9000}
+  api_key: ${API_KEY}
 
 plugins:
   - source: http
@@ -202,14 +214,16 @@ plugins:
 ```
 
 Access properties in flows:
-```yaml
-steps:
-  - id: call_api
-    type: http.request
-    args:
-      url: 'properties.apiBaseUrl + "/data"'
-      headers:
-        Authorization: '"Bearer " + properties.apiKey'
+```sflowg
+step call_api {
+    http.request({
+        method: "GET",
+        url: properties.api_base_url + "/data",
+        headers: {
+            Authorization: "Bearer " + properties.api_key
+        }
+    })
+}
 ```
 
 ## Production Deployment

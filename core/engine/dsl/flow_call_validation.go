@@ -76,17 +76,17 @@ func (v *FlowValidator) ValidateFlows(flows map[string]runtime.Flow) error {
 func validateCoreSemantics(flow runtime.Flow) error {
 	contract := flow.ResponseContract
 	if contract.IsZero() {
-		var ok bool
-		contract, ok = runtime.BuiltInResponseContract(flow.Entrypoint.Type)
-		if !ok {
-			return nil
-		}
+		return nil
 	}
 	if err := validateResponseCallsInFlow(flow, contract); err != nil {
 		return err
 	}
 	if flow.Entrypoint.Type == "kafka" {
 		if err := validateKafkaFlowSemantics(flow); err != nil {
+			return err
+		}
+	} else if contract.RequiresResponse {
+		if err := validateRequiredResponseReturn(flow, contract); err != nil {
 			return err
 		}
 	}
@@ -144,6 +144,34 @@ func validateKafkaFlowSemantics(flow runtime.Flow) error {
 		}
 	}
 	return nil
+}
+
+func validateRequiredResponseReturn(flow runtime.Flow, contract runtime.ResponseContract) error {
+	subtype, ok := topLevelResponseCallSubtype(flow.Return.Body)
+	if !ok {
+		return fmt.Errorf("entrypoint.%s requires top-level return response.*(...)", contract.EntrypointType)
+	}
+	if !contract.HasSubtype(subtype) {
+		return fmt.Errorf("response.%s is not valid for this entrypoint", subtype)
+	}
+	return nil
+}
+
+func topLevelResponseCallSubtype(source string) (string, bool) {
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(source), ";"))
+	if !strings.HasPrefix(body, "response.") {
+		return "", false
+	}
+	rest := strings.TrimPrefix(body, "response.")
+	idx := strings.Index(rest, "(")
+	if idx <= 0 {
+		return "", false
+	}
+	subtype := strings.TrimSpace(rest[:idx])
+	if subtype == "" || strings.ContainsAny(subtype, " \t\n\r.") {
+		return "", false
+	}
+	return subtype, true
 }
 
 func rejectKafkaAckNack(source string) error {

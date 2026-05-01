@@ -168,6 +168,38 @@ func TestFlowValidatorKafkaRequiresJSONValue(t *testing.T) {
 	}
 }
 
+func TestFlowValidatorCronResponseSemantics(t *testing.T) {
+	valid := runtime.Flow{
+		ID:               "reconcile",
+		Entrypoint:       runtime.Entrypoint{Type: "cron", Config: map[string]any{"schedule": "*/5 * * * *"}},
+		ResponseContract: runtime.CronResponseContract(),
+		Steps:            []runtime.Step{{ID: "work", Body: `log.info(trigger.scheduled_at, trigger.fire_count)`}},
+	}
+	if err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"reconcile": valid}); err != nil {
+		t.Fatalf("valid cron flow failed: %v", err)
+	}
+
+	invalid := valid
+	invalid.Return = runtime.Return{Body: `response.json({status: 200})`}
+	invalid.Steps = append(invalid.Steps, runtime.Step{ID: "__return", Body: invalid.Return.Body})
+	if err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"reconcile": invalid}); err == nil || !strings.Contains(err.Error(), "response.json") {
+		t.Fatalf("expected cron response rejection, got %v", err)
+	}
+}
+
+func TestFlowValidatorHTTPRequiresTopLevelReturn(t *testing.T) {
+	flow := runtime.Flow{
+		ID:               "payments",
+		Entrypoint:       runtime.Entrypoint{Type: "http"},
+		ResponseContract: runtime.HTTPResponseContract(),
+		Steps:            []runtime.Step{{ID: "respond", Body: `response.json({status: 200})`}},
+	}
+	err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{"payments": flow})
+	if err == nil || !strings.Contains(err.Error(), "requires top-level return") {
+		t.Fatalf("expected missing top-level return error, got %v", err)
+	}
+}
+
 func kafkaEntrypointConfig() map[string]any {
 	return map[string]any{
 		"broker":            "default",

@@ -10,9 +10,10 @@ Supported entrypoints:
 | `entrypoint.http` | HTTP request | External `transports/http` module |
 | `entrypoint.kafka` | Kafka message | External `transports/kafka` module |
 | `entrypoint.flow` | `flow.call` from another flow | Built into core |
+| `entrypoint.cron` | In-process schedule | External `transports/cron` module |
 
-HTTP and Kafka transports are registered by generated applications only when
-matching flows exist. Subflows are not an external transport.
+HTTP, Kafka, and Cron transports are registered by generated applications only
+when matching flows exist. Subflows are not an external transport.
 
 ## HTTP
 
@@ -218,6 +219,61 @@ Flow response calls:
 
 Each flow response call takes exactly one map argument.
 
+## Cron
+
+Cron flows are served by the external Cron transport module. They run on an
+in-process schedule inside the generated application.
+
+```sflowg
+entrypoint.cron {
+    schedule: "*/5 * * * *"
+    timezone: UTC
+    timeout: 10000
+}
+
+step cleanup {
+    log.info("scheduled cleanup", {
+        scheduled_at: trigger.scheduled_at,
+        fire_count: trigger.fire_count
+    })
+}
+
+on_error {
+    log.error("scheduled cleanup failed", {
+        code: error.code,
+        message: error.message
+    })
+}
+```
+
+Fields:
+
+| Field | Required | Description |
+|---|---:|---|
+| `schedule` | Yes | Five-field cron expression: minute, hour, day-of-month, month, day-of-week |
+| `timezone` | No | IANA timezone name; defaults to `UTC` |
+| `timeout` | No | Flow timeout in milliseconds |
+
+The scheduler does not fire immediately on startup. It computes the next
+scheduled instant and waits for that tick. If a previous run of the same flow is
+still active when the next tick arrives, the tick is skipped rather than queued.
+If the process wakes up after scheduled instants were missed, those missed ticks
+are also skipped rather than replayed.
+
+Cron trigger fields:
+
+- `trigger.scheduled_at`: scheduled instant as an RFC3339Nano string in the configured timezone
+- `trigger.fire_count`: process-local count of started runs for this flow
+
+Cron is response-less:
+
+- Top-level `return response.*(...)` is not required.
+- Any `response.*(...)` call is invalid for `entrypoint.cron`.
+- `on_error` may complete without setting a response.
+
+Cron v1 uses five-field cron expressions, so schedules have minute granularity.
+Seconds fields such as `*/20 * * * * *` are rejected.
+
 ## Input Schemas
 
 Schemas are supported for HTTP inputs, Kafka `message.value`, and flow inputs.
@@ -231,6 +287,7 @@ Schema locations:
 | `entrypoint.http` | `pathVariables`, `queryParameters`, `headers`, `body.schema` | `request.*` |
 | `entrypoint.kafka` | `value.schema` | `message.value` |
 | `entrypoint.flow` | `input` | `input` |
+| `entrypoint.cron` | none | `trigger.*` |
 
 Types:
 
@@ -340,5 +397,5 @@ Kafka schema and boundary failures default to `nack` unless `on_error` returns
 ## Validation
 
 Response calls and input schemas are entrypoint-specific and are validated at
-build/startup and at runtime. The CLI can validate HTTP, Kafka, and flow
+build/startup and at runtime. The CLI can validate HTTP, Kafka, Flow, and Cron
 response semantics without importing external transport modules.

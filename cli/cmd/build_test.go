@@ -57,6 +57,51 @@ return response.ack()`
 	}
 }
 
+func TestScanProjectFlowsFindsCron(t *testing.T) {
+	dir := t.TempDir()
+	flowsDir := filepath.Join(dir, "flows")
+	if err := os.Mkdir(flowsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	source := `entrypoint.cron {
+	schedule: "*/5 * * * *"
+	timezone: UTC
+}
+step work {
+	log.info(trigger.scheduled_at, trigger.fire_count)
+}`
+	if err := os.WriteFile(filepath.Join(flowsDir, "reconcile.flow"), []byte(source), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	scan, err := scanProjectFlows(dir)
+	if err != nil {
+		t.Fatalf("scanProjectFlows failed: %v", err)
+	}
+	if !scan.HasSupported || !scan.HasCron {
+		t.Fatalf("scan = %#v, want supported cron flow", scan)
+	}
+}
+
+func TestScanProjectFlowsRejectsCronResponse(t *testing.T) {
+	dir := t.TempDir()
+	flowsDir := filepath.Join(dir, "flows")
+	if err := os.Mkdir(flowsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	source := `entrypoint.cron {
+	schedule: "*/5 * * * *"
+}
+return response.json({ status: 200 })`
+	if err := os.WriteFile(filepath.Join(flowsDir, "reconcile.flow"), []byte(source), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := scanProjectFlows(dir); err == nil {
+		t.Fatal("expected Cron response validation error")
+	}
+}
+
 func TestScanProjectFlowsRejectsUnsupportedEntrypoint(t *testing.T) {
 	dir := t.TempDir()
 	flowsDir := filepath.Join(dir, "flows")
@@ -110,10 +155,13 @@ return response.json({ status: 200, body: {} })`
 	}
 }
 
-func TestKafkaTransportInfoRequiresTransportPathWithLocalRuntime(t *testing.T) {
-	_, err := externalTransportInfo(true, "Kafka", constants.KafkaTransportModulePath, "kafka", "v0.0.0", "/repo/core", "")
-	if err == nil || !strings.Contains(err.Error(), "--transport-path") {
-		t.Fatalf("expected transport path error, got %v", err)
+func TestKafkaTransportInfoInfersTransportPathWithLocalRuntime(t *testing.T) {
+	info, err := externalTransportInfo(true, "Kafka", constants.KafkaTransportModulePath, "kafka", "v0.0.0", "/repo/core", "")
+	if err != nil {
+		t.Fatalf("externalTransportInfo failed: %v", err)
+	}
+	if info.LocalPath != filepath.Join("/repo/transports", "kafka") {
+		t.Fatalf("LocalPath = %q", info.LocalPath)
 	}
 }
 
@@ -133,9 +181,12 @@ func TestKafkaTransportInfoUsesLocalReplaceWhenTransportPathProvided(t *testing.
 	}
 }
 
-func TestHTTPTransportInfoRequiresTransportPathWithLocalRuntime(t *testing.T) {
-	_, err := externalTransportInfo(true, "HTTP", constants.HTTPTransportModulePath, "http", "v0.0.0", "/repo/core", "")
-	if err == nil || !strings.Contains(err.Error(), "--transport-path") {
-		t.Fatalf("expected transport path error, got %v", err)
+func TestHTTPTransportInfoInfersTransportPathWithLocalRuntime(t *testing.T) {
+	info, err := externalTransportInfo(true, "HTTP", constants.HTTPTransportModulePath, "http", "v0.0.0", "/repo/core", "")
+	if err != nil {
+		t.Fatalf("externalTransportInfo failed: %v", err)
+	}
+	if info.LocalPath != filepath.Join("/repo/transports", "http") {
+		t.Fatalf("LocalPath = %q", info.LocalPath)
 	}
 }

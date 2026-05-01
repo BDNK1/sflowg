@@ -103,6 +103,10 @@ func collectKnownStoreKeys(flow *runtime.Flow) []string {
 		keys = append(keys, "message")
 		seen["message"] = struct{}{}
 	}
+	if flow.Entrypoint.Type == "cron" {
+		keys = append(keys, "trigger")
+		seen["trigger"] = struct{}{}
+	}
 
 	for _, step := range flow.Steps {
 		if _, ok := seen[step.ID]; ok {
@@ -214,7 +218,7 @@ func responseContractForFlow(flow *runtime.Flow) runtime.ResponseContract {
 	if contract, ok := runtime.BuiltInResponseContract(flow.Entrypoint.Type); ok {
 		return contract
 	}
-	return runtime.HTTPResponseContract()
+	return runtime.ResponseContract{}
 }
 
 func buildLogTemplateModule() map[string]any {

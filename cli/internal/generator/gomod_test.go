@@ -50,3 +50,25 @@ func TestGoModIncludesHTTPTransportOnlyWhenConfigured(t *testing.T) {
 		}
 	}
 }
+
+func TestGoModIncludesCronTransportOnlyWhenConfigured(t *testing.T) {
+	gen := NewGoModGenerator("abc123", "v0.1.4", "")
+	if content := gen.Generate(); strings.Contains(content, constants.CronTransportModulePath) {
+		t.Fatalf("go.mod unexpectedly includes Cron transport\n%s", content)
+	}
+
+	gen.SetCronTransport(TransportInfo{
+		ModulePath: constants.CronTransportModulePath,
+		Version:    "v0.1.4",
+		LocalPath:  "/repo/transports/cron",
+	})
+	content := gen.Generate()
+	for _, want := range []string{
+		constants.CronTransportModulePath + " v0.1.4",
+		constants.CronTransportModulePath + " => /repo/transports/cron",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("go.mod missing %q\n%s", want, content)
+		}
+	}
+}

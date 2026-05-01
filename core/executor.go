@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -133,6 +134,16 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 		if output.Next != "" {
 			nextStep = output.Next
 		}
+	}
+
+	if err := validateExecutionResponse(execution); err != nil {
+		if handled, handlerErr := e.runOnErrorHandler(execution, err); handled {
+			if handlerErr != nil {
+				return handlerErr
+			}
+			return nil
+		}
+		return err
 	}
 
 	return nil
@@ -403,11 +414,71 @@ func (e *Executor) runOnErrorHandler(execution *Execution, fe *FlowError) (handl
 		log.Error("on_error handler itself failed", "error", err)
 		return true, err
 	}
-	if output.Response == nil {
-		return false, nil
+	if responseErr := validateRecoveryResponse(execution, output.Response); responseErr != nil {
+		return true, responseErr
 	}
 	applyOnErrorOutput(execution, output)
 	return true, nil
+}
+
+func validateExecutionResponse(execution *Execution) *FlowError {
+	return validateResponse(execution, execution.State().Response())
+}
+
+func validateRecoveryResponse(execution *Execution, response *ResponseDescriptor) *FlowError {
+	return validateResponse(execution, response)
+}
+
+func validateResponse(execution *Execution, response *ResponseDescriptor) *FlowError {
+	contract := responseContractForExecution(execution)
+	if contract.IsZero() {
+		return nil
+	}
+	if response == nil {
+		if contract.RequiresResponse {
+			return responseContractError("missing_response", "flow completed without a required response")
+		}
+		return nil
+	}
+	subtype := responseSubtype(response)
+	if !contract.HasSubtype(subtype) {
+		return responseContractError("invalid_response", fmt.Sprintf("response.%s is not valid for entrypoint.%s", subtype, contract.EntrypointType))
+	}
+	return nil
+}
+
+func responseContractForExecution(execution *Execution) ResponseContract {
+	if execution == nil || execution.Flow == nil {
+		return ResponseContract{}
+	}
+	if !execution.Flow.ResponseContract.IsZero() {
+		return execution.Flow.ResponseContract
+	}
+	return ResponseContract{}
+}
+
+func responseSubtype(response *ResponseDescriptor) string {
+	if response == nil {
+		return ""
+	}
+	if response.Subtype != "" {
+		return response.Subtype
+	}
+	if dot := strings.LastIndex(response.HandlerName, "."); dot >= 0 && dot+1 < len(response.HandlerName) {
+		return response.HandlerName[dot+1:]
+	}
+	return response.HandlerName
+}
+
+func responseContractError(reason string, message string) *FlowError {
+	return &FlowError{
+		Type:    ErrorTypePermanent,
+		Code:    string(ErrorCodeRuntimeError),
+		Message: message,
+		Meta: map[string]any{
+			"reason": reason,
+		},
+	}
 }
 
 func (e *Executor) runIsolatedOnError(execution *Execution, fe *FlowError) (RecoveryOutput, *FlowError, bool) {

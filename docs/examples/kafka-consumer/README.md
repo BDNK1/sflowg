@@ -13,8 +13,8 @@ docker compose up -d
 docker compose exec redpanda rpk topic create orders.events
 
 go run ../../../cli build . \
-  --runtime-path ../../../core \
-  --transport-path ../../../transports \
+  --core-path ../../../core \
+  --transports-path ../../../transports \
   --embed-flows
 
 ./kafka-consumer-example

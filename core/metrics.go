@@ -40,6 +40,7 @@ type Metrics struct {
 	stepExecutions   otelmetric.Int64Counter
 	stepDurationMS   otelmetric.Float64Histogram
 	stepRetries      otelmetric.Int64Counter
+	cronSkipped      otelmetric.Int64Counter
 	pluginCalls      otelmetric.Int64Counter
 	pluginDurationMS otelmetric.Float64Histogram
 	httpRequests     otelmetric.Int64Counter
@@ -160,6 +161,13 @@ func newMetrics(provider otelmetric.MeterProvider) (*Metrics, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create step retry counter: %w", err)
 	}
+	cronSkipped, err := meter.Int64Counter(
+		"sflowg.cron.skipped",
+		otelmetric.WithDescription("Total number of skipped cron flow fires."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create cron skipped counter: %w", err)
+	}
 	pluginCalls, err := meter.Int64Counter(
 		"sflowg.plugin.calls",
 		otelmetric.WithDescription("Total number of plugin calls."),
@@ -197,6 +205,7 @@ func newMetrics(provider otelmetric.MeterProvider) (*Metrics, error) {
 		stepExecutions:   stepExecutions,
 		stepDurationMS:   stepDurationMS,
 		stepRetries:      stepRetries,
+		cronSkipped:      cronSkipped,
 		pluginCalls:      pluginCalls,
 		pluginDurationMS: pluginDurationMS,
 		httpRequests:     httpRequests,
@@ -234,6 +243,18 @@ func (m *Metrics) RecordRetry(ctx context.Context, flowID string, stepID string,
 
 	attrs := m.retryAttributes(flowID, stepID, path)
 	m.stepRetries.Add(ctx, 1, otelmetric.WithAttributes(attrs...))
+}
+
+func (m *Metrics) RecordCronSkipped(ctx context.Context, flowID string, reason string) {
+	if m.cronSkipped == nil {
+		return
+	}
+
+	attrs := []attribute.KeyValue{
+		attribute.String("flow.id", normalizeMetricValue(flowID)),
+		attribute.String("reason", normalizeMetricValue(reason)),
+	}
+	m.cronSkipped.Add(ctx, 1, otelmetric.WithAttributes(attrs...))
 }
 
 func (m *Metrics) RecordPluginCall(ctx context.Context, flowID string, stepID string, pluginName string, method string, outcome string, duration time.Duration) {

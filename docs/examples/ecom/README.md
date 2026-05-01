@@ -12,6 +12,7 @@ This example uses `engine: dsl` in `flow-config.yaml`. Flows are written in `.fl
 - Plugin calls use function syntax: `postgres.get({query: "...", params: [...]})`
 - `create_order` calls the reusable `resolve_order_currency` subflow via `flow.call(...)`
 - `pay_order` delegates payment creation to the `stripe-integration` flow via `http.request(...)`
+- `cancel_stale_unpaid_orders` runs every 5 minutes via `entrypoint.cron`
 
 ## Quick Setup
 
@@ -41,8 +42,8 @@ export PATH="$(pwd)/../bin:$PATH"
 
 # From this example folder
 sflowg build . \
-  --runtime-path ../../../core \
-  --transport-path ../../../transports \
+  --core-path ../../../core \
+  --transports-path ../../../transports \
   --core-plugins-path ../../../plugins
 ./ecommerce-api
 ```
@@ -76,6 +77,9 @@ dashboards every 30 seconds.
 | POST | `/api/orders/:id/pay` | Create payment via stripe-integration flow |
 | POST | `/api/orders/:id/cancel` | Cancel order |
 | POST | `/internal/payments/stripe-webhook` | Internal callback for Stripe webhook status sync |
+
+The example also includes a scheduled cleanup flow that cancels unpaid orders
+older than 24 hours every 5 minutes.
 
 ## Test
 

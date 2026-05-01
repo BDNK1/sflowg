@@ -11,12 +11,26 @@ func TestBuiltInResponseContractsExposeExpectedSubtypes(t *testing.T) {
 		{name: "http", contract: HTTPResponseContract(), want: []string{"json", "text", "redirect"}},
 		{name: "flow", contract: FlowResponseContract(), want: []string{"value", "error"}},
 		{name: "kafka", contract: KafkaResponseContract(), want: []string{"ack", "nack"}},
+		{name: "cron", contract: CronResponseContract(), want: []string{}},
 	}
 
 	for _, tt := range tests {
 		if !tt.contract.EqualSubtypes(tt.want) {
 			t.Fatalf("%s subtypes = %#v, want %#v", tt.name, tt.contract.Subtypes(), tt.want)
 		}
+	}
+}
+
+func TestCronResponseContractDoesNotExposeHTTPFallback(t *testing.T) {
+	contract := CronResponseContract()
+	if contract.RequiresResponse {
+		t.Fatal("cron should not require a response")
+	}
+	if contract.HasSubtype("json") {
+		t.Fatal("cron should not expose response.json fallback")
+	}
+	if err := contract.ValidateStaticArgCount("json", 1); err == nil {
+		t.Fatal("expected cron response.json validation to fail")
 	}
 }
 

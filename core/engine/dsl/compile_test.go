@@ -229,3 +229,22 @@ return response.json({status: 200, body: {ok: load.ok}})
 		t.Fatalf("__return body was not compiled: %#v", last.Compiled)
 	}
 }
+
+func TestCompileFlow_CronTriggerKeysCompile(t *testing.T) {
+	flow := &runtime.Flow{
+		ID:               "reconcile",
+		Entrypoint:       runtime.Entrypoint{Type: "cron"},
+		ResponseContract: runtime.CronResponseContract(),
+		Steps: []runtime.Step{
+			{ID: "log_tick", Body: `log.info("tick", {scheduled_at: trigger.scheduled_at, fire_count: trigger.fire_count})`},
+		},
+	}
+
+	compiler := NewCompiler()
+	if err := compiler.CompileFlow(context.Background(), flow, newCompileTestContainer(t)); err != nil {
+		t.Fatalf("CompileFlow() error = %v", err)
+	}
+	if _, ok := flow.Steps[0].Compiled.(*bytecode.Code); !ok {
+		t.Fatalf("body was not compiled: %#v", flow.Steps[0].Compiled)
+	}
+}

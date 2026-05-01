@@ -2,7 +2,8 @@
 
 SFlowG flow files use the `.flow` DSL. A flow declares one entrypoint, optional
 properties, zero or more steps, optional `on_error`, and usually a final
-`return response.*(...)`.
+`return response.*(...)`. Cron flows are response-less and do not need a
+`return`.
 
 Step bodies are Risor code. Entrypoint blocks and property blocks use SFlowG's
 simple map syntax.
@@ -43,7 +44,7 @@ return response.json({
 
 Top-level blocks:
 
-- `entrypoint.http`, `entrypoint.kafka`, or `entrypoint.flow`
+- `entrypoint.http`, `entrypoint.kafka`, `entrypoint.flow`, or `entrypoint.cron`
 - `properties`
 - `step`
 - `on_error`
@@ -62,9 +63,10 @@ runtime packaging, and examples.
 | `entrypoint.http` | HTTP request | `request` | `response.json(map)`, `response.text(map)`, `response.redirect(map)` |
 | `entrypoint.kafka` | Kafka message | `message` | `response.ack()`, `response.nack()` |
 | `entrypoint.flow` | `flow.call` from another flow | `input` | `response.value(map)`, `response.error(map)` |
+| `entrypoint.cron` | In-process schedule | `trigger` | none |
 
-HTTP and Kafka are external transport modules. Flow entrypoints are an internal
-core concept for subflows. Boundary input schema details live in
+HTTP, Kafka, and Cron are external transport modules. Flow entrypoints are an
+internal core concept for subflows. Boundary input schema details live in
 [Entrypoints](./ENTRYPOINTS.md#input-schemas).
 
 ## Properties
@@ -357,6 +359,37 @@ on_error {
 
 return response.ack()
 ```
+
+### Cron Responses
+
+Cron is response-less. A cron flow may complete without a `return`, and
+`response.*(...)` calls are invalid in cron steps, fallbacks, returns, and
+`on_error`.
+
+```sflowg
+entrypoint.cron {
+    schedule: "*/5 * * * *"
+    timezone: UTC
+}
+
+step cleanup {
+    log.info("scheduled cleanup", {
+        scheduled_at: trigger.scheduled_at,
+        fire_count: trigger.fire_count
+    })
+}
+
+on_error {
+    log.error("scheduled cleanup failed", {
+        code: error.code,
+        message: error.message
+    })
+}
+```
+
+The cron schedule uses exactly five fields: minute, hour, day-of-month, month,
+and day-of-week. Seconds are not supported in cron v1. `trigger.scheduled_at`
+is the scheduled instant, not the wall-clock instant when execution happened.
 
 ## Built-Ins
 
