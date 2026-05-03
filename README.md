@@ -1,12 +1,12 @@
 # SFlowG
 
-**Service Flow Generator** - Build HTTP services from YAML workflow definitions.
+**Service Flow Generator** - Build HTTP services from declarative `.flow` definitions.
 
-SFlowG compiles declarative YAML flows into standalone Go binaries. Define your API endpoints, business logic, and integrations in YAML - get a production-ready executable.
+SFlowG compiles declarative flow files into standalone Go binaries. Define your API endpoints, business logic, and integrations in the SFlowG DSL - get a production-ready executable.
 
 ## Why SFlowG?
 
-- **Declarative**: Define workflows in YAML, not code
+- **Declarative**: Define workflows in `.flow` files, not application code
 - **Compiled**: Single binary deployment, no runtime dependencies
 - **Extensible**: Custom plugins for any integration
 - **Fast**: Native Go performance with zero cold start
@@ -17,38 +17,43 @@ SFlowG compiles declarative YAML flows into standalone Go binaries. Define your 
 **flow-config.yaml:**
 ```yaml
 name: my-api
+runtime:
+  engine: dsl
 plugins:
   - source: http
 ```
 
-**flows/user.yaml:**
-```yaml
-id: get_user
-entrypoint:
-  type: http
-  config:
-    method: get
+**flows/user.flow:**
+```sflowg
+entrypoint.http {
+    method: GET
     path: /user/:id
+    pathVariables: {
+        id: { type: string, required: true }
+    }
+}
 
-steps:
-  - id: fetch
-    type: http.request
-    args:
-      method: GET
-      url: '"https://jsonplaceholder.typicode.com/users/" + request.params.id'
+step fetch_user {
+    http.request({
+        method: "GET",
+        url: "https://jsonplaceholder.typicode.com/users/" + request.pathVariables.id
+    })
+}
 
-  - id: transform
-    type: assign
-    args:
-      user:
-        id: fetch.result.body.id
-        name: fetch.result.body.name
-        email: fetch.result.body.email
+step transform {
+    {
+        id: fetch_user.body.id,
+        name: fetch_user.body.name,
+        email: fetch_user.body.email
+    }
+}
 
-return:
-  type: json
-  args:
-    user: transform.user
+return response.json({
+    status: 200,
+    body: {
+        user: transform
+    }
+})
 ```
 
 **Build and run:**
@@ -71,7 +76,7 @@ go install github.com/BDNK1/sflowg/cli@latest
 | Document | Description |
 |----------|-------------|
 | [Getting Started](docs/GETTING_STARTED.md) | 5-minute tutorial to build your first service |
-| [Flow Syntax](docs/FLOW_SYNTAX.md) | Complete YAML flow reference |
+| [Flow Syntax](docs/FLOW_SYNTAX.md) | Complete `.flow` DSL reference |
 | [Configuration](docs/FLOW_CONFIG.md) | Project configuration (flow-config.yaml) |
 | [CLI Reference](docs/CLI.md) | Build tool commands and options |
 | [Plugin Development](docs/PLUGIN_DEVELOPMENT.md) | Create custom plugins |
@@ -82,7 +87,7 @@ go install github.com/BDNK1/sflowg/cli@latest
 my-project/
 ├── flow-config.yaml    # Project configuration
 ├── flows/              # Flow definitions
-│   └── *.yaml
+│   └── *.flow
 ├── plugins/            # Local plugins (optional)
 │   └── custom/
 └── my-project          # Generated binary
@@ -91,21 +96,22 @@ my-project/
 ## Core Concepts
 
 ### Flows
-YAML files that define complete request-response cycles. Each flow is an independent HTTP endpoint.
+`.flow` files that define complete request-response cycles. Each flow can be an HTTP endpoint, Kafka consumer, cron job, or subflow.
 
 ### Entrypoint
-Defines how a flow is triggered - HTTP method, path, headers, and body configuration.
+Defines how a flow is triggered, such as HTTP method and path, Kafka topic, cron schedule, or subflow input.
 
 ### Steps
-Sequential processing units within a flow. Each step has an `id`, `type`, and `args`.
+Sequential processing units within a flow. Each step has an ID and a Risor body; the last expression becomes the step result.
 
-### Step Types
-- **assign** - Set variables and transform data
-- **switch** - Conditional branching
-- **plugin.task** - Call plugin methods (e.g., `http.request`)
+### Step Bodies
+- Use Risor expressions and statements for data transformation and control flow
+- Call plugin tasks as functions, such as `http.request(...)`
+- Call subflows with `flow.call(...)`
+- Run work in the background with `async step`
 
 ### Return
-Defines the response sent back to the client - status code, headers, and body.
+Defines the response sent back to the caller, such as `response.json(...)`, `response.ack()`, or `response.value(...)`.
 
 ### Plugins
 Extend SFlowG with custom tasks. Use core plugins (`http`), local plugins (`./plugins/custom`), or remote plugins (`github.com/user/plugin`).
@@ -113,4 +119,6 @@ Extend SFlowG with custom tasks. Use core plugins (`http`), local plugins (`./pl
 ## Examples
 
 See [docs/examples](docs/examples/) for complete working projects:
-- [Payment System Integration](docs/examples/payment-system-integration/) - Multi-service workflow with retries
+- [E-commerce API](docs/examples/ecom/) - Orders, payments, subflows, async work, and Postgres
+- [Stripe Integration](docs/examples/stripe-integration/) - Webhooks, checkout flows, and custom plugins
+- [Kafka Consumer](docs/examples/kafka-consumer/) - Kafka entrypoint example
