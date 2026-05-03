@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/BDNK1/sflowg/core"
+	"github.com/deepnoodle-ai/risor/v2/pkg/ast"
+	risorparser "github.com/deepnoodle-ai/risor/v2/pkg/parser"
 )
 
 type Compiler struct {
@@ -24,60 +26,48 @@ func (c *Compiler) CompileFlow(ctx context.Context, flow *runtime.Flow, containe
 	frameworkEnv["response"] = buildResponseTemplateModule(contract)
 	knownStoreKeys := collectKnownStoreKeys(flow)
 	asyncStepIndexes := collectAsyncStepIndexes(flow)
+	nodes := runtime.NormalizeFlowNodes(flow)
 
-	for i := range flow.Steps {
-		step := &flow.Steps[i]
+	if err := validateFlowNodeIDs(nodes); err != nil {
+		return err
+	}
+	if err := validateResultIDs(nodes); err != nil {
+		return err
+	}
 
-		storeKeys, compiled, err := c.compileBody(ctx, step.Body, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
-		if err != nil {
-			return fmt.Errorf("compile step %s: %w", step.ID, err)
-		}
-		step.StoreKeys = storeKeys
-		step.Compiled = compiled
-		if err := validateNoForwardAsyncRefs(step.ID, i, "body", storeKeys, asyncStepIndexes); err != nil {
-			return err
-		}
-
-		fallbackStoreKeys, fallbackCompiled, err := c.compileBody(ctx, step.FallbackBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
-		if err != nil {
-			return fmt.Errorf("compile fallback for step %s: %w", step.ID, err)
-		}
-		step.FallbackStoreKeys = fallbackStoreKeys
-		step.FallbackCompiled = fallbackCompiled
-		if err := validateNoForwardAsyncRefs(step.ID, i, "fallback", fallbackStoreKeys, asyncStepIndexes); err != nil {
-			return err
-		}
-
-		compensateStoreKeys, compensateCompiled, err := c.compileBody(ctx, step.CompensateBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
-		if err != nil {
-			return fmt.Errorf("compile compensation for step %s: %w", step.ID, err)
-		}
-		step.CompensateCompiled = compensateCompiled
-		if err := validateNoForwardAsyncRefs(step.ID, i, "compensate", compensateStoreKeys, asyncStepIndexes); err != nil {
-			return err
-		}
-
-		conditionStoreKeys, err := extractStoreKeys(step.Condition, knownStoreKeys, frameworkKeys)
-		if err != nil {
-			return fmt.Errorf("compile condition for step %s: %w", step.ID, err)
-		}
-		if err := validateNoForwardAsyncRefs(step.ID, i, "condition", conditionStoreKeys, asyncStepIndexes); err != nil {
-			return err
-		}
-
-		var retryStoreKeys []string
-		if step.Retry != nil {
-			retryStoreKeys, err = extractStoreKeys(step.Retry.When, knownStoreKeys, frameworkKeys)
-			if err != nil {
-				return fmt.Errorf("compile retry for step %s: %w", step.ID, err)
+	for i := range nodes {
+		node := &nodes[i]
+		switch node.Kind {
+		case runtime.FlowNodeStep:
+			if node.Step == nil {
+				return fmt.Errorf("step node %q has no step", node.ID)
 			}
-			if err := validateNoForwardAsyncRefs(step.ID, i, "retry", retryStoreKeys, asyncStepIndexes); err != nil {
+			if err := c.compileStep(ctx, node.Step, i, knownStoreKeys, frameworkKeys, frameworkEnv, contract, asyncStepIndexes, false, nil); err != nil {
 				return err
 			}
+		case runtime.FlowNodeParallel:
+			if node.Parallel == nil {
+				return fmt.Errorf("parallel node %q has no block", node.ID)
+			}
+			peerIDs := map[string]struct{}{}
+			for _, branch := range node.Parallel.Branches {
+				peerIDs[branch.ID] = struct{}{}
+			}
+			for j := range node.Parallel.Branches {
+				branch := &node.Parallel.Branches[j]
+				if err := c.compileStep(ctx, branch, i, knownStoreKeys, frameworkKeys, frameworkEnv, contract, asyncStepIndexes, true, peerIDs); err != nil {
+					return err
+				}
+			}
+		default:
+			return fmt.Errorf("unsupported flow node kind %q", node.Kind)
 		}
-
-		step.AsyncDeps = intersectAsyncDeps(asyncStepIndexes, storeKeys, fallbackStoreKeys, compensateStoreKeys, conditionStoreKeys, retryStoreKeys)
 	}
+
+	if len(flow.Nodes) > 0 {
+		flow.Nodes = nodes
+	}
+	syncCompiledSteps(flow, nodes)
 
 	_, onErrorCompiled, err := c.compileBody(ctx, flow.OnErrorBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
 	if err != nil {
@@ -89,10 +79,132 @@ func (c *Compiler) CompileFlow(ctx context.Context, flow *runtime.Flow, containe
 	if err != nil {
 		return fmt.Errorf("compile return: %w", err)
 	}
-	if err := validateNoForwardAsyncRefs("__return", len(flow.Steps), "return", returnStoreKeys, asyncStepIndexes); err != nil {
+	if err := validateNoForwardAsyncRefs("__return", len(nodes), "return", returnStoreKeys, asyncStepIndexes); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func syncCompiledSteps(flow *runtime.Flow, nodes []runtime.FlowNode) {
+	if len(flow.Steps) == 0 {
+		return
+	}
+	compiledByID := map[string]runtime.Step{}
+	for _, node := range nodes {
+		if node.Kind == runtime.FlowNodeStep && node.Step != nil {
+			compiledByID[node.Step.ID] = *node.Step
+		}
+	}
+	for i := range flow.Steps {
+		if step, ok := compiledByID[flow.Steps[i].ID]; ok {
+			flow.Steps[i] = step
+		}
+	}
+}
+
+func (c *Compiler) compileStep(
+	ctx context.Context,
+	step *runtime.Step,
+	index int,
+	knownStoreKeys []string,
+	frameworkKeys map[string]struct{},
+	frameworkEnv map[string]any,
+	contract runtime.ResponseContract,
+	asyncStepIndexes map[string]int,
+	inParallel bool,
+	peerIDs map[string]struct{},
+) error {
+	if strings.HasPrefix(step.ID, runtime.InternalParallelNodePrefix) {
+		return fmt.Errorf("step ID %q uses reserved internal prefix %q", step.ID, runtime.InternalParallelNodePrefix)
+	}
+	if inParallel && step.CompensateBody != "" {
+		return fmt.Errorf("parallel branch %q cannot have compensate block", step.ID)
+	}
+	if err := validateNoUserNext(step.ID, "body", step.Body, step.AllowsNext); err != nil {
+		return err
+	}
+	if err := validateNoUserNext(step.ID, "fallback", step.FallbackBody, false); err != nil {
+		return err
+	}
+	if inParallel {
+		if err := rejectResponseCallsInSurface(step.ID, "body", step.Body); err != nil {
+			return err
+		}
+		if err := rejectResponseCallsInSurface(step.ID, "fallback", step.FallbackBody); err != nil {
+			return err
+		}
+		if err := rejectResponseCallsInSurface(step.ID, "condition", step.Condition); err != nil {
+			return err
+		}
+		if step.Retry != nil {
+			if err := rejectResponseCallsInSurface(step.ID, "retry", step.Retry.When); err != nil {
+				return err
+			}
+		}
+	}
+
+	storeKeys, compiled, err := c.compileBody(ctx, step.Body, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
+	if err != nil {
+		return fmt.Errorf("compile step %s: %w", step.ID, err)
+	}
+	step.StoreKeys = storeKeys
+	step.Compiled = compiled
+	if err := validateNoForwardAsyncRefs(step.ID, index, "body", storeKeys, asyncStepIndexes); err != nil {
+		return err
+	}
+	if err := validateNoPeerRefs(step.ID, "body", storeKeys, peerIDs); err != nil {
+		return err
+	}
+
+	fallbackStoreKeys, fallbackCompiled, err := c.compileBody(ctx, step.FallbackBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
+	if err != nil {
+		return fmt.Errorf("compile fallback for step %s: %w", step.ID, err)
+	}
+	step.FallbackStoreKeys = fallbackStoreKeys
+	step.FallbackCompiled = fallbackCompiled
+	if err := validateNoForwardAsyncRefs(step.ID, index, "fallback", fallbackStoreKeys, asyncStepIndexes); err != nil {
+		return err
+	}
+	if err := validateNoPeerRefs(step.ID, "fallback", fallbackStoreKeys, peerIDs); err != nil {
+		return err
+	}
+
+	compensateStoreKeys, compensateCompiled, err := c.compileBody(ctx, step.CompensateBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
+	if err != nil {
+		return fmt.Errorf("compile compensation for step %s: %w", step.ID, err)
+	}
+	step.CompensateCompiled = compensateCompiled
+	if err := validateNoForwardAsyncRefs(step.ID, index, "compensate", compensateStoreKeys, asyncStepIndexes); err != nil {
+		return err
+	}
+
+	conditionStoreKeys, err := extractStoreKeys(step.Condition, knownStoreKeys, frameworkKeys)
+	if err != nil {
+		return fmt.Errorf("compile condition for step %s: %w", step.ID, err)
+	}
+	if err := validateNoForwardAsyncRefs(step.ID, index, "condition", conditionStoreKeys, asyncStepIndexes); err != nil {
+		return err
+	}
+	if err := validateNoPeerRefs(step.ID, "condition", conditionStoreKeys, peerIDs); err != nil {
+		return err
+	}
+
+	var retryStoreKeys []string
+	if step.Retry != nil {
+		retryStoreKeys, err = extractStoreKeys(step.Retry.When, knownStoreKeys, frameworkKeys)
+		if err != nil {
+			return fmt.Errorf("compile retry for step %s: %w", step.ID, err)
+		}
+		if err := validateNoForwardAsyncRefs(step.ID, index, "retry", retryStoreKeys, asyncStepIndexes); err != nil {
+			return err
+		}
+		if err := validateNoPeerRefs(step.ID, "retry", retryStoreKeys, peerIDs); err != nil {
+			return err
+		}
+	}
+
+	step.AsyncDeps = intersectAsyncDeps(asyncStepIndexes, storeKeys, fallbackStoreKeys, compensateStoreKeys, conditionStoreKeys, retryStoreKeys)
 	return nil
 }
 
@@ -142,9 +254,21 @@ func extractStoreKeys(source string, knownStoreKeys []string, frameworkKeys map[
 
 func collectAsyncStepIndexes(flow *runtime.Flow) map[string]int {
 	indexes := make(map[string]int)
-	for i, step := range flow.Steps {
-		if step.Async {
-			indexes[step.ID] = i
+	for i, node := range runtime.NormalizeFlowNodes(flow) {
+		switch node.Kind {
+		case runtime.FlowNodeStep:
+			if node.Step != nil && node.Step.Async {
+				indexes[node.Step.ID] = i
+			}
+		case runtime.FlowNodeParallel:
+			if node.Parallel == nil {
+				continue
+			}
+			for _, branch := range node.Parallel.Branches {
+				if branch.Async {
+					indexes[branch.ID] = i
+				}
+			}
 		}
 	}
 	return indexes
@@ -201,16 +325,154 @@ func collectKnownStoreKeys(flow *runtime.Flow) []string {
 		seen["trigger"] = struct{}{}
 	}
 
-	for _, step := range flow.Steps {
-		if _, ok := seen[step.ID]; ok {
-			continue
+	for _, node := range runtime.NormalizeFlowNodes(flow) {
+		switch node.Kind {
+		case runtime.FlowNodeStep:
+			if node.Step == nil {
+				continue
+			}
+			if _, ok := seen[node.Step.ID]; ok {
+				continue
+			}
+			seen[node.Step.ID] = struct{}{}
+			keys = append(keys, node.Step.ID)
+		case runtime.FlowNodeParallel:
+			if node.Parallel == nil {
+				continue
+			}
+			for _, branch := range node.Parallel.Branches {
+				if _, ok := seen[branch.ID]; ok {
+					continue
+				}
+				seen[branch.ID] = struct{}{}
+				keys = append(keys, branch.ID)
+			}
 		}
-		seen[step.ID] = struct{}{}
-		keys = append(keys, step.ID)
 	}
 
 	sort.Strings(keys[5:])
 	return keys
+}
+
+func validateFlowNodeIDs(nodes []runtime.FlowNode) error {
+	seen := map[string]struct{}{}
+	for _, node := range nodes {
+		if node.ID == "" {
+			return fmt.Errorf("top-level flow node is missing an id")
+		}
+		if _, exists := seen[node.ID]; exists {
+			return fmt.Errorf("duplicate top-level flow node id %q", node.ID)
+		}
+		seen[node.ID] = struct{}{}
+		if node.Kind == runtime.FlowNodeStep && strings.HasPrefix(node.ID, runtime.InternalParallelNodePrefix) {
+			return fmt.Errorf("step ID %q uses reserved internal prefix %q", node.ID, runtime.InternalParallelNodePrefix)
+		}
+	}
+	return nil
+}
+
+func validateResultIDs(nodes []runtime.FlowNode) error {
+	seen := map[string]struct{}{}
+	for _, node := range nodes {
+		switch node.Kind {
+		case runtime.FlowNodeStep:
+			if node.Step == nil {
+				continue
+			}
+			if err := addResultID(seen, node.Step.ID); err != nil {
+				return err
+			}
+		case runtime.FlowNodeParallel:
+			if node.Parallel == nil {
+				continue
+			}
+			for _, branch := range node.Parallel.Branches {
+				if err := addResultID(seen, branch.ID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func addResultID(seen map[string]struct{}, id string) error {
+	if id == "" {
+		return fmt.Errorf("step ID is required")
+	}
+	if strings.HasPrefix(id, runtime.InternalParallelNodePrefix) {
+		return fmt.Errorf("step ID %q uses reserved internal prefix %q", id, runtime.InternalParallelNodePrefix)
+	}
+	if _, exists := seen[id]; exists {
+		return fmt.Errorf("duplicate result ID %q", id)
+	}
+	seen[id] = struct{}{}
+	return nil
+}
+
+func validateNoPeerRefs(branchID string, surface string, storeKeys []string, peerIDs map[string]struct{}) error {
+	if len(peerIDs) == 0 {
+		return nil
+	}
+	for _, key := range storeKeys {
+		if key == branchID {
+			continue
+		}
+		if _, ok := peerIDs[key]; ok {
+			return fmt.Errorf("parallel branch %q %s references peer branch %q", branchID, surface, key)
+		}
+	}
+	return nil
+}
+
+func validateNoUserNext(stepID string, surface string, source string, allowed bool) error {
+	if allowed || !strings.Contains(source, "__next") {
+		return nil
+	}
+	hasNext, err := returnedMapHasLiteralKey(source, "__next")
+	if err != nil {
+		return nil
+	}
+	if !hasNext {
+		return nil
+	}
+	return fmt.Errorf("step %q %s cannot return __next", stepID, surface)
+}
+
+func returnedMapHasLiteralKey(source string, key string) (bool, error) {
+	program, err := risorparser.Parse(context.Background(), source, nil)
+	if err != nil {
+		return false, err
+	}
+	if len(program.Stmts) == 0 {
+		return false, nil
+	}
+	expr := returnedExpr(program.Stmts[len(program.Stmts)-1])
+	m, ok := expr.(*ast.Map)
+	if !ok {
+		return false, nil
+	}
+	for _, item := range m.Items {
+		if item.Key == nil {
+			continue
+		}
+		itemKey, ok := literalMapKey(item.Key)
+		if ok && itemKey == key {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func returnedExpr(node ast.Node) ast.Expr {
+	switch n := node.(type) {
+	case ast.Expr:
+		return n
+	case *ast.Return:
+		return n.Value
+	default:
+		return nil
+	}
 }
 
 func collectFrameworkInfo(container *runtime.Container) (map[string]struct{}, map[string]any) {

@@ -328,6 +328,10 @@ func main() {
 		Async: bootstrap.AsyncConfig{
 			RuntimeMaxInFlight: {{.Async.RuntimeMaxInFlight}},
 		},
+		Parallel: bootstrap.ParallelConfig{
+			BlockDefaultMaxInFlight: {{.Parallel.BlockDefaultMaxInFlight}},
+			DefaultOnFailure: {{printf "%q" .Parallel.DefaultOnFailure}},
+		},
 		ValidateFlows:   {{if .EmbedFlows}}false{{else}}true{{end}},
 		RegisterPlugins:  registerPlugins,
 		Transports: []bootstrap.Transport{

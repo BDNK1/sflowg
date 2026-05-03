@@ -24,6 +24,7 @@ const (
 	ErrorCodeContextCancelled FlowErrorCode = "CONTEXT_CANCELLED"
 	ErrorCodeDeadlineExceeded FlowErrorCode = "DEADLINE_EXCEEDED"
 	ErrorCodeSchemaViolation  FlowErrorCode = "SCHEMA_VIOLATION"
+	ErrorCodeParallelFailure  FlowErrorCode = "PARALLEL_FAILURE"
 
 	// Default code used when DSL raise() is called without arguments.
 	ErrorCodeRaise FlowErrorCode = "RAISE"
@@ -37,6 +38,23 @@ type FlowError struct {
 	Message     string         `json:"message"`
 	Step        string         `json:"step"`
 	Cause       any            `json:"cause,omitempty"`
+	Retries     int            `json:"retries"`
+	Meta        map[string]any `json:"meta,omitempty"`
+	AwaitedFrom string         `json:"awaited_from,omitempty"`
+	Failures    []FlowFailure  `json:"failures,omitempty"`
+}
+
+type FlowFailure struct {
+	Branch string          `json:"branch,omitempty"`
+	Step   string          `json:"step,omitempty"`
+	Error  FlowErrorDetail `json:"error"`
+}
+
+type FlowErrorDetail struct {
+	Type        FlowErrorType  `json:"type"`
+	Code        string         `json:"code"`
+	Message     string         `json:"message"`
+	Step        string         `json:"step"`
 	Retries     int            `json:"retries"`
 	Meta        map[string]any `json:"meta,omitempty"`
 	AwaitedFrom string         `json:"awaited_from,omitempty"`
@@ -61,7 +79,68 @@ func (e *FlowError) ToMap() map[string]any {
 	if e.AwaitedFrom != "" {
 		out["awaited_from"] = e.AwaitedFrom
 	}
+	if len(e.Failures) > 0 {
+		failures := make([]map[string]any, 0, len(e.Failures))
+		for _, failure := range e.Failures {
+			item := map[string]any{
+				"error": flowErrorDetailToMap(failure.Error),
+			}
+			if failure.Branch != "" {
+				item["branch"] = failure.Branch
+			}
+			if failure.Step != "" {
+				item["step"] = failure.Step
+			}
+			failures = append(failures, item)
+		}
+		out["failures"] = failures
+	}
 	return out
+}
+
+func FlowErrorDetailFrom(fe *FlowError) FlowErrorDetail {
+	if fe == nil {
+		return FlowErrorDetail{}
+	}
+	return FlowErrorDetail{
+		Type:        fe.Type,
+		Code:        fe.Code,
+		Message:     fe.Message,
+		Step:        fe.Step,
+		Retries:     fe.Retries,
+		Meta:        fe.Meta,
+		AwaitedFrom: fe.AwaitedFrom,
+	}
+}
+
+func flowErrorDetailToMap(detail FlowErrorDetail) map[string]any {
+	out := map[string]any{
+		"type":    string(detail.Type),
+		"code":    detail.Code,
+		"message": detail.Message,
+		"step":    detail.Step,
+		"retries": detail.Retries,
+	}
+	if len(detail.Meta) > 0 {
+		out["meta"] = detail.Meta
+	}
+	if detail.AwaitedFrom != "" {
+		out["awaited_from"] = detail.AwaitedFrom
+	}
+	return out
+}
+
+func NewParallelFailure(stepID string, failures []FlowFailure) *FlowError {
+	if len(failures) == 0 {
+		return nil
+	}
+	return &FlowError{
+		Type:     ErrorTypePermanent,
+		Code:     string(ErrorCodeParallelFailure),
+		Message:  "multiple parallel branches failed",
+		Step:     stepID,
+		Failures: failures,
+	}
 }
 
 func cloneFlowErrorForAwait(origin *FlowError, asyncStepID string, consumerStepID string) *FlowError {

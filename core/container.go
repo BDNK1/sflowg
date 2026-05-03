@@ -19,6 +19,7 @@ type Container struct {
 	tracer       trace.Tracer
 	metrics      *Metrics
 	asyncRuntime *AsyncRuntime
+	runtimeCfg   RuntimeConfig
 }
 
 // Logger returns the container's logger for framework-level (non-execution) logs.
@@ -97,6 +98,21 @@ func (c *Container) SetAsyncRuntime(runtime *AsyncRuntime) {
 		runtime = NewAsyncRuntime(AsyncConfig{})
 	}
 	c.asyncRuntime = runtime
+}
+
+func (c *Container) RuntimeConfig() RuntimeConfig {
+	if c == nil {
+		return RuntimeConfig{Parallel: NormalizeParallelConfig(ParallelConfig{})}
+	}
+	cfg := c.runtimeCfg
+	cfg.Parallel = NormalizeParallelConfig(cfg.Parallel)
+	return cfg
+}
+
+func (c *Container) SetRuntimeConfig(cfg RuntimeConfig) {
+	c.runtimeCfg = cfg
+	c.runtimeCfg.Parallel = NormalizeParallelConfig(c.runtimeCfg.Parallel)
+	c.SetAsyncRuntime(NewAsyncRuntime(cfg.Async))
 }
 
 func (c *Container) Initialize(ctx context.Context) error {

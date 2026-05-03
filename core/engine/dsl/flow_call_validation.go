@@ -94,7 +94,7 @@ func validateCoreSemantics(flow runtime.Flow) error {
 }
 
 func validateResponseCallsInFlow(flow runtime.Flow, contract runtime.ResponseContract) error {
-	for _, step := range flow.Steps {
+	for _, step := range flowStepsForValidation(flow) {
 		if err := ValidateResponseCalls(step.Body, contract); err != nil {
 			return fmt.Errorf("step %q: %w", step.ID, err)
 		}
@@ -129,7 +129,7 @@ func validateKafkaFlowSemantics(flow runtime.Flow) error {
 		return fmt.Errorf("entrypoint.kafka requires top-level return response.ack() or response.nack()")
 	}
 
-	for _, step := range flow.Steps {
+	for _, step := range flowStepsForValidation(flow) {
 		if step.ID == "__return" {
 			continue
 		}
@@ -306,7 +306,7 @@ func extractFlowCallsFromFlow(flow runtime.Flow) ([]FlowCallRef, error) {
 		refs = append(refs, bodyRefs...)
 		return nil
 	}
-	for _, step := range flow.Steps {
+	for _, step := range flowStepsForValidation(flow) {
 		if err := add(step.Body); err != nil {
 			return nil, fmt.Errorf("step %q: %w", step.ID, err)
 		}
@@ -324,6 +324,27 @@ func extractFlowCallsFromFlow(flow runtime.Flow) ([]FlowCallRef, error) {
 		return nil, fmt.Errorf("return: %w", err)
 	}
 	return refs, nil
+}
+
+func flowStepsForValidation(flow runtime.Flow) []runtime.Step {
+	nodes := runtime.NormalizeFlowNodes(&flow)
+	if len(nodes) == 0 {
+		return nil
+	}
+	steps := []runtime.Step{}
+	for _, node := range nodes {
+		switch node.Kind {
+		case runtime.FlowNodeStep:
+			if node.Step != nil {
+				steps = append(steps, *node.Step)
+			}
+		case runtime.FlowNodeParallel:
+			if node.Parallel != nil {
+				steps = append(steps, node.Parallel.Branches...)
+			}
+		}
+	}
+	return steps
 }
 
 func validateLiteralArgs(flowID, targetName string, ref FlowCallRef, fields map[string]*schema.Schema) error {

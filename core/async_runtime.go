@@ -6,9 +6,30 @@ import (
 )
 
 const DefaultAsyncRuntimeMaxInFlight = 256
+const DefaultParallelBlockMaxInFlight = 8
 
 type AsyncConfig struct {
 	RuntimeMaxInFlight int
+}
+
+type ParallelConfig struct {
+	BlockDefaultMaxInFlight int
+	DefaultOnFailure        OnFailureMode
+}
+
+type RuntimeConfig struct {
+	Async    AsyncConfig
+	Parallel ParallelConfig
+}
+
+func NormalizeParallelConfig(cfg ParallelConfig) ParallelConfig {
+	if cfg.BlockDefaultMaxInFlight <= 0 {
+		cfg.BlockDefaultMaxInFlight = DefaultParallelBlockMaxInFlight
+	}
+	if cfg.DefaultOnFailure == "" {
+		cfg.DefaultOnFailure = OnFailureWaitAll
+	}
+	return cfg
 }
 
 type AsyncRuntime struct {

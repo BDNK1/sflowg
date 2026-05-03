@@ -2,6 +2,7 @@ package dsl
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/BDNK1/sflowg/core"
@@ -26,6 +27,23 @@ func ValidateResponseCalls(source string, contract runtime.ResponseContract) err
 		}
 		if err := contract.ValidateStaticArgCount(subtype, len(call.Args)); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func rejectResponseCallsInSurface(stepID string, surface string, source string) error {
+	if strings.TrimSpace(source) == "" {
+		return nil
+	}
+	program, err := risorparser.Parse(context.Background(), source, nil)
+	if err != nil {
+		return err
+	}
+	for node := range ast.Preorder(program) {
+		_, subtype, ok := responseCall(node)
+		if ok {
+			return fmt.Errorf("parallel branch %q %s cannot call response.%s", stepID, surface, subtype)
 		}
 	}
 	return nil

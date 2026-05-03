@@ -12,6 +12,11 @@ version: "1.0.0"
 
 runtime:
   port: "8080"
+  async:
+    runtime_max_in_flight: 256
+  parallel:
+    block_default_max_in_flight: 8
+    default_on_failure: wait_all
 
 observability:
   logging:
@@ -49,10 +54,23 @@ version: "1.0.0"              # Optional: defaults to "latest"
 ```yaml
 runtime:
   port: "8080"                # HTTP server port
+  async:
+    runtime_max_in_flight: 256
+  parallel:
+    block_default_max_in_flight: 8
+    default_on_failure: wait_all
 ```
 
 **Fields:**
 - `port` - HTTP server port (default: "8080")
+- `async.runtime_max_in_flight` - Process-wide async runtime concurrency
+  budget. Top-level async steps, async parallel branches, and synchronous
+  parallel branches all use this shared budget (default: `256`).
+- `parallel.block_default_max_in_flight` - Default per-block concurrency limit
+  for `parallel {}` blocks when `max_in_flight` is omitted (default: `8`).
+- `parallel.default_on_failure` - Default `parallel {}` failure mode when
+  `on_failure` is omitted. Allowed values are `wait_all` and `fail_fast`
+  (default: `wait_all`).
 
 ### Observability Configuration
 

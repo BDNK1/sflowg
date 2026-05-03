@@ -3,6 +3,7 @@ package runtime
 type Flow struct {
 	ID               string           `yaml:"id"`
 	Entrypoint       Entrypoint       `yaml:"entrypoint"`
+	Nodes            []FlowNode       `yaml:"-" json:"-"`
 	Steps            []Step           `yaml:"steps"`
 	Properties       map[string]any   `yaml:"properties"`
 	Return           Return           `yaml:"return"`
@@ -38,7 +39,41 @@ type Step struct {
 	FallbackCompiled   any            `yaml:"-" json:"-"`
 	CompensateBody     string         `yaml:"-"`
 	CompensateCompiled any            `yaml:"-" json:"-"`
+	AllowsNext         bool           `yaml:"-" json:"-"`
 }
+
+type FlowNodeKind string
+
+const (
+	FlowNodeStep     FlowNodeKind = "step"
+	FlowNodeParallel FlowNodeKind = "parallel"
+
+	InternalParallelNodePrefix = "__parallel_"
+)
+
+type FlowNode struct {
+	ID       string         `yaml:"-" json:"-"`
+	Kind     FlowNodeKind   `yaml:"-" json:"-"`
+	Step     *Step          `yaml:"-" json:"-"`
+	Parallel *ParallelBlock `yaml:"-" json:"-"`
+}
+
+type ParallelBlock struct {
+	Options  ParallelOptions `yaml:"-" json:"-"`
+	Branches []Step          `yaml:"-" json:"-"`
+}
+
+type ParallelOptions struct {
+	MaxInFlight int           `yaml:"-" json:"-"`
+	OnFailure   OnFailureMode `yaml:"-" json:"-"`
+}
+
+type OnFailureMode string
+
+const (
+	OnFailureWaitAll  OnFailureMode = "wait_all"
+	OnFailureFailFast OnFailureMode = "fail_fast"
+)
 
 type Return struct {
 	Type string         `yaml:"type"`

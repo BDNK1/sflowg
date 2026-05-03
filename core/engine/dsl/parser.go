@@ -30,8 +30,9 @@ func Parse(source string) (runtime.Flow, error) {
 }
 
 type parser struct {
-	source string
-	pos    int
+	source        string
+	pos           int
+	parallelCount int
 }
 
 func (p *parser) parse() (runtime.Flow, error) {
@@ -63,6 +64,7 @@ func (p *parser) parse() (runtime.Flow, error) {
 				return flow, fmt.Errorf("parsing step: %w", err)
 			}
 			flow.Steps = append(flow.Steps, step)
+			flow.Nodes = append(flow.Nodes, runtime.FlowNode{ID: step.ID, Kind: runtime.FlowNodeStep, Step: &step})
 
 		case keyword == "async":
 			p.readWord()
@@ -75,6 +77,14 @@ func (p *parser) parse() (runtime.Flow, error) {
 				return flow, fmt.Errorf("parsing async step: %w", err)
 			}
 			flow.Steps = append(flow.Steps, step)
+			flow.Nodes = append(flow.Nodes, runtime.FlowNode{ID: step.ID, Kind: runtime.FlowNodeStep, Step: &step})
+
+		case keyword == "parallel":
+			node, err := p.parseParallel()
+			if err != nil {
+				return flow, fmt.Errorf("parsing parallel: %w", err)
+			}
+			flow.Nodes = append(flow.Nodes, node)
 
 		case keyword == "on_error":
 			body, err := p.parseOnError()
@@ -211,7 +221,8 @@ func (p *parser) parseProperties() (map[string]any, error) {
 //	step NAME as subflow.flow_id { map_body }
 //	  fallback { body }    // optional
 //	  compensate { body }  // optional
-func (p *parser) parseStep(async bool) (runtime.Step, error) {
+func (p *parser) parseStep(async bool, inParallel ...bool) (runtime.Step, error) {
+	branch := len(inParallel) > 0 && inParallel[0]
 	p.readWord() // consume "step"
 	p.skipWhitespace()
 
@@ -277,8 +288,8 @@ func (p *parser) parseStep(async bool) (runtime.Step, error) {
 			}
 			step.FallbackBody = fb
 		} else if kw == "compensate" {
-			if async {
-				return step, fmt.Errorf("async step %s cannot have compensate block", name)
+			if async || branch {
+				return step, fmt.Errorf("step %s cannot have compensate block here", name)
 			}
 			p.readWord() // consume "compensate"
 			p.skipWhitespace()
@@ -293,6 +304,114 @@ func (p *parser) parseStep(async bool) (runtime.Step, error) {
 	}
 
 	return step, nil
+}
+
+func (p *parser) parseParallel() (runtime.FlowNode, error) {
+	p.readWord() // consume "parallel"
+	options := runtime.ParallelOptions{}
+	p.skipWhitespace()
+	if p.pos < len(p.source) && p.source[p.pos] == '(' {
+		opts, err := p.readParenBlock()
+		if err != nil {
+			return runtime.FlowNode{}, fmt.Errorf("parsing parallel options: %w", err)
+		}
+		parsed, err := parseParallelOptions(opts)
+		if err != nil {
+			return runtime.FlowNode{}, err
+		}
+		options = parsed
+	}
+
+	p.skipWhitespace()
+	body, err := p.readBracedBlock()
+	if err != nil {
+		return runtime.FlowNode{}, fmt.Errorf("parsing parallel body: %w", err)
+	}
+
+	p.parallelCount++
+	id := fmt.Sprintf("%s%d", runtime.InternalParallelNodePrefix, p.parallelCount)
+	branches, err := parseParallelBranches(body)
+	if err != nil {
+		return runtime.FlowNode{}, err
+	}
+
+	block := &runtime.ParallelBlock{Options: options, Branches: branches}
+	return runtime.FlowNode{
+		ID:       id,
+		Kind:     runtime.FlowNodeParallel,
+		Parallel: block,
+	}, nil
+}
+
+func parseParallelOptions(opts string) (runtime.ParallelOptions, error) {
+	m, err := parseSimpleMap(opts)
+	if err != nil {
+		return runtime.ParallelOptions{}, fmt.Errorf("parsing parallel options: %w", err)
+	}
+	options := runtime.ParallelOptions{}
+	for key, value := range m {
+		switch key {
+		case "max_in_flight":
+			options.MaxInFlight = toInt(value)
+			if options.MaxInFlight <= 0 {
+				return options, fmt.Errorf("parallel max_in_flight must be greater than 0")
+			}
+		case "on_failure":
+			mode := runtime.OnFailureMode(fmt.Sprintf("%v", value))
+			if mode != runtime.OnFailureWaitAll && mode != runtime.OnFailureFailFast {
+				return options, fmt.Errorf("invalid parallel on_failure value %q", value)
+			}
+			options.OnFailure = mode
+		default:
+			return options, fmt.Errorf("unknown parallel option %q", key)
+		}
+	}
+	return options, nil
+}
+
+func parseParallelBranches(body string) ([]runtime.Step, error) {
+	branchParser := &parser{source: body}
+	branches := []runtime.Step{}
+	seen := map[string]struct{}{}
+	branchParser.skipWhitespaceAndComments()
+	for branchParser.pos < len(branchParser.source) {
+		keyword := branchParser.peekKeyword()
+		switch keyword {
+		case "step":
+			step, err := branchParser.parseStep(false, true)
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := seen[step.ID]; exists {
+				return nil, fmt.Errorf("duplicate parallel branch %q", step.ID)
+			}
+			seen[step.ID] = struct{}{}
+			branches = append(branches, step)
+		case "async":
+			branchParser.readWord()
+			branchParser.skipWhitespace()
+			if branchParser.peekKeyword() != "step" {
+				return nil, fmt.Errorf("expected step after async")
+			}
+			step, err := branchParser.parseStep(true, true)
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := seen[step.ID]; exists {
+				return nil, fmt.Errorf("duplicate parallel branch %q", step.ID)
+			}
+			seen[step.ID] = struct{}{}
+			branches = append(branches, step)
+		case "parallel":
+			return nil, fmt.Errorf("nested parallel blocks are not supported")
+		default:
+			if branchParser.pos < len(branchParser.source) {
+				return nil, fmt.Errorf("unexpected parallel body token at position %d: %q", branchParser.pos, branchParser.source[branchParser.pos:min(branchParser.pos+20, len(branchParser.source))])
+			}
+		}
+		branchParser.skipWhitespaceAndComments()
+	}
+	return branches, nil
 }
 
 func validateStepHeaderCallTarget(target string) error {
@@ -505,7 +624,7 @@ func (p *parser) parseReturn() (runtime.Return, error) {
 				break
 			}
 			next := p.peekKeyword()
-			if next == "step" || next == "return" || next == "properties" || next == "on_error" || strings.HasPrefix(next, "entrypoint") {
+			if next == "step" || next == "async" || next == "parallel" || next == "return" || next == "properties" || next == "on_error" || strings.HasPrefix(next, "entrypoint") {
 				p.pos = saved
 				break
 			}

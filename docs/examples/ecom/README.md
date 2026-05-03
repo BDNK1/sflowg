@@ -11,6 +11,7 @@ This example uses `engine: dsl` in `flow-config.yaml`. Flows are written in `.fl
 - `response.json(...)` is called directly (no separate return type dispatch)
 - Plugin calls use function syntax and header-call sugar, with multi-line SQL in backtick strings
 - `create_order` starts currency resolution as an `async step` and awaits it when inserting the order
+- `get_order_summary` uses `parallel {}` to fan out independent PostgreSQL reads and join the branch results
 - `pay_order` delegates payment creation to the `stripe-integration` flow via `http.request(...)`
 - `cancel_stale_unpaid_orders` runs every 5 minutes via `entrypoint.cron`
 
@@ -74,6 +75,7 @@ dashboards every 30 seconds.
 |--------|------|-------------|
 | POST | `/api/orders` | Create a new order |
 | GET | `/api/orders/:id` | Get order details |
+| GET | `/api/orders/:id/summary` | Get order summary from parallel read branches |
 | POST | `/api/orders/:id/pay` | Create payment via stripe-integration flow |
 | POST | `/api/orders/:id/cancel` | Cancel order |
 | POST | `/internal/payments/stripe-webhook` | Internal callback for Stripe webhook status sync |
@@ -91,6 +93,9 @@ curl -s -X POST http://localhost:8080/api/orders \
 
 # Get the order
 curl -s http://localhost:8080/api/orders/1
+
+# Get the order summary assembled by parallel branches
+curl -s http://localhost:8080/api/orders/1/summary
 
 # Create payment via stripe-integration for it
 curl -s -X POST http://localhost:8080/api/orders/1/pay

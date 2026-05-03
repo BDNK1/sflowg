@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -44,77 +45,11 @@ func NewExecutor(evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepR
 // The *Execution carries its own context (set by the HTTP handler with any
 // flow-level timeout), so no separate ctx parameter is needed.
 func (e *Executor) ExecuteSteps(execution *Execution) error {
-	log := execution.Logger()
-	nextStep := ""
-	flowFinalized := make(chan struct{})
-	defer close(flowFinalized)
-	asyncWatcherStarted := false
+	runCtx := &executionRunContext{flowFinalized: make(chan struct{})}
+	defer close(runCtx.flowFinalized)
 
-	for _, s := range execution.Flow.Steps {
-		stepExec := execution.WithActiveStep(s.ID)
-		// Check context before starting each step.
-		if err := stepExec.Err(); err != nil {
-			fe := e.flowError(execution, s.ID, err)
-			return e.handleFailure(execution, fe)
-		}
-
-		// Step sequencing / branching.
-		if nextStep != "" {
-			if s.ID != nextStep {
-				log.Info(fmt.Sprintf("Skipping step: %s", s.ID))
-				continue
-			}
-			nextStep = ""
-			log.Info(fmt.Sprintf("Resuming flow at step: %s", s.ID))
-		}
-
-		// Step condition guard.
-		if skip, err := e.evaluateCondition(stepExec, s); err != nil {
-			fe := toFlowError(err, s.ID, 0)
-			return e.handleFailure(execution, fe)
-		} else if skip {
-			log.Info(fmt.Sprintf("Skipping step (condition false): %s", s.ID))
-			if s.Async {
-				execution.AsyncTasks().Register(s.ID, NewCompletedAsyncTask(s.ID, nil, nil))
-			}
-			continue
-		}
-
-		if s.Async {
-			if !asyncWatcherStarted {
-				asyncWatcherStarted = true
-				e.startAsyncCancellationWatcher(execution, flowFinalized)
-			}
-			if fe := e.spawnAsyncStep(execution, s, flowFinalized); fe != nil {
-				return e.handleFailure(execution, fe)
-			}
-			continue
-		}
-
-		output, fe, path := e.runStepPipeline(stepExec, s)
-		if fe != nil {
-			return e.handleFailure(execution, fe)
-		}
-
-		applyStepOutput(execution, s.ID, output)
-		if s.CompensateBody != "" {
-			execution.State().AppendCompensation(CompensationEntry{
-				StepID:   s.ID,
-				Body:     s.CompensateBody,
-				Path:     path,
-				Compiled: s.CompensateCompiled,
-			})
-		}
-
-		// Early exit if a step set a response.
-		if execution.State().Response() != nil {
-			log.Info(fmt.Sprintf("Response produced at step: %s", s.ID))
-			break
-		}
-
-		if output.Next != "" {
-			nextStep = output.Next
-		}
+	if err := e.executeNodes(execution, NormalizeFlowNodes(execution.Flow), runCtx); err != nil {
+		return err
 	}
 
 	if err := validateExecutionResponse(execution); err != nil {
@@ -128,6 +63,147 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 	}
 
 	return nil
+}
+
+type executionRunContext struct {
+	flowFinalized    chan struct{}
+	asyncWatcherOnce sync.Once
+}
+
+func (rc *executionRunContext) ensureAsyncWatcher(e *Executor, execution *Execution) {
+	rc.asyncWatcherOnce.Do(func() {
+		e.startAsyncCancellationWatcher(execution, rc.flowFinalized)
+	})
+}
+
+type nodeExecutionResult struct {
+	Next string
+}
+
+func (e *Executor) executeNodes(execution *Execution, nodes []FlowNode, runCtx *executionRunContext) error {
+	nodeIndex, err := buildTopLevelNodeIndex(nodes)
+	if err != nil {
+		return e.handleFailure(execution, &FlowError{
+			Type:    ErrorTypePermanent,
+			Code:    string(ErrorCodeRuntimeError),
+			Message: err.Error(),
+		})
+	}
+
+	for pc := 0; pc < len(nodes); {
+		node := nodes[pc]
+		if err := execution.Err(); err != nil {
+			return e.handleFailure(execution, e.flowError(execution, node.ID, err))
+		}
+
+		result, fe := e.executeNode(execution, node, runCtx)
+		if fe != nil {
+			return e.handleFailure(execution, fe)
+		}
+		if execution.State().Response() != nil {
+			execution.Logger().Info(fmt.Sprintf("Response produced at node: %s", node.ID))
+			break
+		}
+		if result.Next != "" {
+			target, ok := nodeIndex[result.Next]
+			if !ok {
+				return e.handleFailure(execution, runtimeErrorForInvalidNext(node.ID, result.Next))
+			}
+			if target <= pc {
+				return e.handleFailure(execution, runtimeErrorForInvalidNext(node.ID, result.Next))
+			}
+			pc = target
+			continue
+		}
+		pc++
+	}
+	return nil
+}
+
+func buildTopLevelNodeIndex(nodes []FlowNode) (map[string]int, error) {
+	index := make(map[string]int, len(nodes))
+	for i, node := range nodes {
+		if node.ID == "" {
+			return nil, fmt.Errorf("top-level flow node at index %d is missing an id", i)
+		}
+		if _, exists := index[node.ID]; exists {
+			return nil, fmt.Errorf("duplicate top-level flow node id %q", node.ID)
+		}
+		index[node.ID] = i
+	}
+	return index, nil
+}
+
+func (e *Executor) executeNode(execution *Execution, node FlowNode, runCtx *executionRunContext) (nodeExecutionResult, *FlowError) {
+	switch node.Kind {
+	case FlowNodeStep:
+		if node.Step == nil {
+			return nodeExecutionResult{}, &FlowError{Type: ErrorTypePermanent, Code: string(ErrorCodeRuntimeError), Message: fmt.Sprintf("step node %q has no step", node.ID), Step: node.ID}
+		}
+		return e.executeStepNode(execution, *node.Step, runCtx)
+	case FlowNodeParallel:
+		if node.Parallel == nil {
+			return nodeExecutionResult{}, &FlowError{Type: ErrorTypePermanent, Code: string(ErrorCodeRuntimeError), Message: fmt.Sprintf("parallel node %q has no block", node.ID), Step: node.ID}
+		}
+		return nodeExecutionResult{}, e.executeParallelBlock(execution, node, *node.Parallel, runCtx)
+	default:
+		return nodeExecutionResult{}, &FlowError{Type: ErrorTypePermanent, Code: string(ErrorCodeRuntimeError), Message: fmt.Sprintf("unsupported flow node kind %q", node.Kind), Step: node.ID}
+	}
+}
+
+func (e *Executor) executeStepNode(execution *Execution, step Step, runCtx *executionRunContext) (nodeExecutionResult, *FlowError) {
+	stepExec := execution.WithActiveStep(step.ID)
+	if skip, err := e.evaluateCondition(stepExec, step); err != nil {
+		return nodeExecutionResult{}, toFlowError(err, step.ID, 0)
+	} else if skip {
+		execution.Logger().Info(fmt.Sprintf("Skipping step (condition false): %s", step.ID))
+		if step.Async {
+			execution.AsyncTasks().Register(step.ID, NewCompletedAsyncTask(step.ID, nil, nil))
+		}
+		return nodeExecutionResult{}, nil
+	}
+
+	if step.Async {
+		runCtx.ensureAsyncWatcher(e, execution)
+		return nodeExecutionResult{}, e.spawnAsyncStep(execution, step, runCtx.flowFinalized)
+	}
+
+	output, fe, path := e.runStepPipeline(stepExec, step)
+	if fe != nil {
+		return nodeExecutionResult{}, fe
+	}
+	if output.Next != "" && !step.AllowsNext {
+		return nodeExecutionResult{}, runtimeErrorForUserNext(step.ID)
+	}
+
+	applyStepOutput(execution, step.ID, output)
+	if step.CompensateBody != "" {
+		execution.State().AppendCompensation(CompensationEntry{
+			StepID:   step.ID,
+			Body:     step.CompensateBody,
+			Path:     path,
+			Compiled: step.CompensateCompiled,
+		})
+	}
+	return nodeExecutionResult{Next: output.Next}, nil
+}
+
+func runtimeErrorForInvalidNext(stepID string, next string) *FlowError {
+	return &FlowError{
+		Type:    ErrorTypePermanent,
+		Code:    string(ErrorCodeRuntimeError),
+		Message: fmt.Sprintf("invalid __next target %q from %q", next, stepID),
+		Step:    stepID,
+	}
+}
+
+func runtimeErrorForUserNext(stepID string) *FlowError {
+	return &FlowError{
+		Type:    ErrorTypePermanent,
+		Code:    string(ErrorCodeRuntimeError),
+		Message: "user-authored __next is not allowed",
+		Step:    stepID,
+	}
 }
 
 func (e *Executor) runStepPipeline(execution *Execution, step Step) (StepOutput, *FlowError, SuccessPath) {

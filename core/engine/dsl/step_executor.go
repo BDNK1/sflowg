@@ -81,6 +81,14 @@ func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execu
 	if result != nil && execution.State().Response() == nil {
 		if m, ok := result.(map[string]any); ok {
 			if n, exists := m["__next"]; exists {
+				if !step.AllowsNext {
+					return "", &runtime.FlowError{
+						Type:    runtime.ErrorTypePermanent,
+						Code:    string(runtime.ErrorCodeRuntimeError),
+						Message: "user-authored __next is not allowed",
+						Step:    step.ID,
+					}
+				}
 				next = fmt.Sprintf("%v", n)
 				delete(m, "__next")
 			}

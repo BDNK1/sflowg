@@ -36,10 +36,12 @@ func (l *FlowLoader) Load(filePath string) (runtime.Flow, error) {
 
 	// Convert return body to a final step (return is just an unconditional step)
 	if flow.Return.Body != "" {
-		flow.Steps = append(flow.Steps, runtime.Step{
+		step := runtime.Step{
 			ID:   "__return",
 			Body: flow.Return.Body,
-		})
+		}
+		flow.Steps = append(flow.Steps, step)
+		flow.Nodes = append(flow.Nodes, runtime.FlowNode{ID: step.ID, Kind: runtime.FlowNodeStep, Step: &step})
 	}
 
 	return flow, nil

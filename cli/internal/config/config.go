@@ -22,15 +22,21 @@ type FlowConfig struct {
 
 // RuntimeConfig represents runtime configuration
 type RuntimeConfig struct {
-	Port    string             `yaml:"port"`              // Optional: HTTP server port, defaults to "8080"
-	Version string             `yaml:"version,omitempty"` // Optional: runtime module version, defaults to "latest"
-	Engine  string             `yaml:"engine,omitempty"`  // Optional: only "dsl" is supported
-	Kafka   KafkaRuntimeConfig `yaml:"kafka,omitempty"`
-	Async   AsyncRuntimeConfig `yaml:"async,omitempty"`
+	Port     string                `yaml:"port"`              // Optional: HTTP server port, defaults to "8080"
+	Version  string                `yaml:"version,omitempty"` // Optional: runtime module version, defaults to "latest"
+	Engine   string                `yaml:"engine,omitempty"`  // Optional: only "dsl" is supported
+	Kafka    KafkaRuntimeConfig    `yaml:"kafka,omitempty"`
+	Async    AsyncRuntimeConfig    `yaml:"async,omitempty"`
+	Parallel ParallelRuntimeConfig `yaml:"parallel,omitempty"`
 }
 
 type AsyncRuntimeConfig struct {
 	RuntimeMaxInFlight int `yaml:"runtime_max_in_flight,omitempty"`
+}
+
+type ParallelRuntimeConfig struct {
+	BlockDefaultMaxInFlight int    `yaml:"block_default_max_in_flight,omitempty"`
+	DefaultOnFailure        string `yaml:"default_on_failure,omitempty"`
 }
 
 type KafkaRuntimeConfig struct {
@@ -126,6 +132,14 @@ func (c *FlowConfig) Validate() error {
 	if c.Runtime.Async.RuntimeMaxInFlight < 0 {
 		return fmt.Errorf("runtime.async.runtime_max_in_flight must be greater than 0")
 	}
+	if c.Runtime.Parallel.BlockDefaultMaxInFlight < 0 {
+		return fmt.Errorf("runtime.parallel.block_default_max_in_flight must be greater than 0")
+	}
+	if c.Runtime.Parallel.DefaultOnFailure != "" &&
+		c.Runtime.Parallel.DefaultOnFailure != "wait_all" &&
+		c.Runtime.Parallel.DefaultOnFailure != "fail_fast" {
+		return fmt.Errorf("runtime.parallel.default_on_failure must be wait_all or fail_fast")
+	}
 
 	if err := bootstrap.ValidateObservabilityConfig(c.Observability); err != nil {
 		return fmt.Errorf("invalid observability config: %w", err)
@@ -159,6 +173,12 @@ func (c *FlowConfig) ApplyDefaults(projectDir string) error {
 	}
 	if c.Runtime.Async.RuntimeMaxInFlight == 0 {
 		c.Runtime.Async.RuntimeMaxInFlight = 256
+	}
+	if c.Runtime.Parallel.BlockDefaultMaxInFlight == 0 {
+		c.Runtime.Parallel.BlockDefaultMaxInFlight = 8
+	}
+	if c.Runtime.Parallel.DefaultOnFailure == "" {
+		c.Runtime.Parallel.DefaultOnFailure = "wait_all"
 	}
 	for name, broker := range c.Runtime.Kafka.Brokers {
 		if broker.NackRedeliveryDelayMS == 0 {

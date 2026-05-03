@@ -51,6 +51,7 @@ Top-level blocks:
 - `entrypoint.http`, `entrypoint.kafka`, `entrypoint.flow`, or `entrypoint.cron`
 - `properties`
 - `step`
+- `parallel`
 - `on_error`
 - `return`
 
@@ -137,6 +138,68 @@ postgres.get({ query: "...", params: [...] })
 postgres.exec({ query: "...", params: [...] })
 http.request({ method: "POST", url: properties.url, body: request.body })
 ```
+
+## Parallel Blocks
+
+Use `parallel { ... }` to run independent branch steps concurrently, then merge
+successful branch results back into the parent flow state.
+
+```sflowg
+parallel(max_in_flight: 8, on_failure: "wait_all") {
+    step enrich_customer {
+        { tier: "gold" }
+    }
+
+    async step prefetch_inventory {
+        http.request({
+            method: "GET",
+            url: properties.inventory_url,
+        })
+    }
+
+    step score_risk(retry: { max_attempts: 3 }) {
+        { level: "low" }
+    } fallback {
+        { level: "unknown" }
+    }
+}
+
+step decide {
+    {
+        tier: enrich_customer.tier,
+        inventory: prefetch_inventory.body,
+        risk: score_risk.level,
+    }
+}
+```
+
+Options:
+
+- `max_in_flight`: maximum branches running in this block at once. Defaults to
+  `runtime.parallel.block_default_max_in_flight` or `8`.
+- `on_failure`: `"wait_all"` waits for every branch and merges successful
+  outputs; `"fail_fast"` cancels not-yet-started or in-flight branch work when
+  the first branch fails. Defaults to `wait_all`.
+
+Rules:
+
+- Branches are `step` or `async step` only. Nested `parallel` and `compensate`
+  blocks are not supported in parallel branches.
+- Branch IDs are normal result IDs and must be globally unique across the flow.
+- Branches start from the same parent-state snapshot. A branch cannot read a
+  peer branch result, including peer async branch futures.
+- Branches cannot call `response.*` and cannot set `__next`.
+- A skipped async branch registers a completed nil future, matching top-level
+  async step behavior.
+- An async branch completes the parallel branch once the async task is
+  registered. Downstream steps can await or read it by branch ID.
+
+Failure shape:
+
+- One failed branch returns the original branch `FlowError`.
+- Multiple failed branches return permanent `PARALLEL_FAILURE` with
+  `failures[]` entries ordered by branch declaration order. Successful branch
+  outputs are still merged for `wait_all`.
 
 ### Multi-Line Strings and Query Parameters
 

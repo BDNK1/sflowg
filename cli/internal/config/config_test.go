@@ -29,6 +29,12 @@ func TestFlowConfigApplyDefaults_UsesRuntimeObservabilityDefaults(t *testing.T) 
 	if cfg.Runtime.Engine != "dsl" {
 		t.Fatalf("expected default runtime engine dsl, got %q", cfg.Runtime.Engine)
 	}
+	if cfg.Runtime.Parallel.BlockDefaultMaxInFlight != 8 {
+		t.Fatalf("expected default parallel max in flight 8, got %d", cfg.Runtime.Parallel.BlockDefaultMaxInFlight)
+	}
+	if cfg.Runtime.Parallel.DefaultOnFailure != "wait_all" {
+		t.Fatalf("expected default parallel on failure wait_all, got %q", cfg.Runtime.Parallel.DefaultOnFailure)
+	}
 }
 
 func TestFlowConfigValidate_UsesRuntimeObservabilityValidation(t *testing.T) {
@@ -71,6 +77,21 @@ func TestFlowConfigValidate_AllowsNoPlugins(t *testing.T) {
 	cfg := FlowConfig{}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate failed without plugins: %v", err)
+	}
+}
+
+func TestFlowConfigValidate_RejectsInvalidParallelConfig(t *testing.T) {
+	cfg := FlowConfig{
+		Runtime: RuntimeConfig{
+			Parallel: ParallelRuntimeConfig{DefaultOnFailure: "bad"},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected parallel validation error")
+	}
+	if !strings.Contains(err.Error(), "runtime.parallel.default_on_failure") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

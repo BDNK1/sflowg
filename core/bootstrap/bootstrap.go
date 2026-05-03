@@ -29,6 +29,8 @@ type UserMetricsConfig = observability.UserMetricsConfig
 type UserMetricDecl = observability.UserMetricDecl
 type UserMetricLabel = observability.UserMetricLabel
 type AsyncConfig = runtime.AsyncConfig
+type ParallelConfig = runtime.ParallelConfig
+type RuntimeConfig = runtime.RuntimeConfig
 
 // Config contains the project-specific inputs needed to assemble and run the
 // standard runtime stack.
@@ -38,6 +40,7 @@ type Config struct {
 	GlobalProperties map[string]any
 	Observability    ObservabilityConfig
 	Async            AsyncConfig
+	Parallel         ParallelConfig
 	RegisterPlugins  func(*Container) error
 	Transports       []Transport
 	ValidateFlows    bool
@@ -80,7 +83,10 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	compiler := dslengine.NewCompiler()
 	newValueStore := func() runtime.ValueStore { return runtime.NewValueStore() }
 
-	app := runtime.NewApp(container, loader, evaluator, stepExecutor, stepRunner, compiler, newValueStore, cfg.Async)
+	app := runtime.NewApp(container, loader, evaluator, stepExecutor, stepRunner, compiler, newValueStore, runtime.RuntimeConfig{
+		Async:    cfg.Async,
+		Parallel: cfg.Parallel,
+	})
 	stepExecutor.SetSubflowInvoker(app)
 	if cfg.ValidateFlows {
 		app.SetFlowValidator(dslengine.NewFlowValidator())

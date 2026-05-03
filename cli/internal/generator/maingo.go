@@ -26,6 +26,7 @@ type MainGoGenerator struct {
 	UseCron           bool
 	Kafka             config.KafkaRuntimeConfig
 	Async             config.AsyncRuntimeConfig
+	Parallel          config.ParallelRuntimeConfig
 }
 
 // NewMainGoGenerator creates a new main.go generator
@@ -58,8 +59,12 @@ func (g *MainGoGenerator) EnableKafka(cfg config.KafkaRuntimeConfig) {
 	g.Kafka = cfg
 }
 
-func (g *MainGoGenerator) EnableAsync(cfg config.AsyncRuntimeConfig) {
+func (g *MainGoGenerator) SetAsyncConfig(cfg config.AsyncRuntimeConfig) {
 	g.Async = cfg
+}
+
+func (g *MainGoGenerator) SetParallelConfig(cfg config.ParallelRuntimeConfig) {
+	g.Parallel = cfg
 }
 
 func (g *MainGoGenerator) EnableCron() {

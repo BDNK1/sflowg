@@ -97,9 +97,10 @@ func TestRunStep_ResponseSet(t *testing.T) {
 func TestRunStep_NextCanonical(t *testing.T) {
 	runner := NewLocalStepRunner(NewStepExecutor())
 	output, err := runner.RunStep(context.Background(), newRunnerExecution(), runtime.StepInput{
-		StepID: "route",
-		Body:   `{__next: "finish", ok: true}`,
-		Input:  map[string]any{},
+		StepID:     "route",
+		Body:       `{__next: "finish", ok: true}`,
+		Input:      map[string]any{},
+		AllowsNext: true,
 	})
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)

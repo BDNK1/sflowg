@@ -1,0 +1,94 @@
+// Get an order summary assembled from independent parallel reads.
+
+entrypoint.http {
+    method: GET
+    path: /api/orders/:id/summary
+    pathVariables: {
+        id: { type: integer, required: true, minimum: 1 }
+    }
+    timeout: 5000
+}
+
+parallel(max_in_flight: 3, on_failure: "wait_all") {
+    step summary_order as postgres.get {
+        query: `
+            SELECT id, customer_email, customer_name, amount_cents, currency,
+                   status, stripe_payment_intent_id, created_at, paid_at, canceled_at
+            FROM orders
+            WHERE id = $1
+        `
+        params: [request.pathVariables.id]
+    }
+
+    async step summary_customer_history as postgres.get {
+        query: `
+            SELECT COUNT(*) AS total_orders,
+                   COALESCE(SUM(amount_cents), 0) AS lifetime_amount_cents,
+                   COUNT(*) FILTER (WHERE status = 'paid') AS paid_orders,
+                   COUNT(*) FILTER (WHERE status = 'canceled') AS canceled_orders
+            FROM orders
+            WHERE customer_email = (
+                SELECT customer_email
+                FROM orders
+                WHERE id = $1
+            )
+        `
+        params: [request.pathVariables.id]
+    }
+
+    step summary_status_rollup as postgres.get {
+        query: `
+            SELECT status, COUNT(*) AS count
+            FROM orders
+            WHERE status = (
+                SELECT status
+                FROM orders
+                WHERE id = $1
+            )
+            GROUP BY status
+        `
+        params: [request.pathVariables.id]
+    }
+}
+
+step summary_not_found(condition: summary_order.found == false) {
+    response.json({
+        status: 404,
+        body: { error: "order not found" }
+    })
+}
+
+return response.json({
+    status: 200,
+    body: {
+        order: summary_order.row,
+        customer_history: summary_customer_history.row,
+        status_rollup: summary_status_rollup.row,
+        parallel: {
+            max_in_flight: 3,
+            on_failure: "wait_all",
+            branches: ["summary_order", "summary_customer_history", "summary_status_rollup"]
+        }
+    }
+})
+
+on_error {
+    if (error.code == "PARALLEL_FAILURE") {
+        response.json({
+            status: 500,
+            body: {
+                error: "parallel summary failed",
+                failures: error.failures
+            }
+        })
+    } else {
+        response.json({
+            status: 500,
+            body: {
+                error: "failed to build order summary",
+                code: error.code,
+                details: error.message
+            }
+        })
+    }
+}

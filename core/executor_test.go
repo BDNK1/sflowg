@@ -242,7 +242,7 @@ func TestExecuteSteps_NextDrivesBranching(t *testing.T) {
 	}
 	flow := &Flow{
 		ID:    "payments",
-		Steps: []Step{{ID: "start"}, {ID: "middle"}, {ID: "finish"}},
+		Steps: []Step{{ID: "start", AllowsNext: true}, {ID: "middle"}, {ID: "finish"}},
 	}
 	exec, executor := newExecutorTestHarness(t, flow, stepExecutor)
 

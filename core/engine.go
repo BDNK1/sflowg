@@ -50,13 +50,14 @@ type StepExecutor interface {
 
 // StepInput is the canonical input passed to a single isolated step execution.
 type StepInput struct {
-	StepID   string         `json:"step_id"`
-	Body     string         `json:"body"`
-	Input    map[string]any `json:"input"`
-	ExtraEnv map[string]any `json:"extra_env,omitempty"`
-	Timeout  int            `json:"timeout,omitempty"`
-	Path     SuccessPath    `json:"path,omitempty"`
-	Compiled any            `json:"-"`
+	StepID     string         `json:"step_id"`
+	Body       string         `json:"body"`
+	Input      map[string]any `json:"input"`
+	ExtraEnv   map[string]any `json:"extra_env,omitempty"`
+	Timeout    int            `json:"timeout,omitempty"`
+	Path       SuccessPath    `json:"path,omitempty"`
+	Compiled   any            `json:"-"`
+	AllowsNext bool           `json:"-"`
 }
 
 // StepOutput is the canonical output produced by a single isolated step execution.
@@ -96,13 +97,14 @@ func BuildStepInputWithExtra(execution *Execution, step Step, path SuccessPath, 
 	}
 
 	return StepInput{
-		StepID:   step.ID,
-		Body:     step.Body,
-		Input:    input,
-		ExtraEnv: extra,
-		Timeout:  step.Timeout,
-		Path:     path,
-		Compiled: step.Compiled,
+		StepID:     step.ID,
+		Body:       step.Body,
+		Input:      input,
+		ExtraEnv:   extra,
+		Timeout:    step.Timeout,
+		Path:       path,
+		Compiled:   step.Compiled,
+		AllowsNext: step.AllowsNext,
 	}, nil
 }
 

@@ -20,6 +20,15 @@ HTTP 200
 jsonpath "$.order.id" == {{order_id}}
 jsonpath "$.order.customer_email" == "ecom-e2e-alice-{{run_id}}@example.com"
 
+GET {{base_url}}/api/orders/{{order_id}}/summary
+HTTP 200
+[Asserts]
+jsonpath "$.order.id" == {{order_id}}
+jsonpath "$.customer_history.total_orders" == 1
+jsonpath "$.customer_history.lifetime_amount_cents" == "14999"
+jsonpath "$.status_rollup.status" == "pending"
+jsonpath "$.parallel.on_failure" == "wait_all"
+
 POST {{base_url}}/api/orders
 Content-Type: application/json
 {
@@ -58,7 +67,20 @@ HTTP 200
 jsonpath "$.order.id" == {{order_id}}
 jsonpath "$.order.status" == "paid"
 
+GET {{base_url}}/api/orders/{{order_id}}/summary
+HTTP 200
+[Asserts]
+jsonpath "$.order.id" == {{order_id}}
+jsonpath "$.order.status" == "paid"
+jsonpath "$.customer_history.paid_orders" == 1
+jsonpath "$.status_rollup.status" == "paid"
+
 GET {{base_url}}/api/orders/999999999
+HTTP 404
+[Asserts]
+jsonpath "$.error" == "order not found"
+
+GET {{base_url}}/api/orders/999999999/summary
 HTTP 404
 [Asserts]
 jsonpath "$.error" == "order not found"

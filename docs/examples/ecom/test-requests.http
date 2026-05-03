@@ -12,6 +12,9 @@ Content-Type: application/json
 ### Get an order by ID
 GET http://localhost:8080/api/orders/1
 
+### Get an order summary via parallel branches
+GET http://localhost:8080/api/orders/1/summary
+
 ### Create payment via stripe-integration for an order
 POST http://localhost:8080/api/orders/1/pay
 
