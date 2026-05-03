@@ -27,6 +27,7 @@ type App struct {
 	newValueStore    func() ValueStore
 	transports       *TransportRegistry
 	flowValidator    FlowSetValidator
+	asyncConfig      AsyncConfig
 }
 
 type preparedFlows struct {
@@ -37,7 +38,12 @@ type preparedFlows struct {
 // NewApp creates a new application with the given container and engine components.
 // Passing a non-nil compiler enables compiled DSL mode; nil keeps interpreted DSL mode.
 // The container must be initialized with a logger before calling NewApp.
-func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepRunner StepRunner, compiler FlowCompiler, newValueStore func() ValueStore) *App {
+func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepRunner StepRunner, compiler FlowCompiler, newValueStore func() ValueStore, asyncConfigs ...AsyncConfig) *App {
+	asyncConfig := AsyncConfig{}
+	if len(asyncConfigs) > 0 {
+		asyncConfig = asyncConfigs[0]
+	}
+	container.SetAsyncRuntime(NewAsyncRuntime(asyncConfig))
 	return &App{
 		Container:        container,
 		Flows:            make(map[string]Flow),
@@ -49,6 +55,7 @@ func NewApp(container *Container, loader FlowLoader, evaluator ExpressionEvaluat
 		compiler:         compiler,
 		newValueStore:    newValueStore,
 		transports:       NewTransportRegistry(),
+		asyncConfig:      asyncConfig,
 	}
 }
 

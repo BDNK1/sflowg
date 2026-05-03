@@ -23,6 +23,7 @@ func (c *Compiler) CompileFlow(ctx context.Context, flow *runtime.Flow, containe
 	contract := responseContractForFlow(flow)
 	frameworkEnv["response"] = buildResponseTemplateModule(contract)
 	knownStoreKeys := collectKnownStoreKeys(flow)
+	asyncStepIndexes := collectAsyncStepIndexes(flow)
 
 	for i := range flow.Steps {
 		step := &flow.Steps[i]
@@ -33,6 +34,9 @@ func (c *Compiler) CompileFlow(ctx context.Context, flow *runtime.Flow, containe
 		}
 		step.StoreKeys = storeKeys
 		step.Compiled = compiled
+		if err := validateNoForwardAsyncRefs(step.ID, i, "body", storeKeys, asyncStepIndexes); err != nil {
+			return err
+		}
 
 		fallbackStoreKeys, fallbackCompiled, err := c.compileBody(ctx, step.FallbackBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
 		if err != nil {
@@ -40,12 +44,39 @@ func (c *Compiler) CompileFlow(ctx context.Context, flow *runtime.Flow, containe
 		}
 		step.FallbackStoreKeys = fallbackStoreKeys
 		step.FallbackCompiled = fallbackCompiled
+		if err := validateNoForwardAsyncRefs(step.ID, i, "fallback", fallbackStoreKeys, asyncStepIndexes); err != nil {
+			return err
+		}
 
-		_, compensateCompiled, err := c.compileBody(ctx, step.CompensateBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
+		compensateStoreKeys, compensateCompiled, err := c.compileBody(ctx, step.CompensateBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
 		if err != nil {
 			return fmt.Errorf("compile compensation for step %s: %w", step.ID, err)
 		}
 		step.CompensateCompiled = compensateCompiled
+		if err := validateNoForwardAsyncRefs(step.ID, i, "compensate", compensateStoreKeys, asyncStepIndexes); err != nil {
+			return err
+		}
+
+		conditionStoreKeys, err := extractStoreKeys(step.Condition, knownStoreKeys, frameworkKeys)
+		if err != nil {
+			return fmt.Errorf("compile condition for step %s: %w", step.ID, err)
+		}
+		if err := validateNoForwardAsyncRefs(step.ID, i, "condition", conditionStoreKeys, asyncStepIndexes); err != nil {
+			return err
+		}
+
+		var retryStoreKeys []string
+		if step.Retry != nil {
+			retryStoreKeys, err = extractStoreKeys(step.Retry.When, knownStoreKeys, frameworkKeys)
+			if err != nil {
+				return fmt.Errorf("compile retry for step %s: %w", step.ID, err)
+			}
+			if err := validateNoForwardAsyncRefs(step.ID, i, "retry", retryStoreKeys, asyncStepIndexes); err != nil {
+				return err
+			}
+		}
+
+		step.AsyncDeps = intersectAsyncDeps(asyncStepIndexes, storeKeys, fallbackStoreKeys, compensateStoreKeys, conditionStoreKeys, retryStoreKeys)
 	}
 
 	_, onErrorCompiled, err := c.compileBody(ctx, flow.OnErrorBody, knownStoreKeys, frameworkKeys, frameworkEnv, contract)
@@ -53,6 +84,14 @@ func (c *Compiler) CompileFlow(ctx context.Context, flow *runtime.Flow, containe
 		return fmt.Errorf("compile on_error: %w", err)
 	}
 	flow.OnErrorCompiled = onErrorCompiled
+
+	returnStoreKeys, err := extractStoreKeys(flow.Return.Body, knownStoreKeys, frameworkKeys)
+	if err != nil {
+		return fmt.Errorf("compile return: %w", err)
+	}
+	if err := validateNoForwardAsyncRefs("__return", len(flow.Steps), "return", returnStoreKeys, asyncStepIndexes); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -88,6 +127,60 @@ func (c *Compiler) compileBody(
 	}
 
 	return storeKeys, code, nil
+}
+
+func extractStoreKeys(source string, knownStoreKeys []string, frameworkKeys map[string]struct{}) ([]string, error) {
+	storeKeys, err := ExtractStoreKeys(source, knownStoreKeys, frameworkKeys)
+	if err != nil {
+		return nil, err
+	}
+	if storeKeys == nil {
+		return []string{}, nil
+	}
+	return storeKeys, nil
+}
+
+func collectAsyncStepIndexes(flow *runtime.Flow) map[string]int {
+	indexes := make(map[string]int)
+	for i, step := range flow.Steps {
+		if step.Async {
+			indexes[step.ID] = i
+		}
+	}
+	return indexes
+}
+
+func validateNoForwardAsyncRefs(consumer string, consumerIndex int, surface string, storeKeys []string, asyncIndexes map[string]int) error {
+	for _, key := range storeKeys {
+		asyncIndex, ok := asyncIndexes[key]
+		if !ok {
+			continue
+		}
+		if asyncIndex >= consumerIndex {
+			return fmt.Errorf("step %q %s references async step %q before it is spawned", consumer, surface, key)
+		}
+	}
+	return nil
+}
+
+func intersectAsyncDeps(asyncIndexes map[string]int, groups ...[]string) []string {
+	seen := make(map[string]struct{})
+	for _, group := range groups {
+		for _, key := range group {
+			if _, ok := asyncIndexes[key]; ok {
+				seen[key] = struct{}{}
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	deps := make([]string, 0, len(seen))
+	for key := range seen {
+		deps = append(deps, key)
+	}
+	sort.Strings(deps)
+	return deps
 }
 
 func collectKnownStoreKeys(flow *runtime.Flow) []string {

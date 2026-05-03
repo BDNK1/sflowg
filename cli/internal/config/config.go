@@ -26,6 +26,11 @@ type RuntimeConfig struct {
 	Version string             `yaml:"version,omitempty"` // Optional: runtime module version, defaults to "latest"
 	Engine  string             `yaml:"engine,omitempty"`  // Optional: only "dsl" is supported
 	Kafka   KafkaRuntimeConfig `yaml:"kafka,omitempty"`
+	Async   AsyncRuntimeConfig `yaml:"async,omitempty"`
+}
+
+type AsyncRuntimeConfig struct {
+	RuntimeMaxInFlight int `yaml:"runtime_max_in_flight,omitempty"`
 }
 
 type KafkaRuntimeConfig struct {
@@ -118,6 +123,9 @@ func (c *FlowConfig) Validate() error {
 	if c.Runtime.Engine != "" && c.Runtime.Engine != "dsl" {
 		return fmt.Errorf("runtime.engine must be 'dsl', got %q", c.Runtime.Engine)
 	}
+	if c.Runtime.Async.RuntimeMaxInFlight < 0 {
+		return fmt.Errorf("runtime.async.runtime_max_in_flight must be greater than 0")
+	}
 
 	if err := bootstrap.ValidateObservabilityConfig(c.Observability); err != nil {
 		return fmt.Errorf("invalid observability config: %w", err)
@@ -148,6 +156,9 @@ func (c *FlowConfig) ApplyDefaults(projectDir string) error {
 	}
 	if c.Runtime.Engine == "" {
 		c.Runtime.Engine = "dsl"
+	}
+	if c.Runtime.Async.RuntimeMaxInFlight == 0 {
+		c.Runtime.Async.RuntimeMaxInFlight = 256
 	}
 	for name, broker := range c.Runtime.Kafka.Brokers {
 		if broker.NackRedeliveryDelayMS == 0 {

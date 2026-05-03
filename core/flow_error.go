@@ -32,13 +32,14 @@ const (
 // FlowError is the canonical error type propagated through a flow execution.
 // It is JSON-serializable so it can be used as a Temporal workflow payload.
 type FlowError struct {
-	Type    FlowErrorType  `json:"type"`
-	Code    string         `json:"code"`
-	Message string         `json:"message"`
-	Step    string         `json:"step"`
-	Cause   any            `json:"cause,omitempty"`
-	Retries int            `json:"retries"`
-	Meta    map[string]any `json:"meta,omitempty"`
+	Type        FlowErrorType  `json:"type"`
+	Code        string         `json:"code"`
+	Message     string         `json:"message"`
+	Step        string         `json:"step"`
+	Cause       any            `json:"cause,omitempty"`
+	Retries     int            `json:"retries"`
+	Meta        map[string]any `json:"meta,omitempty"`
+	AwaitedFrom string         `json:"awaited_from,omitempty"`
 }
 
 func (e *FlowError) Error() string {
@@ -57,5 +58,18 @@ func (e *FlowError) ToMap() map[string]any {
 	if len(e.Meta) > 0 {
 		out["meta"] = e.Meta
 	}
+	if e.AwaitedFrom != "" {
+		out["awaited_from"] = e.AwaitedFrom
+	}
 	return out
+}
+
+func cloneFlowErrorForAwait(origin *FlowError, asyncStepID string, consumerStepID string) *FlowError {
+	if origin == nil {
+		return nil
+	}
+	clone := *origin
+	clone.AwaitedFrom = asyncStepID
+	clone.Step = consumerStepID
+	return &clone
 }

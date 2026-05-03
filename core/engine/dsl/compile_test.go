@@ -214,6 +214,83 @@ func TestCompileFlow_InvalidSyntaxFails(t *testing.T) {
 	}
 }
 
+func TestCompileFlow_PopulatesAsyncDepsAcrossSurfaces(t *testing.T) {
+	flow := &runtime.Flow{
+		ID: "payments",
+		Steps: []runtime.Step{
+			{ID: "prefetch", Async: true, Body: `{ok: true}`},
+			{
+				ID:           "consume",
+				Condition:    `prefetch.ok`,
+				Body:         `{body: prefetch.body}`,
+				Retry:        &runtime.RetryConfig{MaxAttempts: 2, When: `prefetch.retry`},
+				FallbackBody: `{fallback: prefetch.fallback}`,
+			},
+		},
+	}
+
+	if err := NewCompiler().CompileFlow(context.Background(), flow, newCompileTestContainer(t)); err != nil {
+		t.Fatalf("CompileFlow() error = %v", err)
+	}
+
+	got := flow.Steps[1].AsyncDeps
+	if len(got) != 1 || got[0] != "prefetch" {
+		t.Fatalf("AsyncDeps = %#v, want [prefetch]", got)
+	}
+}
+
+func TestCompileFlow_RejectsForwardAsyncReference(t *testing.T) {
+	flow := &runtime.Flow{
+		ID: "payments",
+		Steps: []runtime.Step{
+			{ID: "consume", Body: `{body: prefetch.body}`},
+			{ID: "prefetch", Async: true, Body: `{ok: true}`},
+		},
+	}
+
+	err := NewCompiler().CompileFlow(context.Background(), flow, newCompileTestContainer(t))
+	if err == nil {
+		t.Fatal("expected forward async reference error")
+	}
+	if !strings.Contains(err.Error(), "before it is spawned") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompileFlow_AllowsReturnAndOnErrorAsyncReferences(t *testing.T) {
+	flow := &runtime.Flow{
+		ID: "payments",
+		Steps: []runtime.Step{
+			{ID: "consume", Body: `{ok: true}`},
+			{ID: "prefetch", Async: true, Body: `{ok: true}`},
+		},
+		Return:      runtime.Return{Body: `response.json({status: 200, body: {ok: prefetch.ok}})`},
+		OnErrorBody: `response.json({status: 500, body: {ok: prefetch.ok}})`,
+	}
+
+	if err := NewCompiler().CompileFlow(context.Background(), flow, newCompileTestContainer(t)); err != nil {
+		t.Fatalf("CompileFlow() error = %v", err)
+	}
+}
+
+func TestCompileFlow_RejectsReturnStepBeforeAsyncReference(t *testing.T) {
+	flow := &runtime.Flow{
+		ID: "payments",
+		Steps: []runtime.Step{
+			{ID: "__return", Body: `response.json({status: 200, body: {ok: prefetch.ok}})`},
+			{ID: "prefetch", Async: true, Body: `{ok: true}`},
+		},
+	}
+
+	err := NewCompiler().CompileFlow(context.Background(), flow, newCompileTestContainer(t))
+	if err == nil {
+		t.Fatal("expected forward async reference error")
+	}
+	if !strings.Contains(err.Error(), "before it is spawned") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestFlowLoaderAndCompiler_CompilesSynthesizedReturnStep(t *testing.T) {
 	dir := t.TempDir()
 	flowPath := filepath.Join(dir, "payments.flow")

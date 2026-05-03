@@ -325,7 +325,10 @@ func main() {
 		FlowsSource:     flowsSource,
 		GlobalProperties: globalProperties,
 		Observability:    observabilityCfg,
-		ValidateFlows:    {{if .EmbedFlows}}false{{else}}true{{end}},
+		Async: bootstrap.AsyncConfig{
+			RuntimeMaxInFlight: {{.Async.RuntimeMaxInFlight}},
+		},
+		ValidateFlows:   {{if .EmbedFlows}}false{{else}}true{{end}},
 		RegisterPlugins:  registerPlugins,
 		Transports: []bootstrap.Transport{
 {{- if .UseHTTP}}

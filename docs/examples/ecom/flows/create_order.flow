@@ -18,7 +18,7 @@ properties {
     default_currency: "usd"
 }
 
-step resolve_currency {
+async step resolve_currency {
    log.info("resolving order currency", {
        customer_email: request.body.customer_email,
        requested_currency: request.body.currency,

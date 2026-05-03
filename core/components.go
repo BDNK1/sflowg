@@ -23,6 +23,7 @@ type Entrypoint struct {
 type Step struct {
 	ID                 string         `yaml:"id"`
 	Type               string         `yaml:"type"`
+	Async              bool           `yaml:"-" json:"-"`
 	Condition          string         `yaml:"condition,omitempty"`
 	Args               map[string]any `yaml:"args"`
 	Next               string         `yaml:"next,omitempty"`
@@ -30,6 +31,7 @@ type Step struct {
 	Body               string         `yaml:"-"`
 	Timeout            int            `yaml:"-"`
 	StoreKeys          []string       `yaml:"-" json:"-"`
+	AsyncDeps          []string       `yaml:"-" json:"-"`
 	Compiled           any            `yaml:"-" json:"-"`
 	FallbackBody       string         `yaml:"-"`
 	FallbackStoreKeys  []string       `yaml:"-" json:"-"`

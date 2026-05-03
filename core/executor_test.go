@@ -61,6 +61,24 @@ func TestExecuteSteps_MergesOutputAfterSuccess(t *testing.T) {
 	}
 }
 
+func TestExecuteSteps_AsyncStepRequiresContainerRuntime(t *testing.T) {
+	flow := &Flow{
+		ID:    "payments",
+		Steps: []Step{{ID: "prefetch", Async: true}},
+	}
+	exec := NewExecution(flow, nil, nil, NewValueStore())
+	executor := NewExecutor(noopEvaluator{}, &scriptedStepExecutor{}, nil)
+
+	err := executor.ExecuteSteps(exec)
+	fe, ok := err.(*FlowError)
+	if !ok {
+		t.Fatalf("expected FlowError, got %T (%v)", err, err)
+	}
+	if fe.Code != string(ErrorCodeRuntimeError) || fe.Step != "prefetch" {
+		t.Fatalf("unexpected FlowError: %#v", fe)
+	}
+}
+
 func TestExecuteSteps_FailedAttemptDoesNotLeakResult(t *testing.T) {
 	stepExecutor := &scriptedStepExecutor{
 		runStep: func(ctx context.Context, execution *Execution, step Step) (string, error) {

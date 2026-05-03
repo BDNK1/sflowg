@@ -101,11 +101,3 @@ func (c *Container) RegisterPlugin(pluginName string, plugin any) error {
 func (c *Container) GetPlugin(name string) any {
 	return c.plugins.Get(name)
 }
-
-func (c *Container) Initialize(ctx context.Context) error {
-	return c.plugins.Initialize(ctx, c.logger)
-}
-
-func (c *Container) Shutdown(ctx context.Context) error {
-	return c.plugins.Shutdown(ctx, c.logger)
-}

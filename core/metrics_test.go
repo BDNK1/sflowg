@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -210,6 +211,35 @@ func TestContainerTask_RecordsPluginMetrics(t *testing.T) {
 	}
 }
 
+func TestAsyncRuntimeBudgetSaturationOnlyRecordsContention(t *testing.T) {
+	metrics, reader := newTestMetrics(t)
+	runtime := NewAsyncRuntime(AsyncConfig{RuntimeMaxInFlight: 1})
+	defer runtime.Release()
+
+	if err := runtime.Acquire(context.Background(), metrics, "payments", "prefetch"); err != nil {
+		t.Fatalf("Acquire() uncontended error = %v", err)
+	}
+	rm := collectMetrics(t, reader)
+	assertMetricAbsent(t, rm, "sflowg.async.runtime_budget_saturation_ms")
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		runtime.Release()
+	}()
+
+	if err := runtime.Acquire(context.Background(), metrics, "payments", "load"); err != nil {
+		t.Fatalf("Acquire() contended error = %v", err)
+	}
+
+	rm = collectMetrics(t, reader)
+	if got := findHistogramCount(t, rm, "sflowg.async.runtime_budget_saturation_ms", map[string]string{
+		"flow.id": "payments",
+		"step.id": "load",
+	}); got != 1 {
+		t.Fatalf("expected saturation count 1, got %d", got)
+	}
+}
+
 func newTestMetrics(t *testing.T) (*Metrics, *sdkmetric.ManualReader) {
 	t.Helper()
 
@@ -285,6 +315,18 @@ func findMetric(t *testing.T, rm *metricdata.ResourceMetrics, name string) metri
 	}
 	t.Fatalf("metric %s not found", name)
 	return metricdata.Metrics{}
+}
+
+func assertMetricAbsent(t *testing.T, rm *metricdata.ResourceMetrics, name string) {
+	t.Helper()
+
+	for _, scopeMetrics := range rm.ScopeMetrics {
+		for _, metric := range scopeMetrics.Metrics {
+			if metric.Name == name {
+				t.Fatalf("metric %s should be absent", name)
+			}
+		}
+	}
 }
 
 func attributesMatch(set attribute.Set, want map[string]string) bool {

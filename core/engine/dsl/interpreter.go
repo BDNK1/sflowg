@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/BDNK1/sflowg/core"
 	risor "github.com/deepnoodle-ai/risor/v2"
 	"github.com/deepnoodle-ai/risor/v2/pkg/bytecode"
 	"github.com/deepnoodle-ai/risor/v2/pkg/object"
@@ -18,16 +19,42 @@ import (
 //   - maps with plain values → *lenientMap (returns nil for missing attribute access)
 type Interpreter struct{}
 
-func (i *Interpreter) Eval(ctx context.Context, code string, globals map[string]any) (any, error) {
-	return risor.Eval(ctx, code, risor.WithEnv(convertGlobals(globals)))
+func (i *Interpreter) Eval(ctx context.Context, code string, globals map[string]any) (result any, err error) {
+	defer recoverFlowError(&err)
+	result, err = risor.Eval(ctx, code, risor.WithEnv(convertGlobals(globals)))
+	if err != nil {
+		return nil, err
+	}
+	if fe := asyncFutureError(globals); fe != nil {
+		return nil, fe
+	}
+	return result, nil
 }
 
 func (i *Interpreter) Compile(ctx context.Context, source string, templateEnv map[string]any) (*bytecode.Code, error) {
 	return risor.Compile(ctx, source, risor.WithEnv(convertGlobals(templateEnv)))
 }
 
-func (i *Interpreter) Run(ctx context.Context, code *bytecode.Code, globals map[string]any) (any, error) {
-	return risor.Run(ctx, code, risor.WithEnv(convertGlobals(globals)))
+func (i *Interpreter) Run(ctx context.Context, code *bytecode.Code, globals map[string]any) (result any, err error) {
+	defer recoverFlowError(&err)
+	result, err = risor.Run(ctx, code, risor.WithEnv(convertGlobals(globals)))
+	if err != nil {
+		return nil, err
+	}
+	if fe := asyncFutureError(globals); fe != nil {
+		return nil, fe
+	}
+	return result, nil
+}
+
+func recoverFlowError(err *error) {
+	if r := recover(); r != nil {
+		if fe, ok := r.(*runtime.FlowError); ok {
+			*err = fe
+			return
+		}
+		panic(r)
+	}
 }
 
 // convertGlobals prepares the globals map for Risor evaluation.

@@ -98,6 +98,7 @@ func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execu
 // ExecuteOnErrorHandler runs the flow-level on_error Risor body.
 // The current FlowError is injected as `error` so the handler can inspect it.
 func (e *StepExecutor) ExecuteOnErrorHandler(execution *runtime.Execution, body string, fe *runtime.FlowError) error {
+	execution = execution.WithActiveStep("on_error")
 	globals := e.buildEnv(execution)
 	globals["error"] = fe.ToMap()
 	_, err := e.evalStep(execution, execution.DSLMode(), "on_error", body, execution.Flow.OnErrorCompiled, globals)
@@ -108,6 +109,7 @@ func (e *StepExecutor) ExecuteOnErrorHandler(execution *runtime.Execution, body 
 // Injects `compensation.step` and `compensation.path` so the body can apply the
 // correct undo logic depending on which execution branch produced side-effects.
 func (e *StepExecutor) ExecuteCompensation(execution *runtime.Execution, body string, stepID string, path runtime.SuccessPath, compiled any) error {
+	execution = execution.WithActiveStep("compensate:" + stepID)
 	globals := e.buildEnv(execution)
 	globals["compensation"] = map[string]any{
 		"step": stepID,
@@ -152,6 +154,7 @@ func (e *StepExecutor) buildEnv(execution *runtime.Execution) map[string]any {
 	for k, v := range execution.State().Store().Snapshot() {
 		globals[k] = v
 	}
+	applyAsyncFutures(globals, execution, execution.EvalConsumer())
 
 	pluginGlobals := BuildPluginGlobals(execution)
 	for k, v := range pluginGlobals {
@@ -243,6 +246,9 @@ func asFlowError(v any) (*runtime.FlowError, bool) {
 	}
 	if s, ok := m["step"].(string); ok {
 		fe.Step = s
+	}
+	if awaitedFrom, ok := m["awaited_from"].(string); ok {
+		fe.AwaitedFrom = awaitedFrom
 	}
 	switch r := m["retries"].(type) {
 	case int:

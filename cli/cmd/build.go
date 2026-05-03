@@ -420,6 +420,7 @@ func runBuild(_ *cobra.Command, args []string) error {
 	// 10. Generate main.go
 	fmt.Println("\nGenerating main.go...")
 	mainGoGen := generator.NewMainGoGenerator(goModGen.ModuleName, cfg.Runtime.Port, embedFlows, cfg.Properties, cfg.Observability)
+	mainGoGen.EnableAsync(cfg.Runtime.Async)
 	if flowScan.HasHTTP {
 		mainGoGen.EnableHTTP()
 	}

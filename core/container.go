@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"context"
+
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -11,11 +13,12 @@ const (
 )
 
 type Container struct {
-	tasks   map[string]Task
-	plugins *pluginRegistry
-	logger  Logger
-	tracer  trace.Tracer
-	metrics *Metrics
+	tasks        map[string]Task
+	plugins      *pluginRegistry
+	logger       Logger
+	tracer       trace.Tracer
+	metrics      *Metrics
+	asyncRuntime *AsyncRuntime
 }
 
 // Logger returns the container's logger for framework-level (non-execution) logs.
@@ -40,11 +43,12 @@ func (c *Container) Metrics() *Metrics {
 
 func NewContainer(logger Logger) *Container {
 	return &Container{
-		tasks:   make(map[string]Task),
-		plugins: newPluginRegistry(),
-		logger:  logger,
-		tracer:  newNoopTracer(),
-		metrics: NewNoopMetrics(),
+		tasks:        make(map[string]Task),
+		plugins:      newPluginRegistry(),
+		logger:       logger,
+		tracer:       newNoopTracer(),
+		metrics:      NewNoopMetrics(),
+		asyncRuntime: NewAsyncRuntime(AsyncConfig{}),
 	}
 }
 
@@ -79,4 +83,29 @@ func (c *Container) SetMetrics(metrics *Metrics) {
 		return
 	}
 	c.metrics = metrics
+}
+
+func (c *Container) AsyncRuntime() *AsyncRuntime {
+	if c.asyncRuntime == nil {
+		c.asyncRuntime = NewAsyncRuntime(AsyncConfig{})
+	}
+	return c.asyncRuntime
+}
+
+func (c *Container) SetAsyncRuntime(runtime *AsyncRuntime) {
+	if runtime == nil {
+		runtime = NewAsyncRuntime(AsyncConfig{})
+	}
+	c.asyncRuntime = runtime
+}
+
+func (c *Container) Initialize(ctx context.Context) error {
+	return c.plugins.Initialize(ctx, c.logger)
+}
+
+func (c *Container) Shutdown(ctx context.Context) error {
+	if c.asyncRuntime != nil {
+		c.asyncRuntime.Shutdown()
+	}
+	return c.plugins.Shutdown(ctx, c.logger)
 }

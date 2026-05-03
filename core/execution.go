@@ -104,6 +104,7 @@ type Execution struct {
 	activePath   SuccessPath
 	activePlugin string
 	state        *RunState // shared across all derived copies within one request
+	asyncTasks   *AsyncTaskRegistry
 }
 
 // context.Context implementation — delegates to the embedded ctx so that real
@@ -140,6 +141,13 @@ func (e *Execution) Value(key any) any {
 // State returns the shared mutable state for this execution.
 func (e *Execution) State() *RunState {
 	return e.state
+}
+
+func (e *Execution) AsyncTasks() *AsyncTaskRegistry {
+	if e.asyncTasks == nil {
+		e.asyncTasks = NewAsyncTaskRegistry()
+	}
+	return e.asyncTasks
 }
 
 // WithContext returns a shallow copy of the Execution with a new embedded context.
@@ -222,6 +230,13 @@ func (e *Execution) ActivePath() SuccessPath {
 	return e.activePath
 }
 
+func (e *Execution) EvalConsumer() string {
+	if e.activeStepID != "" {
+		return e.activeStepID
+	}
+	return "expression"
+}
+
 func (e *Execution) DSLMode() DSLExecutionMode {
 	if e == nil || e.Flow == nil || e.Flow.DSLMode == "" {
 		return DSLExecutionModeInterpreted
@@ -256,11 +271,12 @@ func (e *Execution) ObservabilityAttrs() []slog.Attr {
 func NewExecution(flow *Flow, container *Container, globalProperties map[string]any, store ValueStore) *Execution {
 	id := uuid.New().String()
 	exec := &Execution{
-		ID:        id,
-		Flow:      flow,
-		Container: container,
-		ctx:       context.Background(),
-		state:     NewRunState(store),
+		ID:         id,
+		Flow:       flow,
+		Container:  container,
+		ctx:        context.Background(),
+		state:      NewRunState(store),
+		asyncTasks: NewAsyncTaskRegistry(),
 	}
 
 	// Merge properties: global properties first, then flow properties (flow overrides).

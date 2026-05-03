@@ -35,16 +35,21 @@ var (
 )
 
 type Metrics struct {
-	flowExecutions   otelmetric.Int64Counter
-	flowDurationMS   otelmetric.Float64Histogram
-	stepExecutions   otelmetric.Int64Counter
-	stepDurationMS   otelmetric.Float64Histogram
-	stepRetries      otelmetric.Int64Counter
-	cronSkipped      otelmetric.Int64Counter
-	pluginCalls      otelmetric.Int64Counter
-	pluginDurationMS otelmetric.Float64Histogram
-	httpRequests     otelmetric.Int64Counter
-	httpDurationMS   otelmetric.Float64Histogram
+	flowExecutions            otelmetric.Int64Counter
+	flowDurationMS            otelmetric.Float64Histogram
+	stepExecutions            otelmetric.Int64Counter
+	stepDurationMS            otelmetric.Float64Histogram
+	stepRetries               otelmetric.Int64Counter
+	asyncSpawns               otelmetric.Int64Counter
+	asyncWaits                otelmetric.Int64Counter
+	asyncWaitMS               otelmetric.Float64Histogram
+	detachedAsyncFailures     otelmetric.Int64Counter
+	runtimeBudgetSaturationMS otelmetric.Float64Histogram
+	cronSkipped               otelmetric.Int64Counter
+	pluginCalls               otelmetric.Int64Counter
+	pluginDurationMS          otelmetric.Float64Histogram
+	httpRequests              otelmetric.Int64Counter
+	httpDurationMS            otelmetric.Float64Histogram
 
 	user userMetricsState
 }
@@ -161,6 +166,43 @@ func newMetrics(provider otelmetric.MeterProvider) (*Metrics, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create step retry counter: %w", err)
 	}
+	asyncSpawns, err := meter.Int64Counter(
+		"sflowg.async.spawns",
+		otelmetric.WithDescription("Total number of async steps spawned by the runtime."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create async spawn counter: %w", err)
+	}
+	asyncWaits, err := meter.Int64Counter(
+		"sflowg.async.waits",
+		otelmetric.WithDescription("Total number of async waits by consumers."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create async wait counter: %w", err)
+	}
+	asyncWaitMS, err := meter.Float64Histogram(
+		"sflowg.async.wait.duration_ms",
+		otelmetric.WithDescription("Duration spent waiting for async step completion."),
+		otelmetric.WithUnit("ms"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create async wait duration histogram: %w", err)
+	}
+	detachedAsyncFailures, err := meter.Int64Counter(
+		"sflowg.async.detached_failures",
+		otelmetric.WithDescription("Total number of detached async failures."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create detached async failure counter: %w", err)
+	}
+	runtimeBudgetSaturationMS, err := meter.Float64Histogram(
+		"sflowg.async.runtime_budget_saturation_ms",
+		otelmetric.WithDescription("Duration spent blocked on the runtime async budget."),
+		otelmetric.WithUnit("ms"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create runtime budget saturation histogram: %w", err)
+	}
 	cronSkipped, err := meter.Int64Counter(
 		"sflowg.cron.skipped",
 		otelmetric.WithDescription("Total number of skipped cron flow fires."),
@@ -200,16 +242,21 @@ func newMetrics(provider otelmetric.MeterProvider) (*Metrics, error) {
 	}
 
 	return &Metrics{
-		flowExecutions:   flowExecutions,
-		flowDurationMS:   flowDurationMS,
-		stepExecutions:   stepExecutions,
-		stepDurationMS:   stepDurationMS,
-		stepRetries:      stepRetries,
-		cronSkipped:      cronSkipped,
-		pluginCalls:      pluginCalls,
-		pluginDurationMS: pluginDurationMS,
-		httpRequests:     httpRequests,
-		httpDurationMS:   httpDurationMS,
+		flowExecutions:            flowExecutions,
+		flowDurationMS:            flowDurationMS,
+		stepExecutions:            stepExecutions,
+		stepDurationMS:            stepDurationMS,
+		stepRetries:               stepRetries,
+		asyncSpawns:               asyncSpawns,
+		asyncWaits:                asyncWaits,
+		asyncWaitMS:               asyncWaitMS,
+		detachedAsyncFailures:     detachedAsyncFailures,
+		runtimeBudgetSaturationMS: runtimeBudgetSaturationMS,
+		cronSkipped:               cronSkipped,
+		pluginCalls:               pluginCalls,
+		pluginDurationMS:          pluginDurationMS,
+		httpRequests:              httpRequests,
+		httpDurationMS:            httpDurationMS,
 		user: userMetricsState{
 			meter: meter,
 		},
@@ -243,6 +290,54 @@ func (m *Metrics) RecordRetry(ctx context.Context, flowID string, stepID string,
 
 	attrs := m.retryAttributes(flowID, stepID, path)
 	m.stepRetries.Add(ctx, 1, otelmetric.WithAttributes(attrs...))
+}
+
+func (m *Metrics) RecordAsyncSpawn(ctx context.Context, flowID string, stepID string) {
+	if m.asyncSpawns == nil {
+		return
+	}
+	m.asyncSpawns.Add(ctx, 1, otelmetric.WithAttributes(
+		attribute.String("flow.id", normalizeMetricValue(flowID)),
+		attribute.String("step.id", normalizeMetricValue(stepID)),
+	))
+}
+
+func (m *Metrics) RecordAsyncWait(ctx context.Context, flowID string, consumerID string, asyncID string, duration time.Duration) {
+	if m.asyncWaits != nil {
+		m.asyncWaits.Add(ctx, 1, otelmetric.WithAttributes(
+			attribute.String("flow.id", normalizeMetricValue(flowID)),
+			attribute.String("consumer.id", normalizeMetricValue(consumerID)),
+			attribute.String("async.step.id", normalizeMetricValue(asyncID)),
+		))
+	}
+	if m.asyncWaitMS != nil {
+		m.asyncWaitMS.Record(ctx, durationMilliseconds(duration), otelmetric.WithAttributes(
+			attribute.String("flow.id", normalizeMetricValue(flowID)),
+			attribute.String("consumer.id", normalizeMetricValue(consumerID)),
+			attribute.String("async.step.id", normalizeMetricValue(asyncID)),
+		))
+	}
+}
+
+func (m *Metrics) RecordDetachedAsyncFailure(ctx context.Context, flowID string, stepID string, errorCode string) {
+	if m.detachedAsyncFailures == nil {
+		return
+	}
+	m.detachedAsyncFailures.Add(ctx, 1, otelmetric.WithAttributes(
+		attribute.String("flow.id", normalizeMetricValue(flowID)),
+		attribute.String("step.id", normalizeMetricValue(stepID)),
+		attribute.String("error.code", normalizeMetricValue(errorCode)),
+	))
+}
+
+func (m *Metrics) RecordRuntimeBudgetSaturation(ctx context.Context, flowID string, stepID string, duration time.Duration) {
+	if m.runtimeBudgetSaturationMS == nil || duration <= 0 {
+		return
+	}
+	m.runtimeBudgetSaturationMS.Record(ctx, durationMilliseconds(duration), otelmetric.WithAttributes(
+		attribute.String("flow.id", normalizeMetricValue(flowID)),
+		attribute.String("step.id", normalizeMetricValue(stepID)),
+	))
 }
 
 func (m *Metrics) RecordCronSkipped(ctx context.Context, flowID string, reason string) {

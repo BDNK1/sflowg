@@ -17,6 +17,7 @@ import (
 //	entrypoint.http { method: POST, path: /api/payments, timeout: 5000, ... }
 //	properties { key: value, ... }
 //	step step_name(condition: expr, timeout: 2000, retry: { ... }) { risor code }
+//	async step step_name(condition: expr, timeout: 2000, retry: { ... }) { risor code }
 //	step step_name(condition: expr) as plugin.method { risor map body }
 //	step step_name as subflow.flow_id { risor map body }
 //	  fallback { risor code }          // optional suffix block
@@ -57,9 +58,21 @@ func (p *parser) parse() (runtime.Flow, error) {
 			flow.Properties = props
 
 		case keyword == "step":
-			step, err := p.parseStep()
+			step, err := p.parseStep(false)
 			if err != nil {
 				return flow, fmt.Errorf("parsing step: %w", err)
+			}
+			flow.Steps = append(flow.Steps, step)
+
+		case keyword == "async":
+			p.readWord()
+			p.skipWhitespace()
+			if p.peekKeyword() != "step" {
+				return flow, fmt.Errorf("parsing async: expected step after async")
+			}
+			step, err := p.parseStep(true)
+			if err != nil {
+				return flow, fmt.Errorf("parsing async step: %w", err)
 			}
 			flow.Steps = append(flow.Steps, step)
 
@@ -198,7 +211,7 @@ func (p *parser) parseProperties() (map[string]any, error) {
 //	step NAME as subflow.flow_id { map_body }
 //	  fallback { body }    // optional
 //	  compensate { body }  // optional
-func (p *parser) parseStep() (runtime.Step, error) {
+func (p *parser) parseStep(async bool) (runtime.Step, error) {
 	p.readWord() // consume "step"
 	p.skipWhitespace()
 
@@ -210,6 +223,7 @@ func (p *parser) parseStep() (runtime.Step, error) {
 
 	var step runtime.Step
 	step.ID = name
+	step.Async = async
 
 	p.skipWhitespace()
 
@@ -263,6 +277,9 @@ func (p *parser) parseStep() (runtime.Step, error) {
 			}
 			step.FallbackBody = fb
 		} else if kw == "compensate" {
+			if async {
+				return step, fmt.Errorf("async step %s cannot have compensate block", name)
+			}
 			p.readWord() // consume "compensate"
 			p.skipWhitespace()
 			cb, err := p.readBracedBlock()

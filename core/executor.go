@@ -46,10 +46,14 @@ func NewExecutor(evaluator ExpressionEvaluator, stepExecutor StepExecutor, stepR
 func (e *Executor) ExecuteSteps(execution *Execution) error {
 	log := execution.Logger()
 	nextStep := ""
+	flowFinalized := make(chan struct{})
+	defer close(flowFinalized)
+	asyncWatcherStarted := false
 
 	for _, s := range execution.Flow.Steps {
+		stepExec := execution.WithActiveStep(s.ID)
 		// Check context before starting each step.
-		if err := execution.Err(); err != nil {
+		if err := stepExec.Err(); err != nil {
 			fe := e.flowError(execution, s.ID, err)
 			return e.handleFailure(execution, fe)
 		}
@@ -65,64 +69,41 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 		}
 
 		// Step condition guard.
-		if skip, err := e.evaluateCondition(execution, s); err != nil {
+		if skip, err := e.evaluateCondition(stepExec, s); err != nil {
 			fe := toFlowError(err, s.ID, 0)
 			return e.handleFailure(execution, fe)
 		} else if skip {
 			log.Info(fmt.Sprintf("Skipping step (condition false): %s", s.ID))
+			if s.Async {
+				execution.AsyncTasks().Register(s.ID, NewCompletedAsyncTask(s.ID, nil, nil))
+			}
 			continue
 		}
 
-		// --- Primary body with retries ---
-		output, fe := e.executeStepWithRetries(execution, s, SuccessPathPrimary)
-
-		if fe == nil {
-			applyStepOutput(execution, s.ID, output)
-			// Primary succeeded.
-			if s.CompensateBody != "" {
-				execution.State().AppendCompensation(CompensationEntry{
-					StepID:   s.ID,
-					Body:     s.CompensateBody,
-					Path:     SuccessPathPrimary,
-					Compiled: s.CompensateCompiled,
-				})
+		if s.Async {
+			if !asyncWatcherStarted {
+				asyncWatcherStarted = true
+				e.startAsyncCancellationWatcher(execution, flowFinalized)
 			}
-		} else {
-			// Primary failed — try fallback if available.
-			if s.FallbackBody != "" {
-				log.Info(fmt.Sprintf("Primary failed for step %s, trying fallback", s.ID))
-				fbStep := s
-				fbStep.Body = s.FallbackBody
-				fbStep.Compiled = s.FallbackCompiled
-				fbStep.StoreKeys = s.FallbackStoreKeys
-				fbStep.Retry = nil // fallback has no retry policy
-				fbOutput, fbFE := e.executeStepWithRetriesWithExtra(execution, fbStep, SuccessPathFallback, map[string]any{
-					"error": fe.ToMap(),
-				})
-
-				if fbFE == nil {
-					applyStepOutput(execution, s.ID, fbOutput)
-					output = fbOutput
-					// Fallback succeeded — store its result under the original step ID
-					// so downstream steps and compensation code use a stable key.
-					if s.CompensateBody != "" {
-						execution.State().AppendCompensation(CompensationEntry{
-							StepID:   s.ID,
-							Body:     s.CompensateBody,
-							Path:     SuccessPathFallback,
-							Compiled: s.CompensateCompiled,
-						})
-					}
-					fe = nil // mark as success
-				} else {
-					// Both primary and fallback failed.
-					log.Error(fmt.Sprintf("Fallback also failed for step %s", s.ID), "error", fbFE)
-					return e.handleFailure(execution, fbFE)
-				}
-			} else {
-				// No fallback — propagate error.
+			if fe := e.spawnAsyncStep(execution, s, flowFinalized); fe != nil {
 				return e.handleFailure(execution, fe)
 			}
+			continue
+		}
+
+		output, fe, path := e.runStepPipeline(stepExec, s)
+		if fe != nil {
+			return e.handleFailure(execution, fe)
+		}
+
+		applyStepOutput(execution, s.ID, output)
+		if s.CompensateBody != "" {
+			execution.State().AppendCompensation(CompensationEntry{
+				StepID:   s.ID,
+				Body:     s.CompensateBody,
+				Path:     path,
+				Compiled: s.CompensateCompiled,
+			})
 		}
 
 		// Early exit if a step set a response.
@@ -147,6 +128,32 @@ func (e *Executor) ExecuteSteps(execution *Execution) error {
 	}
 
 	return nil
+}
+
+func (e *Executor) runStepPipeline(execution *Execution, step Step) (StepOutput, *FlowError, SuccessPath) {
+	log := execution.Logger()
+	output, fe := e.executeStepWithRetries(execution, step, SuccessPathPrimary)
+	if fe == nil {
+		return output, nil, SuccessPathPrimary
+	}
+	if step.FallbackBody == "" {
+		return StepOutput{}, fe, SuccessPathPrimary
+	}
+
+	log.Info(fmt.Sprintf("Primary failed for step %s, trying fallback", step.ID))
+	fbStep := step
+	fbStep.Body = step.FallbackBody
+	fbStep.Compiled = step.FallbackCompiled
+	fbStep.StoreKeys = step.FallbackStoreKeys
+	fbStep.Retry = nil
+	fbOutput, fbFE := e.executeStepWithRetriesWithExtra(execution, fbStep, SuccessPathFallback, map[string]any{
+		"error": fe.ToMap(),
+	})
+	if fbFE != nil {
+		log.Error(fmt.Sprintf("Fallback also failed for step %s", step.ID), "error", fbFE)
+		return StepOutput{}, fbFE, SuccessPathFallback
+	}
+	return fbOutput, nil, SuccessPathFallback
 }
 
 // handleFailure runs compensation and on_error handling.
@@ -175,6 +182,85 @@ func (e *Executor) HandleBoundaryError(execution *Execution, fe *FlowError) (boo
 		return handled, handlerErr
 	}
 	return handled, nil
+}
+
+func (e *Executor) spawnAsyncStep(execution *Execution, step Step, flowFinalized <-chan struct{}) *FlowError {
+	asyncRuntime := asyncRuntimeForExecution(execution)
+	if asyncRuntime == nil {
+		return &FlowError{
+			Type:    ErrorTypePermanent,
+			Code:    string(ErrorCodeRuntimeError),
+			Message: "async runtime unavailable: execution has no container",
+			Step:    step.ID,
+		}
+	}
+	if err := asyncRuntime.Acquire(execution, execution.Metrics(), execFlowID(execution), step.ID); err != nil {
+		return e.flowError(execution, step.ID, err)
+	}
+
+	snapshot := execution.State().Store().Snapshot()
+	taskCtx, taskCancel := context.WithCancel(asyncRuntime.Context())
+	spanCtx, span := execution.Tracer().Start(taskCtx, fmt.Sprintf("async step %s", step.ID),
+		trace.WithAttributes(attribute.String("step.id", step.ID)))
+	task := NewAsyncTask(step.ID, taskCancel, span)
+	execution.AsyncTasks().Register(step.ID, task)
+	execution.Metrics().RecordAsyncSpawn(spanCtx, execFlowID(execution), step.ID)
+
+	isolatedExec := execution.
+		WithIsolatedState(cloneRunStateSnapshot(snapshot)).
+		WithContext(spanCtx).
+		WithActiveStep(step.ID)
+
+	go func() {
+		fe := func() *FlowError {
+			defer asyncRuntime.Release()
+			output, fe, _ := e.runStepPipeline(isolatedExec, step)
+			if fe != nil {
+				task.Complete(nil, fe)
+				return fe
+			}
+			task.Complete(output.Result, nil)
+			return nil
+		}()
+		if fe != nil {
+			<-flowFinalized
+			if !task.Awaited() {
+				execution.Logger().Error("Detached async step failed", "step", step.ID, "error", fe)
+				execution.Metrics().RecordDetachedAsyncFailure(context.Background(), execFlowID(execution), step.ID, fe.Code)
+			}
+		}
+	}()
+
+	return nil
+}
+
+func (e *Executor) startAsyncCancellationWatcher(execution *Execution, flowFinalized <-chan struct{}) {
+	asyncRuntime := asyncRuntimeForExecution(execution)
+	if asyncRuntime == nil {
+		return
+	}
+	go func() {
+		select {
+		case <-execution.Done():
+			select {
+			case <-flowFinalized:
+				return
+			default:
+			}
+			execution.AsyncTasks().CancelAll()
+		case <-flowFinalized:
+			return
+		case <-asyncRuntime.Context().Done():
+			return
+		}
+	}()
+}
+
+func asyncRuntimeForExecution(execution *Execution) *AsyncRuntime {
+	if execution != nil && execution.Container != nil {
+		return execution.Container.AsyncRuntime()
+	}
+	return nil
 }
 
 // executeStepWithRetries runs the step body respecting its RetryConfig.

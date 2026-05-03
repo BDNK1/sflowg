@@ -833,6 +833,44 @@ func TestParseRetryLegacyFieldsError(t *testing.T) {
 	}
 }
 
+func TestParseAsyncStep(t *testing.T) {
+	flow, err := Parse(`async step prefetch(condition: request.body.enabled) {
+    {ok: true}
+} fallback {
+    {ok: false}
+}`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(flow.Steps) != 1 {
+		t.Fatalf("steps len = %d", len(flow.Steps))
+	}
+	step := flow.Steps[0]
+	if !step.Async {
+		t.Fatal("expected async step flag")
+	}
+	if step.ID != "prefetch" {
+		t.Fatalf("step ID = %q", step.ID)
+	}
+	if step.FallbackBody == "" {
+		t.Fatal("expected fallback body")
+	}
+}
+
+func TestParseAsyncRejectsCompensate(t *testing.T) {
+	_, err := Parse(`async step prefetch {
+    {ok: true}
+} compensate {
+    log.info("undo")
+}`)
+	if err == nil {
+		t.Fatal("expected async compensate parse error")
+	}
+	if !strings.Contains(err.Error(), "cannot have compensate") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestResolveEnvCall(t *testing.T) {
 	tests := []struct {
 		input string
