@@ -6,7 +6,7 @@ import (
 	"github.com/BDNK1/sflowg/core"
 )
 
-func BuildLogGlobals(exec *runtime.Execution) map[string]any {
+func BuildLogGlobals(exec *core.Execution) map[string]any {
 	logger := exec.Logger().ForUser()
 
 	logMethods := map[string]any{
@@ -21,7 +21,7 @@ func BuildLogGlobals(exec *runtime.Execution) map[string]any {
 	}
 }
 
-func makeLogFn(logger runtime.Logger, level slog.Level) func(args ...any) error {
+func makeLogFn(logger core.Logger, level slog.Level) func(args ...any) error {
 	return func(args ...any) error {
 		if len(args) == 0 {
 			return nil

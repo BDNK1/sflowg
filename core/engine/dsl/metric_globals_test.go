@@ -9,10 +9,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
-func newDSLTestMetrics(t *testing.T, decls map[string]runtime.UserMetricDecl) (*runtime.Metrics, *sdkmetric.ManualReader) {
+func newDSLTestMetrics(t *testing.T, decls map[string]core.UserMetricDecl) (*core.Metrics, *sdkmetric.ManualReader) {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
-	metrics, err := runtime.NewTestMetricsWithReader(reader, decls)
+	metrics, err := core.NewTestMetricsWithReader(reader, decls)
 	if err != nil {
 		t.Fatalf("NewTestMetricsWithReader failed: %v", err)
 	}
@@ -21,11 +21,11 @@ func newDSLTestMetrics(t *testing.T, decls map[string]runtime.UserMetricDecl) (*
 
 func TestDSLMetricCounter_DefaultValue(t *testing.T) {
 	metrics, reader := newDSLTestMetrics(t, nil)
-	container := runtime.NewContainer(runtime.NewLogger(nil))
+	container := core.NewContainer(core.NewLogger(nil))
 	container.SetMetrics(metrics)
 
-	flow := &runtime.Flow{ID: "test_flow"}
-	exec := runtime.NewExecution(flow, container, nil, runtime.NewFlatValueStore())
+	flow := &core.Flow{ID: "test_flow"}
+	exec := core.NewExecution(flow, container, nil, core.NewFlatValueStore())
 
 	interp := &Interpreter{}
 	globals := make(map[string]any)
@@ -61,11 +61,11 @@ func TestDSLMetricCounter_DefaultValue(t *testing.T) {
 
 func TestDSLMetricCounter_WithValueAndLabels(t *testing.T) {
 	metrics, reader := newDSLTestMetrics(t, nil)
-	container := runtime.NewContainer(runtime.NewLogger(nil))
+	container := core.NewContainer(core.NewLogger(nil))
 	container.SetMetrics(metrics)
 
-	flow := &runtime.Flow{ID: "test_flow"}
-	exec := runtime.NewExecution(flow, container, nil, runtime.NewFlatValueStore())
+	flow := &core.Flow{ID: "test_flow"}
+	exec := core.NewExecution(flow, container, nil, core.NewFlatValueStore())
 
 	interp := &Interpreter{}
 	globals := make(map[string]any)
@@ -100,11 +100,11 @@ func TestDSLMetricCounter_WithValueAndLabels(t *testing.T) {
 
 func TestDSLMetricCounter_DropsExtraNonMapArgument(t *testing.T) {
 	metrics, reader := newDSLTestMetrics(t, nil)
-	container := runtime.NewContainer(runtime.NewLogger(nil))
+	container := core.NewContainer(core.NewLogger(nil))
 	container.SetMetrics(metrics)
 
-	flow := &runtime.Flow{ID: "test_flow"}
-	exec := runtime.NewExecution(flow, container, nil, runtime.NewFlatValueStore())
+	flow := &core.Flow{ID: "test_flow"}
+	exec := core.NewExecution(flow, container, nil, core.NewFlatValueStore())
 
 	interp := &Interpreter{}
 	globals := make(map[string]any)
@@ -135,11 +135,11 @@ func TestDSLMetricCounter_DropsExtraNonMapArgument(t *testing.T) {
 
 func TestDSLMetricHistogram(t *testing.T) {
 	metrics, reader := newDSLTestMetrics(t, nil)
-	container := runtime.NewContainer(runtime.NewLogger(nil))
+	container := core.NewContainer(core.NewLogger(nil))
 	container.SetMetrics(metrics)
 
-	flow := &runtime.Flow{ID: "test_flow"}
-	exec := runtime.NewExecution(flow, container, nil, runtime.NewFlatValueStore())
+	flow := &core.Flow{ID: "test_flow"}
+	exec := core.NewExecution(flow, container, nil, core.NewFlatValueStore())
 
 	interp := &Interpreter{}
 	globals := make(map[string]any)
@@ -174,11 +174,11 @@ func TestDSLMetricHistogram(t *testing.T) {
 
 func TestDSLMetricGauge(t *testing.T) {
 	metrics, reader := newDSLTestMetrics(t, nil)
-	container := runtime.NewContainer(runtime.NewLogger(nil))
+	container := core.NewContainer(core.NewLogger(nil))
 	container.SetMetrics(metrics)
 
-	flow := &runtime.Flow{ID: "test_flow"}
-	exec := runtime.NewExecution(flow, container, nil, runtime.NewFlatValueStore())
+	flow := &core.Flow{ID: "test_flow"}
+	exec := core.NewExecution(flow, container, nil, core.NewFlatValueStore())
 
 	interp := &Interpreter{}
 	globals := make(map[string]any)
@@ -213,11 +213,11 @@ func TestDSLMetricGauge(t *testing.T) {
 
 func TestDSLMetricInvalidCall_DoesNotFail(t *testing.T) {
 	metrics, _ := newDSLTestMetrics(t, nil)
-	container := runtime.NewContainer(runtime.NewLogger(nil))
+	container := core.NewContainer(core.NewLogger(nil))
 	container.SetMetrics(metrics)
 
-	flow := &runtime.Flow{ID: "test_flow"}
-	exec := runtime.NewExecution(flow, container, nil, runtime.NewFlatValueStore())
+	flow := &core.Flow{ID: "test_flow"}
+	exec := core.NewExecution(flow, container, nil, core.NewFlatValueStore())
 
 	interp := &Interpreter{}
 	globals := make(map[string]any)
@@ -241,20 +241,20 @@ func TestDSLMetricInvalidCall_DoesNotFail(t *testing.T) {
 }
 
 func TestDSLPredeclaredHandle_Counter(t *testing.T) {
-	decls := map[string]runtime.UserMetricDecl{
+	decls := map[string]core.UserMetricDecl{
 		"checkout_attempts": {
 			Type: "counter",
-			Labels: map[string]runtime.UserMetricLabel{
+			Labels: map[string]core.UserMetricLabel{
 				"provider": {Type: "enum", Values: []string{"stripe", "paypal"}},
 			},
 		},
 	}
 	metrics, reader := newDSLTestMetrics(t, decls)
-	container := runtime.NewContainer(runtime.NewLogger(nil))
+	container := core.NewContainer(core.NewLogger(nil))
 	container.SetMetrics(metrics)
 
-	flow := &runtime.Flow{ID: "test_flow"}
-	exec := runtime.NewExecution(flow, container, nil, runtime.NewFlatValueStore())
+	flow := &core.Flow{ID: "test_flow"}
+	exec := core.NewExecution(flow, container, nil, core.NewFlatValueStore())
 
 	interp := &Interpreter{}
 	globals := make(map[string]any)

@@ -16,7 +16,7 @@ import (
 // per-step and flow-level timeouts propagate into the interpreter.
 type StepExecutor struct {
 	interpreter *Interpreter
-	subflows    runtime.SubflowInvoker
+	subflows    core.SubflowInvoker
 }
 
 func NewStepExecutor() *StepExecutor {
@@ -25,11 +25,11 @@ func NewStepExecutor() *StepExecutor {
 	}
 }
 
-func (e *StepExecutor) SetSubflowInvoker(invoker runtime.SubflowInvoker) {
+func (e *StepExecutor) SetSubflowInvoker(invoker core.SubflowInvoker) {
 	e.subflows = invoker
 }
 
-func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execution, step runtime.Step) (string, error) {
+func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *core.Execution, step core.Step) (string, error) {
 	if step.Body == "" {
 		return "", nil
 	}
@@ -41,22 +41,22 @@ func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execu
 	result, err := e.evalStep(ctx, execution.DSLMode(), step.ID, step.Body, step.Compiled, globals)
 	if err != nil {
 		// Preserve FlowError values raised by DSL code.
-		if _, ok := err.(*runtime.FlowError); !ok {
+		if _, ok := err.(*core.FlowError); !ok {
 			// Context cancellation/deadline from interpreter execution should
 			// remain timeout-classified for retry/on_error policies.
 			if errors.Is(err, context.DeadlineExceeded) {
-				return "", &runtime.FlowError{
-					Type:    runtime.ErrorTypeTimeout,
-					Code:    string(runtime.ErrorCodeDeadlineExceeded),
+				return "", &core.FlowError{
+					Type:    core.ErrorTypeTimeout,
+					Code:    string(core.ErrorCodeDeadlineExceeded),
 					Message: err.Error(),
 					Step:    step.ID,
 					Cause:   err,
 				}
 			}
 			if errors.Is(err, context.Canceled) {
-				return "", &runtime.FlowError{
-					Type:    runtime.ErrorTypeTimeout,
-					Code:    string(runtime.ErrorCodeContextCancelled),
+				return "", &core.FlowError{
+					Type:    core.ErrorTypeTimeout,
+					Code:    string(core.ErrorCodeContextCancelled),
 					Message: err.Error(),
 					Step:    step.ID,
 					Cause:   err,
@@ -64,9 +64,9 @@ func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execu
 			}
 
 			// Wrap other interpreter failures as permanent runtime errors.
-			return "", &runtime.FlowError{
-				Type:    runtime.ErrorTypePermanent,
-				Code:    string(runtime.ErrorCodeRuntimeError),
+			return "", &core.FlowError{
+				Type:    core.ErrorTypePermanent,
+				Code:    string(core.ErrorCodeRuntimeError),
 				Message: err.Error(),
 				Step:    step.ID,
 				Cause:   err,
@@ -97,7 +97,7 @@ func (e *StepExecutor) ExecuteStep(ctx context.Context, execution *runtime.Execu
 
 // ExecuteOnErrorHandler runs the flow-level on_error Risor body.
 // The current FlowError is injected as `error` so the handler can inspect it.
-func (e *StepExecutor) ExecuteOnErrorHandler(execution *runtime.Execution, body string, fe *runtime.FlowError) error {
+func (e *StepExecutor) ExecuteOnErrorHandler(execution *core.Execution, body string, fe *core.FlowError) error {
 	globals := e.buildEnv(execution)
 	globals["error"] = fe.ToMap()
 	_, err := e.evalStep(execution, execution.DSLMode(), "on_error", body, execution.Flow.OnErrorCompiled, globals)
@@ -107,7 +107,7 @@ func (e *StepExecutor) ExecuteOnErrorHandler(execution *runtime.Execution, body 
 // ExecuteCompensation runs a compensation Risor body for a previously-succeeded step.
 // Injects `compensation.step` and `compensation.path` so the body can apply the
 // correct undo logic depending on which execution branch produced side-effects.
-func (e *StepExecutor) ExecuteCompensation(execution *runtime.Execution, body string, stepID string, path runtime.SuccessPath, compiled any) error {
+func (e *StepExecutor) ExecuteCompensation(execution *core.Execution, body string, stepID string, path core.SuccessPath, compiled any) error {
 	globals := e.buildEnv(execution)
 	globals["compensation"] = map[string]any{
 		"step": stepID,
@@ -117,16 +117,16 @@ func (e *StepExecutor) ExecuteCompensation(execution *runtime.Execution, body st
 	return err
 }
 
-func (e *StepExecutor) evalStep(ctx context.Context, mode runtime.DSLExecutionMode, stepID string, body string, compiled any, globals map[string]any) (any, error) {
+func (e *StepExecutor) evalStep(ctx context.Context, mode core.DSLExecutionMode, stepID string, body string, compiled any, globals map[string]any) (any, error) {
 	if strings.TrimSpace(body) == "" {
 		return nil, nil
 	}
-	if mode == runtime.DSLExecutionModeCompiled {
+	if mode == core.DSLExecutionModeCompiled {
 		code, ok := compiled.(*bytecode.Code)
 		if !ok {
-			return nil, &runtime.FlowError{
-				Type:    runtime.ErrorTypePermanent,
-				Code:    string(runtime.ErrorCodeRuntimeError),
+			return nil, &core.FlowError{
+				Type:    core.ErrorTypePermanent,
+				Code:    string(core.ErrorCodeRuntimeError),
 				Message: fmt.Sprintf("compiled mode invariant violated: step %q is missing compiled bytecode", stepID),
 				Step:    stepID,
 			}
@@ -146,7 +146,7 @@ func preSeedMissingKeys(globals map[string]any, code *bytecode.Code) {
 }
 
 // buildEnv assembles the env map for a step's Risor evaluation.
-func (e *StepExecutor) buildEnv(execution *runtime.Execution) map[string]any {
+func (e *StepExecutor) buildEnv(execution *core.Execution) map[string]any {
 	globals := make(map[string]any)
 
 	for k, v := range execution.State().Store().Snapshot() {
@@ -196,13 +196,13 @@ func (e *StepExecutor) buildEnv(execution *runtime.Execution) map[string]any {
 //
 //	raise("transient", "PAYMENT_TIMEOUT", "upstream timed out")
 //	raise("PAYMENT_TIMEOUT", "upstream timed out")   // defaults to permanent
-func parseRaiseArgs(args ...any) *runtime.FlowError {
-	fe := &runtime.FlowError{
-		Type: runtime.ErrorTypePermanent,
+func parseRaiseArgs(args ...any) *core.FlowError {
+	fe := &core.FlowError{
+		Type: core.ErrorTypePermanent,
 	}
 	switch len(args) {
 	case 0:
-		fe.Code = string(runtime.ErrorCodeRaise)
+		fe.Code = string(core.ErrorCodeRaise)
 		fe.Message = "raise() called with no arguments"
 	case 1:
 		if parsed, ok := asFlowError(args[0]); ok {
@@ -214,26 +214,26 @@ func parseRaiseArgs(args ...any) *runtime.FlowError {
 		fe.Code = fmt.Sprintf("%v", args[0])
 		fe.Message = fmt.Sprintf("%v", args[1])
 	default:
-		fe.Type = runtime.FlowErrorType(fmt.Sprintf("%v", args[0]))
+		fe.Type = core.FlowErrorType(fmt.Sprintf("%v", args[0]))
 		fe.Code = fmt.Sprintf("%v", args[1])
 		fe.Message = fmt.Sprintf("%v", args[2])
 	}
 	return fe
 }
 
-func asFlowError(v any) (*runtime.FlowError, bool) {
-	if existing, ok := v.(*runtime.FlowError); ok {
+func asFlowError(v any) (*core.FlowError, bool) {
+	if existing, ok := v.(*core.FlowError); ok {
 		return existing, true
 	}
 	m, ok := v.(map[string]any)
 	if !ok {
 		return nil, false
 	}
-	fe := &runtime.FlowError{
-		Type: runtime.ErrorTypePermanent,
+	fe := &core.FlowError{
+		Type: core.ErrorTypePermanent,
 	}
 	if t, ok := m["type"].(string); ok && t != "" {
-		fe.Type = runtime.FlowErrorType(t)
+		fe.Type = core.FlowErrorType(t)
 	}
 	if c, ok := m["code"].(string); ok {
 		fe.Code = c
@@ -253,7 +253,7 @@ func asFlowError(v any) (*runtime.FlowError, bool) {
 		fe.Retries = int(r)
 	}
 	if fe.Code == "" {
-		fe.Code = string(runtime.ErrorCodeRaise)
+		fe.Code = string(core.ErrorCodeRaise)
 	}
 	if fe.Message == "" {
 		fe.Message = fe.Code

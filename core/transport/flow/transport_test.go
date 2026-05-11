@@ -15,10 +15,10 @@ func TestTransportBasics(t *testing.T) {
 	if got := transport.ResponseSubtypes(); len(got) != 2 || got[0] != "value" || got[1] != "error" {
 		t.Fatalf("ResponseSubtypes() = %#v", got)
 	}
-	if err := transport.ValidateFlow(runtime.Flow{Entrypoint: runtime.Entrypoint{Config: map[string]any{"input": map[string]any{}}}}); err != nil {
+	if err := transport.ValidateFlow(core.Flow{Entrypoint: core.Entrypoint{Config: map[string]any{"input": map[string]any{}}}}); err != nil {
 		t.Fatalf("ValidateFlow() unexpected error: %v", err)
 	}
-	if err := transport.ValidateFlow(runtime.Flow{Entrypoint: runtime.Entrypoint{Config: map[string]any{"method": "POST"}}}); err == nil {
+	if err := transport.ValidateFlow(core.Flow{Entrypoint: core.Entrypoint{Config: map[string]any{"method": "POST"}}}); err == nil {
 		t.Fatal("ValidateFlow() expected unsupported key error")
 	}
 }
@@ -27,7 +27,7 @@ func TestStartReturnsAfterContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- New().Start(ctx, runtime.TransportRuntime{})
+		done <- New().Start(ctx, core.TransportRuntime{})
 	}()
 	cancel()
 	if err := <-done; err != nil {

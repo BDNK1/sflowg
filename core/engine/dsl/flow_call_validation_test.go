@@ -63,16 +63,16 @@ flow.call(target, {x: 1})
 
 func TestFlowValidatorRejectsMissingTargetAndCycles(t *testing.T) {
 	validator := NewFlowValidator()
-	err := validator.ValidateFlows(map[string]runtime.Flow{
-		"a": {ID: "a", Entrypoint: runtime.Entrypoint{Type: "http"}, Steps: []runtime.Step{{ID: "call", Body: `flow.call("missing", {})`}}},
+	err := validator.ValidateFlows(map[string]core.Flow{
+		"a": {ID: "a", Entrypoint: core.Entrypoint{Type: "http"}, Steps: []core.Step{{ID: "call", Body: `flow.call("missing", {})`}}},
 	})
 	if err == nil || !strings.Contains(err.Error(), `undefined subflow "missing"`) {
 		t.Fatalf("expected missing target error, got %v", err)
 	}
 
-	err = validator.ValidateFlows(map[string]runtime.Flow{
-		"a": {ID: "a", Entrypoint: runtime.Entrypoint{Type: "flow"}, Steps: []runtime.Step{{ID: "call", Body: `flow.call("b", {})`}}},
-		"b": {ID: "b", Entrypoint: runtime.Entrypoint{Type: "flow"}, Steps: []runtime.Step{{ID: "call", Body: `flow.call("a", {})`}}},
+	err = validator.ValidateFlows(map[string]core.Flow{
+		"a": {ID: "a", Entrypoint: core.Entrypoint{Type: "flow"}, Steps: []core.Step{{ID: "call", Body: `flow.call("b", {})`}}},
+		"b": {ID: "b", Entrypoint: core.Entrypoint{Type: "flow"}, Steps: []core.Step{{ID: "call", Body: `flow.call("a", {})`}}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "flow.call cycle detected") {
 		t.Fatalf("expected cycle error, got %v", err)
@@ -81,21 +81,21 @@ func TestFlowValidatorRejectsMissingTargetAndCycles(t *testing.T) {
 
 func TestFlowValidatorRejectsHTTP_TargetAndMissingRequiredLiteralArg(t *testing.T) {
 	validator := NewFlowValidator()
-	err := validator.ValidateFlows(map[string]runtime.Flow{
-		"caller":      {ID: "caller", Entrypoint: runtime.Entrypoint{Type: "http"}, Steps: []runtime.Step{{ID: "call", Body: `flow.call("http_target", {})`}}},
-		"http_target": {ID: "http_target", Entrypoint: runtime.Entrypoint{Type: "http"}},
+	err := validator.ValidateFlows(map[string]core.Flow{
+		"caller":      {ID: "caller", Entrypoint: core.Entrypoint{Type: "http"}, Steps: []core.Step{{ID: "call", Body: `flow.call("http_target", {})`}}},
+		"http_target": {ID: "http_target", Entrypoint: core.Entrypoint{Type: "http"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), `must be entrypoint.flow, got "http"`) {
 		t.Fatalf("expected http target error, got %v", err)
 	}
 
-	contract := runtime.NewInputContract()
+	contract := core.NewInputContract()
 	contract.SetFields("input", map[string]*schema.Schema{
 		"x": {Type: schema.TypeInteger, Required: true},
 	})
-	err = validator.ValidateFlows(map[string]runtime.Flow{
-		"caller": {ID: "caller", Entrypoint: runtime.Entrypoint{Type: "http"}, Steps: []runtime.Step{{ID: "call", Body: `flow.call("sub", {})`}}},
-		"sub":    {ID: "sub", Entrypoint: runtime.Entrypoint{Type: "flow", Input: contract}},
+	err = validator.ValidateFlows(map[string]core.Flow{
+		"caller": {ID: "caller", Entrypoint: core.Entrypoint{Type: "http"}, Steps: []core.Step{{ID: "call", Body: `flow.call("sub", {})`}}},
+		"sub":    {ID: "sub", Entrypoint: core.Entrypoint{Type: "flow", Input: contract}},
 	})
 	if err == nil || !strings.Contains(err.Error(), `missing required arg "x"`) {
 		t.Fatalf("expected missing required arg error, got %v", err)
@@ -103,13 +103,13 @@ func TestFlowValidatorRejectsHTTP_TargetAndMissingRequiredLiteralArg(t *testing.
 }
 
 func TestFlowValidatorRejectsSimpleLiteralTypeMismatch(t *testing.T) {
-	contract := runtime.NewInputContract()
+	contract := core.NewInputContract()
 	contract.SetFields("input", map[string]*schema.Schema{
 		"x": {Type: schema.TypeInteger, Required: true},
 	})
-	err := NewFlowValidator().ValidateFlows(map[string]runtime.Flow{
-		"caller": {ID: "caller", Entrypoint: runtime.Entrypoint{Type: "http"}, Steps: []runtime.Step{{ID: "call", Body: `flow.call("sub", {x: "bad"})`}}},
-		"sub":    {ID: "sub", Entrypoint: runtime.Entrypoint{Type: "flow", Input: contract}},
+	err := NewFlowValidator().ValidateFlows(map[string]core.Flow{
+		"caller": {ID: "caller", Entrypoint: core.Entrypoint{Type: "http"}, Steps: []core.Step{{ID: "call", Body: `flow.call("sub", {x: "bad"})`}}},
+		"sub":    {ID: "sub", Entrypoint: core.Entrypoint{Type: "flow", Input: contract}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "expected integer literal") {
 		t.Fatalf("expected literal type error, got %v", err)

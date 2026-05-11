@@ -1,4 +1,4 @@
-package runtime
+package core
 
 // Initializer interface allows plugins to perform startup initialization.
 // Plugins implementing this interface will have Initialize called at container startup.

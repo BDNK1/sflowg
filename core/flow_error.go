@@ -1,4 +1,4 @@
-package runtime
+package core
 
 import "fmt"
 
@@ -24,6 +24,7 @@ const (
 	ErrorCodeContextCancelled FlowErrorCode = "CONTEXT_CANCELLED"
 	ErrorCodeDeadlineExceeded FlowErrorCode = "DEADLINE_EXCEEDED"
 	ErrorCodeSchemaViolation  FlowErrorCode = "SCHEMA_VIOLATION"
+	ErrorCodeSubflowDepth     FlowErrorCode = "SUBFLOW_DEPTH_EXCEEDED"
 
 	// Default code used when DSL raise() is called without arguments.
 	ErrorCodeRaise FlowErrorCode = "RAISE"

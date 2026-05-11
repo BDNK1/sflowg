@@ -11,6 +11,11 @@ var (
 	mapStringAny = reflect.TypeOf(map[string]any(nil))
 )
 
+var reservedLifecycleMethods = map[string]string{
+	"Initialize": "func(plugin.Logger) error",
+	"Shutdown":   "func(plugin.Logger) error",
+}
+
 type TaskBinding struct {
 	TaskName   string
 	PluginName string
@@ -21,11 +26,17 @@ type TaskBinding struct {
 	method     reflect.Method
 }
 
-func Discover(pluginName string, plugin any) []TaskBinding {
+type SignatureIssue struct {
+	MethodName string
+	Reason     string
+}
+
+func Discover(pluginName string, plugin any) ([]TaskBinding, []SignatureIssue) {
 	pluginType := reflect.TypeOf(plugin)
 	pluginValue := reflect.ValueOf(plugin)
 
 	var tasks []TaskBinding
+	var issues []SignatureIssue
 
 	for i := 0; i < pluginType.NumMethod(); i++ {
 		method := pluginType.Method(i)
@@ -33,22 +44,72 @@ func Discover(pluginName string, plugin any) []TaskBinding {
 			continue
 		}
 
-		lowerMethodName := lowerFirst(method.Name)
+		if expected, reserved := reservedLifecycleMethods[method.Name]; reserved {
+			if reason := lifecycleSignatureReason(method); reason != "" {
+				issues = append(issues, SignatureIssue{
+					MethodName: method.Name,
+					Reason:     fmt.Sprintf("expected %s, got %s (%s)", expected, method.Type, reason),
+				})
+			}
+			continue
+		}
 
 		if isValidTaskSignature(method.Type) {
 			tasks = append(tasks, TaskBinding{
-				TaskName:   fmt.Sprintf("%s.%s", pluginName, lowerMethodName),
+				TaskName:   fmt.Sprintf("%s.%s", pluginName, lowerFirst(method.Name)),
 				PluginName: pluginName,
-				MethodName: lowerMethodName,
+				MethodName: lowerFirst(method.Name),
 				plugin:     pluginValue,
 				method:     method,
 				InputType:  method.Type.In(2),
 				OutputType: method.Type.Out(0),
 			})
+			continue
+		}
+
+		if reason := taskSignatureReason(method.Type); reason != "" {
+			issues = append(issues, SignatureIssue{
+				MethodName: method.Name,
+				Reason:     reason,
+			})
 		}
 	}
 
-	return tasks
+	return tasks, issues
+}
+
+func lifecycleSignatureReason(method reflect.Method) string {
+	mt := method.Type
+	if mt.NumIn() != 2 || mt.NumOut() != 1 {
+		return fmt.Sprintf("wrong arity NumIn=%d NumOut=%d", mt.NumIn(), mt.NumOut())
+	}
+	if mt.Out(0) != errorType {
+		return "second return must be error"
+	}
+	arg := mt.In(1)
+	if arg.Kind() != reflect.Interface || arg.Name() != "Logger" {
+		return "first parameter must be plugin.Logger"
+	}
+	return ""
+}
+
+func taskSignatureReason(methodType reflect.Type) string {
+	if methodType.NumIn() != 3 || methodType.NumOut() != 2 {
+		return ""
+	}
+	if !isRuntimeExecutionPointer(methodType.In(1)) {
+		return "second parameter must be *plugin.Execution"
+	}
+	if !isMapOrStruct(methodType.In(2)) {
+		return "third parameter must be a struct or map[string]any"
+	}
+	if !isMapOrStruct(methodType.Out(0)) {
+		return "first return must be a struct or map[string]any"
+	}
+	if methodType.Out(1) != errorType {
+		return "second return must be error"
+	}
+	return ""
 }
 
 func isValidTaskSignature(methodType reflect.Type) bool {

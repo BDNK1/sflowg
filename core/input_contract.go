@@ -1,4 +1,4 @@
-package runtime
+package core
 
 import "github.com/BDNK1/sflowg/core/validation/schema"
 

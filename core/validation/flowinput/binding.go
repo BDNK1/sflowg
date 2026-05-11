@@ -9,7 +9,7 @@ import (
 
 const InputNamespace = "input"
 
-func ParseBinding(config map[string]any) (*runtime.InputContract, error) {
+func ParseBinding(config map[string]any) (*core.InputContract, error) {
 	raw, ok := config["input"]
 	if !ok {
 		return nil, nil
@@ -22,7 +22,7 @@ func ParseBinding(config map[string]any) (*runtime.InputContract, error) {
 	if err != nil {
 		return nil, fmt.Errorf("input: %w", err)
 	}
-	contract := runtime.NewInputContract()
+	contract := core.NewInputContract()
 	contract.SetFields(InputNamespace, fields)
 	return contract, nil
 }

@@ -9,11 +9,11 @@ import (
 )
 
 type fakeSubflowInvoker struct {
-	flows map[string]runtime.Flow
+	flows map[string]core.Flow
 	args  map[string]any
 }
 
-func (f *fakeSubflowInvoker) LookupFlow(name string) (*runtime.Flow, bool) {
+func (f *fakeSubflowInvoker) LookupFlow(name string) (*core.Flow, bool) {
 	flow, ok := f.flows[name]
 	if !ok {
 		return nil, false
@@ -21,18 +21,18 @@ func (f *fakeSubflowInvoker) LookupFlow(name string) (*runtime.Flow, bool) {
 	return &flow, true
 }
 
-func (f *fakeSubflowInvoker) InvokeSubflow(_ *runtime.Execution, _ *runtime.Flow, args map[string]any) (map[string]any, error) {
+func (f *fakeSubflowInvoker) InvokeSubflow(_ *core.Execution, _ *core.Flow, args map[string]any) (map[string]any, error) {
 	f.args = args
 	return map[string]any{"y": int64(2)}, nil
 }
 
-func newRunnerExecution() *runtime.Execution {
-	return runtime.NewExecution(&runtime.Flow{ID: "payments"}, runtime.NewContainer(runtime.NewLogger(nil)), nil, runtime.NewValueStore())
+func newRunnerExecution() *core.Execution {
+	return core.NewExecution(&core.Flow{ID: "payments"}, core.NewContainer(core.NewLogger(nil)), nil, core.NewValueStore())
 }
 
 func TestRunStep_BasicMapResult(t *testing.T) {
 	runner := NewLocalStepRunner(NewStepExecutor())
-	output, err := runner.RunStep(context.Background(), newRunnerExecution(), runtime.StepInput{
+	output, err := runner.RunStep(context.Background(), newRunnerExecution(), core.StepInput{
 		StepID: "charge",
 		Body:   `{ok: true, amount: 10}`,
 		Input:  map[string]any{},
@@ -49,7 +49,7 @@ func TestRunStep_BasicMapResult(t *testing.T) {
 
 func TestRunStep_ScalarResult(t *testing.T) {
 	runner := NewLocalStepRunner(NewStepExecutor())
-	output, err := runner.RunStep(context.Background(), newRunnerExecution(), runtime.StepInput{
+	output, err := runner.RunStep(context.Background(), newRunnerExecution(), core.StepInput{
 		StepID: "charge",
 		Body:   `42`,
 		Input:  map[string]any{},
@@ -64,7 +64,7 @@ func TestRunStep_ScalarResult(t *testing.T) {
 
 func TestRunStep_EmptyBody(t *testing.T) {
 	runner := NewLocalStepRunner(NewStepExecutor())
-	output, err := runner.RunStep(context.Background(), newRunnerExecution(), runtime.StepInput{
+	output, err := runner.RunStep(context.Background(), newRunnerExecution(), core.StepInput{
 		StepID: "charge",
 		Input:  map[string]any{},
 	})
@@ -78,7 +78,7 @@ func TestRunStep_EmptyBody(t *testing.T) {
 
 func TestRunStep_ResponseSet(t *testing.T) {
 	runner := NewLocalStepRunner(NewStepExecutor())
-	output, err := runner.RunStep(context.Background(), newRunnerExecution(), runtime.StepInput{
+	output, err := runner.RunStep(context.Background(), newRunnerExecution(), core.StepInput{
 		StepID: "respond",
 		Body:   `response.json({status: 201, body: {ok: true}})`,
 		Input:  map[string]any{},
@@ -96,7 +96,7 @@ func TestRunStep_ResponseSet(t *testing.T) {
 
 func TestRunStep_NextCanonical(t *testing.T) {
 	runner := NewLocalStepRunner(NewStepExecutor())
-	output, err := runner.RunStep(context.Background(), newRunnerExecution(), runtime.StepInput{
+	output, err := runner.RunStep(context.Background(), newRunnerExecution(), core.StepInput{
 		StepID: "route",
 		Body:   `{__next: "finish", ok: true}`,
 		Input:  map[string]any{},
@@ -121,7 +121,7 @@ func TestRunStep_IsolationGuarantee(t *testing.T) {
 	exec.State().Store().Set("existing", "keep")
 	runner := NewLocalStepRunner(NewStepExecutor())
 
-	_, err := runner.RunStep(context.Background(), exec, runtime.StepInput{
+	_, err := runner.RunStep(context.Background(), exec, core.StepInput{
 		StepID: "charge",
 		Body:   `{ok: true}`,
 		Input:  exec.State().Store().Snapshot(),
@@ -139,12 +139,12 @@ func TestRunStep_IsolationGuarantee(t *testing.T) {
 
 func TestRunStep_ErrorPropagation(t *testing.T) {
 	runner := NewLocalStepRunner(NewStepExecutor())
-	_, err := runner.RunStep(context.Background(), newRunnerExecution(), runtime.StepInput{
+	_, err := runner.RunStep(context.Background(), newRunnerExecution(), core.StepInput{
 		StepID: "charge",
 		Body:   `raise("FAILED", "boom")`,
 		Input:  map[string]any{},
 	})
-	var flowErr *runtime.FlowError
+	var flowErr *core.FlowError
 	if !errors.As(err, &flowErr) {
 		t.Fatalf("expected FlowError, got %T (%v)", err, err)
 	}
@@ -153,7 +153,7 @@ func TestRunStep_ErrorPropagation(t *testing.T) {
 func TestRunStep_ExtraEnvIsScopedToIsolatedStep(t *testing.T) {
 	exec := newRunnerExecution()
 	runner := NewLocalStepRunner(NewStepExecutor())
-	output, err := runner.RunStep(context.Background(), exec, runtime.StepInput{
+	output, err := runner.RunStep(context.Background(), exec, core.StepInput{
 		StepID: "fallback",
 		Body:   `{code: error.code}`,
 		Input:  map[string]any{},
@@ -175,15 +175,15 @@ func TestRunStep_ExtraEnvIsScopedToIsolatedStep(t *testing.T) {
 
 func TestRunStep_FlowCallGlobal(t *testing.T) {
 	invoker := &fakeSubflowInvoker{
-		flows: map[string]runtime.Flow{
-			"sub": {ID: "sub", Entrypoint: runtime.Entrypoint{Type: "flow"}},
+		flows: map[string]core.Flow{
+			"sub": {ID: "sub", Entrypoint: core.Entrypoint{Type: "flow"}},
 		},
 	}
 	executor := NewStepExecutor()
 	executor.SetSubflowInvoker(invoker)
 	runner := NewLocalStepRunner(executor)
 
-	output, err := runner.RunStep(context.Background(), newRunnerExecution(), runtime.StepInput{
+	output, err := runner.RunStep(context.Background(), newRunnerExecution(), core.StepInput{
 		StepID: "call_sub",
 		Body:   `flow.call("sub", {x: 1})`,
 		Input:  map[string]any{},
@@ -202,10 +202,10 @@ func TestRunStep_FlowCallGlobal(t *testing.T) {
 
 func TestRunStep_CompiledModeFailsWhenBytecodeMissing(t *testing.T) {
 	exec := newRunnerExecution()
-	exec.Flow.DSLMode = runtime.DSLExecutionModeCompiled
+	exec.Flow.DSLMode = core.DSLExecutionModeCompiled
 	runner := NewLocalStepRunner(NewStepExecutor())
 
-	_, err := runner.RunStep(context.Background(), exec, runtime.StepInput{
+	_, err := runner.RunStep(context.Background(), exec, core.StepInput{
 		StepID: "charge",
 		Body:   `42`,
 		Input:  map[string]any{},
@@ -214,21 +214,21 @@ func TestRunStep_CompiledModeFailsWhenBytecodeMissing(t *testing.T) {
 		t.Fatal("expected compiled mode invariant error, got nil")
 	}
 
-	flowErr, ok := err.(*runtime.FlowError)
+	flowErr, ok := err.(*core.FlowError)
 	if !ok {
 		t.Fatalf("expected FlowError, got %T (%v)", err, err)
 	}
-	if flowErr.Code != string(runtime.ErrorCodeRuntimeError) {
+	if flowErr.Code != string(core.ErrorCodeRuntimeError) {
 		t.Fatalf("expected runtime error code, got %#v", flowErr)
 	}
 }
 
 func TestRunStep_InterpretedModeIgnoresCompiledArtifacts(t *testing.T) {
 	exec := newRunnerExecution()
-	exec.Flow.DSLMode = runtime.DSLExecutionModeInterpreted
+	exec.Flow.DSLMode = core.DSLExecutionModeInterpreted
 	runner := NewLocalStepRunner(NewStepExecutor())
 
-	output, err := runner.RunStep(context.Background(), exec, runtime.StepInput{
+	output, err := runner.RunStep(context.Background(), exec, core.StepInput{
 		StepID:   "charge",
 		Body:     `42`,
 		Input:    map[string]any{},

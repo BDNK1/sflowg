@@ -1,4 +1,4 @@
-package runtime
+package core
 
 // SubflowInvoker is implemented by the application runtime so DSL globals can
 // call another loaded flow without depending on App directly.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	runtime "github.com/BDNK1/sflowg/core"
+	"github.com/BDNK1/sflowg/core"
 	"github.com/BDNK1/sflowg/core/observability"
 	"github.com/BDNK1/sflowg/core/validation/httpinput"
 	"github.com/gin-gonic/gin"
@@ -20,29 +20,29 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
-type Execution = runtime.Execution
-type Entrypoint = runtime.Entrypoint
-type InputContract = runtime.InputContract
-type Flow = runtime.Flow
-type FlowError = runtime.FlowError
+type Execution = core.Execution
+type Entrypoint = core.Entrypoint
+type InputContract = core.InputContract
+type Flow = core.Flow
+type FlowError = core.FlowError
 type LoggingConfig = observability.LoggingConfig
 type ObservabilityConfig = observability.Config
-type ResponseDescriptor = runtime.ResponseDescriptor
-type Step = runtime.Step
-type StepInput = runtime.StepInput
-type StepOutput = runtime.StepOutput
-type StepExecutor = runtime.StepExecutor
-type StepRunner = runtime.StepRunner
-type SuccessPath = runtime.SuccessPath
-type ValueStore = runtime.ValueStore
+type ResponseDescriptor = core.ResponseDescriptor
+type Step = core.Step
+type StepInput = core.StepInput
+type StepOutput = core.StepOutput
+type StepExecutor = core.StepExecutor
+type StepRunner = core.StepRunner
+type SuccessPath = core.SuccessPath
+type ValueStore = core.ValueStore
 
-var NewContainer = runtime.NewContainer
-var NewExecution = runtime.NewExecution
-var NewExecutor = runtime.NewExecutor
-var NewLogger = runtime.NewLogger
+var NewContainer = core.NewContainer
+var NewExecution = core.NewExecution
+var NewExecutor = core.NewExecutor
+var NewLogger = core.NewLogger
 var NewObservabilityLoggerWithWriter = observability.NewLoggerWithWriter
-var NewRunState = runtime.NewRunState
-var NewValueStore = runtime.NewValueStore
+var NewRunState = core.NewRunState
+var NewValueStore = core.NewValueStore
 
 type noopEvaluator struct{}
 

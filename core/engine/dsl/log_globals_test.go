@@ -18,9 +18,9 @@ func TestBuildLogGlobals_UsesExecutionContext(t *testing.T) {
 		},
 	})
 
-	container := runtime.NewContainer(runtime.NewLogger(logger))
+	container := core.NewContainer(core.NewLogger(logger))
 
-	exec := runtime.NewExecution(&runtime.Flow{ID: "payment_flow"}, container, nil, runtime.NewValueStore())
+	exec := core.NewExecution(&core.Flow{ID: "payment_flow"}, container, nil, core.NewValueStore())
 	exec.ID = "exec-123"
 	stepExec := exec.WithActiveStep("charge_card")
 
@@ -48,11 +48,11 @@ func TestBuildLogGlobals_PreservesExtraArguments(t *testing.T) {
 		},
 	})
 
-	container := runtime.NewContainer(runtime.NewLogger(logger))
+	container := core.NewContainer(core.NewLogger(logger))
 
-	exec := &runtime.Execution{
+	exec := &core.Execution{
 		ID:        "exec-456",
-		Flow:      &runtime.Flow{ID: "payment_flow"},
+		Flow:      &core.Flow{ID: "payment_flow"},
 		Container: container,
 	}
 

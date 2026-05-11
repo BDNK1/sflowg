@@ -120,7 +120,7 @@ func TestObservabilityHandler_InjectsSourceFromHandler(t *testing.T) {
 
 func TestLoggerForPlugin_SetsSourceOnly(t *testing.T) {
 	var buf bytes.Buffer
-	base := runtime.NewLogger(NewLoggerWithWriter(&buf, Config{
+	base := core.NewLogger(NewLoggerWithWriter(&buf, Config{
 		Logging: LoggingConfig{Level: "debug"},
 	}))
 
@@ -134,10 +134,10 @@ func TestLoggerForPlugin_SetsSourceOnly(t *testing.T) {
 
 func TestExecutionPluginLogs_DoNotDuplicatePluginAttr(t *testing.T) {
 	var buf bytes.Buffer
-	container := runtime.NewContainer(runtime.NewLogger(NewLoggerWithWriter(&buf, Config{
+	container := core.NewContainer(core.NewLogger(NewLoggerWithWriter(&buf, Config{
 		Logging: LoggingConfig{Level: "debug"},
 	})))
-	exec := runtime.NewExecution(&runtime.Flow{ID: "payments"}, container, nil, runtime.NewValueStore())
+	exec := core.NewExecution(&core.Flow{ID: "payments"}, container, nil, core.NewValueStore())
 
 	pluginExec := exec.WithActivePlugin("stripe")
 	pluginExec.Logger().Info("charged")
@@ -150,7 +150,7 @@ func TestExecutionPluginLogs_DoNotDuplicatePluginAttr(t *testing.T) {
 
 func TestLoggerForUser_SetsSourceUser(t *testing.T) {
 	var buf bytes.Buffer
-	base := runtime.NewLogger(NewLoggerWithWriter(&buf, Config{
+	base := core.NewLogger(NewLoggerWithWriter(&buf, Config{
 		Logging: LoggingConfig{Level: "debug"},
 	}))
 
@@ -250,7 +250,7 @@ func TestValidateConfig_RequiresLoggingExportEndpointWhenOTLPEnabled(t *testing.
 
 func TestValidateConfig_RequiresMetricsEndpointWhenEnabled(t *testing.T) {
 	err := ValidateConfig(Config{
-		Metrics: runtime.MetricsConfig{Enabled: true},
+		Metrics: core.MetricsConfig{Enabled: true},
 	})
 	if err == nil {
 		t.Fatal("expected metrics validation error")
@@ -262,8 +262,8 @@ func TestValidateConfig_RequiresMetricsEndpointWhenEnabled(t *testing.T) {
 
 func TestValidateConfig_RejectsNonIncreasingMetricBuckets(t *testing.T) {
 	err := ValidateConfig(Config{
-		Metrics: runtime.MetricsConfig{
-			HistogramBuckets: runtime.HistogramBuckets{
+		Metrics: core.MetricsConfig{
+			HistogramBuckets: core.HistogramBuckets{
 				FlowMS: []float64{10, 25, 25},
 			},
 		},
@@ -413,7 +413,7 @@ func TestInitObservability_CleansUpLoggerWhenTracingInitFails(t *testing.T) {
 	initTracingRuntime = func(cfg TracingConfig) (trace.Tracer, func(context.Context) error, error) {
 		return nil, nil, errors.New("tracing boom")
 	}
-	initMetricsRuntime = func(cfg runtime.MetricsConfig) (*runtime.Metrics, func(context.Context) error, error) {
+	initMetricsRuntime = func(cfg core.MetricsConfig) (*core.Metrics, func(context.Context) error, error) {
 		t.Fatal("metrics init should not be called when tracing init fails")
 		return nil, nil, nil
 	}

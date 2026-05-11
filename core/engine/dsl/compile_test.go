@@ -14,19 +14,19 @@ import (
 
 type compileTestPlugin struct{}
 
-func (p *compileTestPlugin) Get(_ *runtime.Execution, args map[string]any) (map[string]any, error) {
+func (p *compileTestPlugin) Get(_ *core.Execution, args map[string]any) (map[string]any, error) {
 	return args, nil
 }
 
-func newCompileTestContainer(t *testing.T) *runtime.Container {
+func newCompileTestContainer(t *testing.T) *core.Container {
 	t.Helper()
 
-	container := runtime.NewContainer(runtime.NewLogger(nil))
+	container := core.NewContainer(core.NewLogger(nil))
 	if err := container.RegisterPlugin("postgres", &compileTestPlugin{}); err != nil {
 		t.Fatalf("RegisterPlugin() error = %v", err)
 	}
 
-	metrics, err := runtime.NewTestMetricsWithReader(sdkmetric.NewManualReader(), map[string]runtime.UserMetricDecl{
+	metrics, err := core.NewTestMetricsWithReader(sdkmetric.NewManualReader(), map[string]core.UserMetricDecl{
 		"payment_attempts": {Type: "counter"},
 	})
 	if err != nil {
@@ -38,9 +38,9 @@ func newCompileTestContainer(t *testing.T) *runtime.Container {
 }
 
 func TestCompileFlow_CompilesAllBodies(t *testing.T) {
-	flow := &runtime.Flow{
+	flow := &core.Flow{
 		ID: "payments",
-		Steps: []runtime.Step{
+		Steps: []core.Step{
 			{
 				ID:             "create_order",
 				Body:           `postgres.get({query: "select 1"})`,
@@ -81,9 +81,9 @@ func TestCompileFlow_CompilesAllBodies(t *testing.T) {
 }
 
 func TestCompileFlow_BodiesWithoutStoreReadsUseEmptyStoreKeysSlice(t *testing.T) {
-	flow := &runtime.Flow{
+	flow := &core.Flow{
 		ID: "payments",
-		Steps: []runtime.Step{
+		Steps: []core.Step{
 			{ID: "constant", Body: `42`},
 		},
 	}
@@ -102,10 +102,10 @@ func TestCompileFlow_BodiesWithoutStoreReadsUseEmptyStoreKeysSlice(t *testing.T)
 }
 
 func TestCompileFlow_UsesFlowResponseSubtypes(t *testing.T) {
-	flow := &runtime.Flow{
+	flow := &core.Flow{
 		ID:               "payments",
 		ResponseSubtypes: []string{"json", "text", "redirect"},
-		Steps: []runtime.Step{
+		Steps: []core.Step{
 			{ID: "respond", Body: `response.text({status: 200, body: "ok"})`},
 		},
 	}
@@ -120,10 +120,10 @@ func TestCompileFlow_UsesFlowResponseSubtypes(t *testing.T) {
 }
 
 func TestCompileFlow_RejectsInvalidResponseSubtype(t *testing.T) {
-	flow := &runtime.Flow{
+	flow := &core.Flow{
 		ID:               "payments",
 		ResponseSubtypes: []string{"json", "text", "redirect"},
-		Steps: []runtime.Step{
+		Steps: []core.Step{
 			{ID: "respond", Body: `response.ack()`},
 		},
 	}
@@ -139,10 +139,10 @@ func TestCompileFlow_RejectsInvalidResponseSubtype(t *testing.T) {
 }
 
 func TestCompileFlow_DoesNotRejectResponseTextInStringLiteral(t *testing.T) {
-	flow := &runtime.Flow{
+	flow := &core.Flow{
 		ID:               "payments",
 		ResponseSubtypes: []string{"json", "text", "redirect"},
-		Steps: []runtime.Step{
+		Steps: []core.Step{
 			{ID: "literal", Body: `"response.ack({status: 200})"`},
 		},
 	}
@@ -154,9 +154,9 @@ func TestCompileFlow_DoesNotRejectResponseTextInStringLiteral(t *testing.T) {
 }
 
 func TestCompileFlow_StoresOnlyReferencedKeys(t *testing.T) {
-	flow := &runtime.Flow{
+	flow := &core.Flow{
 		ID: "payments",
-		Steps: []runtime.Step{
+		Steps: []core.Step{
 			{
 				ID:   "create_order",
 				Body: `{email: request.body.email, api: properties.api_key}`,
@@ -182,9 +182,9 @@ func TestCompileFlow_StoresOnlyReferencedKeys(t *testing.T) {
 }
 
 func TestCompileFlow_InvalidSyntaxFails(t *testing.T) {
-	flow := &runtime.Flow{
+	flow := &core.Flow{
 		ID: "payments",
-		Steps: []runtime.Step{
+		Steps: []core.Step{
 			{ID: "broken", Body: `let x =`},
 		},
 	}

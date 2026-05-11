@@ -14,8 +14,8 @@ const (
 	HeadersNamespace         = "request.headers"
 )
 
-func ParseBinding(config map[string]any) (*runtime.InputContract, error) {
-	contract := runtime.NewInputContract()
+func ParseBinding(config map[string]any) (*core.InputContract, error) {
+	contract := core.NewInputContract()
 	hasSchemas := false
 
 	if bodyRaw, ok := config["body"].(map[string]any); ok {

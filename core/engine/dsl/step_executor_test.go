@@ -6,17 +6,17 @@ import (
 	"github.com/BDNK1/sflowg/core"
 )
 
-func newCompiledExecution() *runtime.Execution {
-	flow := &runtime.Flow{ID: "payments", DSLMode: runtime.DSLExecutionModeCompiled}
-	return runtime.NewExecution(flow, runtime.NewContainer(runtime.NewLogger(nil)), nil, runtime.NewValueStore())
+func newCompiledExecution() *core.Execution {
+	flow := &core.Flow{ID: "payments", DSLMode: core.DSLExecutionModeCompiled}
+	return core.NewExecution(flow, core.NewContainer(core.NewLogger(nil)), nil, core.NewValueStore())
 }
 
 func TestExecuteOnErrorHandler_CompiledModeFailsWhenBytecodeMissing(t *testing.T) {
 	exec := newCompiledExecution()
 	exec.Flow.OnErrorBody = `response.json({status: 500})`
 
-	err := NewStepExecutor().ExecuteOnErrorHandler(exec, exec.Flow.OnErrorBody, &runtime.FlowError{
-		Type:    runtime.ErrorTypePermanent,
+	err := NewStepExecutor().ExecuteOnErrorHandler(exec, exec.Flow.OnErrorBody, &core.FlowError{
+		Type:    core.ErrorTypePermanent,
 		Code:    "FAIL",
 		Message: "boom",
 	})
@@ -24,11 +24,11 @@ func TestExecuteOnErrorHandler_CompiledModeFailsWhenBytecodeMissing(t *testing.T
 		t.Fatal("expected compiled mode invariant error, got nil")
 	}
 
-	flowErr, ok := err.(*runtime.FlowError)
+	flowErr, ok := err.(*core.FlowError)
 	if !ok {
 		t.Fatalf("expected FlowError, got %T (%v)", err, err)
 	}
-	if flowErr.Code != string(runtime.ErrorCodeRuntimeError) {
+	if flowErr.Code != string(core.ErrorCodeRuntimeError) {
 		t.Fatalf("expected runtime error code, got %#v", flowErr)
 	}
 }
@@ -36,16 +36,16 @@ func TestExecuteOnErrorHandler_CompiledModeFailsWhenBytecodeMissing(t *testing.T
 func TestExecuteCompensation_CompiledModeFailsWhenBytecodeMissing(t *testing.T) {
 	exec := newCompiledExecution()
 
-	err := NewStepExecutor().ExecuteCompensation(exec, `log.info("undo")`, "charge", runtime.SuccessPathPrimary, nil)
+	err := NewStepExecutor().ExecuteCompensation(exec, `log.info("undo")`, "charge", core.SuccessPathPrimary, nil)
 	if err == nil {
 		t.Fatal("expected compiled mode invariant error, got nil")
 	}
 
-	flowErr, ok := err.(*runtime.FlowError)
+	flowErr, ok := err.(*core.FlowError)
 	if !ok {
 		t.Fatalf("expected FlowError, got %T (%v)", err, err)
 	}
-	if flowErr.Code != string(runtime.ErrorCodeRuntimeError) {
+	if flowErr.Code != string(core.ErrorCodeRuntimeError) {
 		t.Fatalf("expected runtime error code, got %#v", flowErr)
 	}
 }

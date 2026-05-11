@@ -101,11 +101,11 @@ type TracingConfig struct {
 	sampleRateSet bool `yaml:"-"`
 }
 
-type MetricsConfig = runtime.MetricsConfig
-type HistogramBuckets = runtime.HistogramBuckets
-type UserMetricsConfig = runtime.UserMetricsConfig
-type UserMetricDecl = runtime.UserMetricDecl
-type UserMetricLabel = runtime.UserMetricLabel
+type MetricsConfig = core.MetricsConfig
+type HistogramBuckets = core.HistogramBuckets
+type UserMetricsConfig = core.UserMetricsConfig
+type UserMetricDecl = core.UserMetricDecl
+type UserMetricLabel = core.UserMetricLabel
 
 type observabilityContext interface {
 	ObservabilityAttrs() []slog.Attr
@@ -222,7 +222,7 @@ func ValidateConfig(cfg Config) error {
 		return err
 	}
 
-	if err := runtime.ValidateUserMetricsConfig(metrics.User); err != nil {
+	if err := core.ValidateUserMetricsConfig(metrics.User); err != nil {
 		return err
 	}
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,10 +22,15 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-func registerFlowRoute(flow *runtime.Flow, container *runtime.Container, executor *runtime.Executor, globalProperties map[string]any, newValueStore func() runtime.ValueStore, g *gin.Engine) {
+func registerFlowRoute(flow *core.Flow, container *core.Container, executor *core.Executor, globalProperties map[string]any, newValueStore func() core.ValueStore, g *gin.Engine) {
 	config := flow.Entrypoint.Config
-	method := strings.ToLower(config["method"].(string))
-	path := config["path"].(string)
+	methodRaw, _ := config["method"].(string)
+	path, _ := config["path"].(string)
+	if methodRaw == "" || path == "" {
+		container.Logger().Error("HTTP entrypoint missing method or path", "flow_id", flow.ID)
+		return
+	}
+	method := strings.ToLower(methodRaw)
 
 	container.Logger().Info("Registering HTTP entrypoint", "method", method, "path", path, "flow_id", flow.ID)
 
@@ -39,17 +45,17 @@ func registerFlowRoute(flow *runtime.Flow, container *runtime.Container, executo
 }
 
 type requestScope struct {
-	execution *runtime.Execution
-	flow      *runtime.Flow
+	execution *core.Execution
+	flow      *core.Flow
 	route     string
 	start     time.Time
 	spanCtx   context.Context
 	span      trace.Span
 	cancel    context.CancelFunc
-	log       runtime.Logger
+	log       core.Logger
 }
 
-func beginRequestScope(c *gin.Context, flow *runtime.Flow, route string, execution *runtime.Execution) *requestScope {
+func beginRequestScope(c *gin.Context, flow *core.Flow, route string, execution *core.Execution) *requestScope {
 	propagator := otel.GetTextMapPropagator()
 	reqCtx := propagator.Extract(c.Request.Context(), propagation.HeaderCarrier(c.Request.Header))
 	spanCtx, span := execution.Tracer().Start(reqCtx, fmt.Sprintf("flow %s", flow.ID),
@@ -118,9 +124,9 @@ func (s *requestScope) finish(c *gin.Context, requestErr error) {
 	s.span.End()
 }
 
-func handleRequest(flow *runtime.Flow, route string, container *runtime.Container, executor *runtime.Executor, globalProperties map[string]any, newValueStore func() runtime.ValueStore, withBody bool) gin.HandlerFunc {
+func handleRequest(flow *core.Flow, route string, container *core.Container, executor *core.Executor, globalProperties map[string]any, newValueStore func() core.ValueStore, withBody bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		e := runtime.NewExecution(flow, container, globalProperties, newValueStore())
+		e := core.NewExecution(flow, container, globalProperties, newValueStore())
 		var requestErr error
 		var flowErr error
 		scope := beginRequestScope(c, flow, route, e)
@@ -197,7 +203,7 @@ func handleRequest(flow *runtime.Flow, route string, container *runtime.Containe
 
 // dispatchResponse handles the HTTP response dispatch based on the execution's RunState response.
 // If no descriptor was set by any step, returns a default 200 OK.
-func dispatchResponse(c *gin.Context, execution *runtime.Execution) error {
+func dispatchResponse(c *gin.Context, execution *core.Execution) error {
 	log := execution.Logger()
 	rd := execution.State().Response()
 	if rd == nil {
@@ -222,7 +228,7 @@ func dispatchResponse(c *gin.Context, execution *runtime.Execution) error {
 	return nil
 }
 
-func writeResponse(c *gin.Context, execution *runtime.Execution, subtype string, args map[string]any) error {
+func writeResponse(c *gin.Context, execution *core.Execution, subtype string, args map[string]any) error {
 	switch subtype {
 	case "json":
 		writeJSON(c, args)
@@ -263,11 +269,16 @@ func writeText(c *gin.Context, args map[string]any) {
 	c.Data(statusCode, "text/plain; charset=utf-8", []byte(body))
 }
 
-func writeRedirect(c *gin.Context, execution *runtime.Execution, args map[string]any) error {
+func writeRedirect(c *gin.Context, execution *core.Execution, args map[string]any) error {
 	location, ok := args["location"].(string)
 	if !ok || location == "" {
 		execution.Logger().Error("Redirect response requires a location")
 		return fmt.Errorf("redirect response requires a 'location' argument")
+	}
+
+	if err := validateRedirectLocation(location); err != nil {
+		execution.Logger().Error("Rejected redirect location", "location", location, "error", err)
+		return err
 	}
 
 	statusCode := http.StatusFound
@@ -280,6 +291,26 @@ func writeRedirect(c *gin.Context, execution *runtime.Execution, args map[string
 	}
 
 	c.Redirect(statusCode, location)
+	return nil
+}
+
+func validateRedirectLocation(location string) error {
+	if strings.HasPrefix(location, "//") || strings.HasPrefix(location, "\\\\") {
+		return fmt.Errorf("redirect location must not be protocol-relative")
+	}
+	if strings.HasPrefix(location, "/") {
+		return nil
+	}
+	u, err := url.Parse(location)
+	if err != nil {
+		return fmt.Errorf("redirect location is not a valid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("redirect location must use http or https scheme")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("redirect location must include a host")
+	}
 	return nil
 }
 
@@ -318,7 +349,7 @@ const (
 	RequestRawBodyKey     = "request.rawBody"
 )
 
-func extractRequestData(c *gin.Context, f *runtime.Flow, e *runtime.Execution, withBody bool) *runtime.FlowError {
+func extractRequestData(c *gin.Context, f *core.Flow, e *core.Execution, withBody bool) *core.FlowError {
 	if pathVariables, ok := f.Entrypoint.Config[PathVariablesKey].([]any); ok {
 		extractValues(e, pathVariables, PathVariablesPrefix, c.Param)
 	}
@@ -340,7 +371,7 @@ func extractRequestData(c *gin.Context, f *runtime.Flow, e *runtime.Execution, w
 	return validateRequestData(c, f, e)
 }
 
-func extractValues(e *runtime.Execution, keys []any, prefix string, getValue func(string) string) {
+func extractValues(e *core.Execution, keys []any, prefix string, getValue func(string) string) {
 	for _, key := range keys {
 		if v, ok := key.(string); ok {
 			e.AddValue(fmt.Sprintf("%s.%s", prefix, v), getValue(v))
@@ -348,7 +379,7 @@ func extractValues(e *runtime.Execution, keys []any, prefix string, getValue fun
 	}
 }
 
-func extractBody(c *gin.Context, f *runtime.Flow, e *runtime.Execution) *runtime.FlowError {
+func extractBody(c *gin.Context, f *core.Flow, e *core.Execution) *core.FlowError {
 	bodyConfig, ok := f.Entrypoint.Config["body"].(map[string]any)
 	if !ok {
 		return nil
@@ -372,13 +403,20 @@ func extractBody(c *gin.Context, f *runtime.Flow, e *runtime.Execution) *runtime
 
 var wrongBodyFormatRes = gin.H{"message": "Wrong request body format"}
 
-func extractJsonBody(c *gin.Context, e *runtime.Execution) *runtime.FlowError {
+const maxRequestBodyBytes = 1 << 20
+
+func extractJsonBody(c *gin.Context, e *core.Execution) *core.FlowError {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodyBytes)
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		constraint := "read"
+		if _, ok := err.(*http.MaxBytesError); ok {
+			constraint = "size"
+		}
 		return schemaViolation([]validationschema.FieldError{{
 			Path:       "body",
 			Pointer:    "#/body",
-			Constraint: "read",
+			Constraint: constraint,
 			Message:    wrongBodyFormatRes["message"].(string),
 		}})
 	}
@@ -400,7 +438,7 @@ func extractJsonBody(c *gin.Context, e *runtime.Execution) *runtime.FlowError {
 	return nil
 }
 
-func validateRequestData(c *gin.Context, f *runtime.Flow, e *runtime.Execution) *runtime.FlowError {
+func validateRequestData(c *gin.Context, f *core.Flow, e *core.Execution) *core.FlowError {
 	input := f.Entrypoint.Input
 	if input == nil {
 		return nil
@@ -453,7 +491,7 @@ func validateRequestData(c *gin.Context, f *runtime.Flow, e *runtime.Execution) 
 	return nil
 }
 
-func validateNamedInputs(schemas map[string]*validationschema.Schema, prefix string, root string, source func(string, *validationschema.Schema) (any, bool), e *runtime.Execution) []validationschema.FieldError {
+func validateNamedInputs(schemas map[string]*validationschema.Schema, prefix string, root string, source func(string, *validationschema.Schema) (any, bool), e *core.Execution) []validationschema.FieldError {
 	var fields []validationschema.FieldError
 	for name, inputSchema := range schemas {
 		raw, present := source(name, inputSchema)
@@ -466,10 +504,10 @@ func validateNamedInputs(schemas map[string]*validationschema.Schema, prefix str
 	return fields
 }
 
-func schemaViolation(fields []validationschema.FieldError) *runtime.FlowError {
-	return &runtime.FlowError{
-		Type:    runtime.ErrorTypePermanent,
-		Code:    string(runtime.ErrorCodeSchemaViolation),
+func schemaViolation(fields []validationschema.FieldError) *core.FlowError {
+	return &core.FlowError{
+		Type:    core.ErrorTypePermanent,
+		Code:    string(core.ErrorCodeSchemaViolation),
 		Message: "Request validation failed",
 		Meta: map[string]any{
 			"fields": validationschema.FieldsToMaps(fields),
@@ -485,11 +523,11 @@ func classifyMetricOutcome(err error) string {
 		return "timeout"
 	}
 
-	var flowErr *runtime.FlowError
+	var flowErr *core.FlowError
 	if errors.As(err, &flowErr) {
-		if flowErr.Type == runtime.ErrorTypeTimeout ||
-			flowErr.Code == string(runtime.ErrorCodeDeadlineExceeded) ||
-			flowErr.Code == string(runtime.ErrorCodeContextCancelled) {
+		if flowErr.Type == core.ErrorTypeTimeout ||
+			flowErr.Code == string(core.ErrorCodeDeadlineExceeded) ||
+			flowErr.Code == string(core.ErrorCodeContextCancelled) {
 			return "timeout"
 		}
 	}
@@ -510,7 +548,7 @@ func classifyHTTPStatus(statusCode int) string {
 	}
 }
 
-func writeSchemaViolationProblem(c *gin.Context, fe *runtime.FlowError) {
+func writeSchemaViolationProblem(c *gin.Context, fe *core.FlowError) {
 	errors, _ := fe.Meta["fields"].([]map[string]any)
 	c.Header("Content-Type", "application/problem+json")
 	c.JSON(http.StatusBadRequest, gin.H{

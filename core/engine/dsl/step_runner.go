@@ -8,15 +8,15 @@ import (
 
 // LocalStepRunner executes one step in-process against isolated per-step state.
 type LocalStepRunner struct {
-	executor runtime.StepExecutor
+	executor core.StepExecutor
 }
 
-func NewLocalStepRunner(executor runtime.StepExecutor) *LocalStepRunner {
+func NewLocalStepRunner(executor core.StepExecutor) *LocalStepRunner {
 	return &LocalStepRunner{executor: executor}
 }
 
-func (r *LocalStepRunner) RunStep(ctx context.Context, execution *runtime.Execution, input runtime.StepInput) (runtime.StepOutput, error) {
-	store := runtime.NewValueStore()
+func (r *LocalStepRunner) RunStep(ctx context.Context, execution *core.Execution, input core.StepInput) (core.StepOutput, error) {
+	store := core.NewValueStore()
 	for k, v := range input.Input {
 		store.SetNested(k, v)
 	}
@@ -24,9 +24,9 @@ func (r *LocalStepRunner) RunStep(ctx context.Context, execution *runtime.Execut
 		store.SetNested(k, v)
 	}
 
-	isolatedState := runtime.NewRunState(store)
+	isolatedState := core.NewRunState(store)
 	isolatedExec := execution.WithIsolatedState(isolatedState)
-	step := runtime.Step{
+	step := core.Step{
 		ID:       input.StepID,
 		Body:     input.Body,
 		Timeout:  input.Timeout,
@@ -35,11 +35,11 @@ func (r *LocalStepRunner) RunStep(ctx context.Context, execution *runtime.Execut
 
 	next, err := r.executor.ExecuteStep(ctx, isolatedExec, step)
 	if err != nil {
-		return runtime.StepOutput{}, err
+		return core.StepOutput{}, err
 	}
 
 	result, _ := isolatedState.Store().Get(input.StepID)
-	return runtime.StepOutput{
+	return core.StepOutput{
 		Result:   result,
 		Response: isolatedState.Response(),
 		Next:     next,

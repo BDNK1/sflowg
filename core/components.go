@@ -1,4 +1,4 @@
-package runtime
+package core
 
 type Flow struct {
 	ID               string           `yaml:"id"`

@@ -150,13 +150,12 @@ func validateString(value any, s *Schema, path string) (any, []FieldError) {
 	if s.MaxLength != nil && len(v) > *s.MaxLength {
 		errs = append(errs, fieldError(path, "maxLength", v, "%s is too long", path))
 	}
-	if s.Pattern != "" {
-		matched, err := regexp.MatchString(s.Pattern, v)
-		if err != nil {
-			errs = append(errs, fieldError(path, "pattern", v, "%s has invalid pattern %q", path, s.Pattern))
-		} else if !matched {
+	if s.compiledPattern != nil {
+		if !s.compiledPattern.MatchString(v) {
 			errs = append(errs, fieldError(path, "pattern", v, "%s does not match pattern", path))
 		}
+	} else if s.Pattern != "" {
+		errs = append(errs, fieldError(path, "pattern", v, "%s has invalid pattern %q", path, s.Pattern))
 	}
 	if s.Format != "" && !validFormat(s.Format, v) {
 		errs = append(errs, fieldError(path, "format", v, "%s must be a valid %s", path, s.Format))
@@ -169,9 +168,11 @@ func validateString(value any, s *Schema, path string) (any, []FieldError) {
 
 func (s *Schema) validateShape() error {
 	if s.Pattern != "" {
-		if _, err := regexp.Compile(s.Pattern); err != nil {
+		compiled, err := regexp.Compile(s.Pattern)
+		if err != nil {
 			return fmt.Errorf("invalid pattern %q: %w", s.Pattern, err)
 		}
+		s.compiledPattern = compiled
 	}
 	if (s.Minimum != nil || s.Maximum != nil) && s.Type != TypeInteger && s.Type != TypeNumber {
 		return fmt.Errorf("%s schema cannot use minimum or maximum", s.Type)

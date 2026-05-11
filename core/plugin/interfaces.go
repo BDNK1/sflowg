@@ -44,7 +44,7 @@ import (
 //
 // If Initialize() returns an error, the application will fail to start.
 // This is intentional - fail-fast on startup is better than runtime failures.
-type Initializer = runtime.Initializer
+type Initializer = core.Initializer
 
 // Shutdowner is a type alias to core.Shutdowner.
 // Plugins implementing this interface will have Shutdown() called during graceful shutdown.
@@ -71,4 +71,4 @@ type Initializer = runtime.Initializer
 //
 // Shutdown is called in reverse order of initialization to properly
 // handle dependencies between plugins.
-type Shutdowner = runtime.Shutdowner
+type Shutdowner = core.Shutdowner

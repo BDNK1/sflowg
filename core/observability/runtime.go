@@ -11,14 +11,14 @@ import (
 var (
 	initObservabilityLogger = InitLogger
 	initTracingRuntime      = InitTracing
-	initMetricsRuntime      = runtime.InitMetrics
+	initMetricsRuntime      = core.InitMetrics
 )
 
 // Runtime owns the app-scoped observability primitives and their shutdown.
 type Runtime struct {
-	Logger   runtime.Logger
+	Logger   core.Logger
 	Tracer   trace.Tracer
-	Metrics  *runtime.Metrics
+	Metrics  *core.Metrics
 	shutdown func(context.Context) error
 }
 
@@ -57,7 +57,7 @@ func Init(cfg Config) (*Runtime, error) {
 	}
 
 	return &Runtime{
-		Logger:  runtime.NewLogger(baseLogger),
+		Logger:  core.NewLogger(baseLogger),
 		Tracer:  tracer,
 		Metrics: metrics,
 		shutdown: joinShutdowns([]func(context.Context) error{

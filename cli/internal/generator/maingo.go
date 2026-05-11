@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"unicode"
 
 	"github.com/BDNK1/sflowg/cli/internal/config"
 	"github.com/BDNK1/sflowg/cli/internal/constants"
@@ -88,8 +89,28 @@ func capitalize(s string) string {
 	return strings.ToUpper(s)
 }
 
-// sanitizeGoIdentifier converts a string to a valid Go identifier
-// Replaces hyphens and other invalid characters with underscores
 func sanitizeGoIdentifier(s string) string {
-	return strings.ReplaceAll(s, "-", "_")
+	if s == "" {
+		return "_"
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i, r := range s {
+		switch {
+		case r == '_' || unicode.IsLetter(r):
+			b.WriteRune(r)
+		case unicode.IsDigit(r):
+			if i == 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "_"
+	}
+	return out
 }

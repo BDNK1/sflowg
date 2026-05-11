@@ -113,7 +113,10 @@ func TestFlattenToFormData(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := flattenToFormData(tt.input, "")
+			result, err := flattenToFormData(tt.input, "", maxFormDataDepth)
+			if err != nil {
+				t.Fatalf("flattenToFormData returned error: %v", err)
+			}
 
 			if len(result) != len(tt.expected) {
 				t.Errorf("length mismatch: got %d, want %d\ngot: %v\nwant: %v",
@@ -129,5 +132,21 @@ func TestFlattenToFormData(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFlattenToFormData_DepthLimit(t *testing.T) {
+	t.Parallel()
+	deep := map[string]any{}
+	current := deep
+	for i := 0; i < maxFormDataDepth+5; i++ {
+		next := map[string]any{}
+		current["nested"] = next
+		current = next
+	}
+	current["leaf"] = "value"
+
+	if _, err := flattenToFormData(deep, "", maxFormDataDepth); err == nil {
+		t.Fatal("expected depth-limit error, got nil")
 	}
 }

@@ -240,16 +240,9 @@ func main() {
 {{- end}}
 {{- end}}
 
-	// DEBUG: Print rawValues before InitializeConfig
-	fmt.Printf("[config] DEBUG {{$plugin.Name}}: rawValues = %+v\n", {{sanitize $plugin.Name}}RawValues)
-
-	// Apply defaults, merge values, and validate
 	if err := bootstrap.InitializeConfig(&{{sanitize $plugin.Name}}Config, {{sanitize $plugin.Name}}RawValues); err != nil {
 		return fmt.Errorf("failed to initialize {{$plugin.Name}} config: %w", err)
 	}
-
-	// DEBUG: Print config after InitializeConfig
-	fmt.Printf("[config] DEBUG {{$plugin.Name}}: config = %+v\n", {{sanitize $plugin.Name}}Config)
 {{- end}}
 
 	// Create plugin instance
@@ -404,41 +397,30 @@ func findFlowsPath(flagPath string) (string, string, error) {
 }
 {{- end}}
 
-// loadEnvFile loads environment variables from .env file next to the binary
-// Only sets variables that are not already set in the environment
 func loadEnvFile() {
-	// Find .env file next to binary
 	exe, err := os.Executable()
 	if err != nil {
-		fmt.Printf("[env] DEBUG: Failed to get executable path: %v\n", err)
 		return
 	}
 
-	fmt.Printf("[env] DEBUG: Executable path: %s\n", exe)
 	envPath := filepath.Join(filepath.Dir(exe), ".env")
-	fmt.Printf("[env] DEBUG: Looking for .env at: %s\n", envPath)
 
 	file, err := os.Open(envPath)
 	if err != nil {
-		fmt.Printf("[env] DEBUG: Failed to open .env: %v\n", err)
 		return
 	}
 	defer file.Close()
-	fmt.Printf("[env] DEBUG: Successfully opened .env file\n")
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 
-		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 
-		// Parse KEY=VALUE
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
-			fmt.Printf("[env] DEBUG: Skipping malformed line: %q\n", line)
 			continue
 		}
 
@@ -453,12 +435,8 @@ func loadEnvFile() {
 			}
 		}
 
-		// Only set if not already in environment
 		if os.Getenv(key) == "" {
-			fmt.Printf("[env] DEBUG: Setting %s=%s\n", key, value)
 			os.Setenv(key, value)
-		} else {
-			fmt.Printf("[env] DEBUG: Skipping %s (already set)\n", key)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -8,6 +9,8 @@ import (
 	"github.com/BDNK1/sflowg/core/plugin"
 	_ "github.com/lib/pq"
 )
+
+const pingTimeout = 5 * time.Second
 
 // Config holds the Postgres plugin configuration
 type Config struct {
@@ -64,8 +67,9 @@ func (p *PostgresPlugin) Initialize(log plugin.Logger) error {
 	db.SetMaxIdleConns(p.Config.MaxIdleConns)
 	db.SetConnMaxLifetime(time.Duration(p.Config.ConnMaxLifetimeMs) * time.Millisecond)
 
-	// Verify connection
-	if err := db.Ping(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return fmt.Errorf("postgres: failed to ping database: %w", err)
 	}
@@ -89,7 +93,7 @@ func (p *PostgresPlugin) Get(exec *plugin.Execution, input GetInput) (GetOutput,
 		"query", input.Query,
 		"params", input.Params)
 
-	rows, err := p.db.Query(input.Query, input.Params...)
+	rows, err := p.db.QueryContext(exec, input.Query, input.Params...)
 	if err != nil {
 		return GetOutput{}, fmt.Errorf("postgres.get: query failed: %w", err)
 	}
@@ -106,15 +110,20 @@ func (p *PostgresPlugin) Get(exec *plugin.Execution, input GetInput) (GetOutput,
 		return GetOutput{}, fmt.Errorf("postgres.get: failed to get column types: %w", err)
 	}
 
-	// Check if we have a row
 	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return GetOutput{}, fmt.Errorf("postgres.get: rows iteration error: %w", err)
+		}
 		return GetOutput{Found: false, Row: map[string]any{}}, nil
 	}
 
-	// Scan the row
 	row, err := scanRow(cols, colTypes, rows)
 	if err != nil {
 		return GetOutput{}, fmt.Errorf("postgres.get: failed to scan row: %w", err)
+	}
+
+	if err := rows.Err(); err != nil {
+		return GetOutput{}, fmt.Errorf("postgres.get: rows iteration error: %w", err)
 	}
 
 	return GetOutput{Found: true, Row: row}, nil
@@ -127,7 +136,7 @@ func (p *PostgresPlugin) Exec(exec *plugin.Execution, input ExecInput) (ExecOutp
 		"query", input.Query,
 		"params", input.Params)
 
-	result, err := p.db.Exec(input.Query, input.Params...)
+	result, err := p.db.ExecContext(exec, input.Query, input.Params...)
 	if err != nil {
 		return ExecOutput{}, fmt.Errorf("postgres.exec: query failed: %w", err)
 	}

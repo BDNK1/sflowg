@@ -1,7 +1,8 @@
-package runtime
+package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"time"
@@ -13,7 +14,20 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const flowInputNamespace = "input"
+const (
+	flowInputNamespace = "input"
+	maxSubflowDepth    = 50
+)
+
+type subflowDepthKey struct{}
+
+func subflowDepth(ctx context.Context) int {
+	if ctx == nil {
+		return 0
+	}
+	v, _ := ctx.Value(subflowDepthKey{}).(int)
+	return v
+}
 
 type App struct {
 	Container        *Container
@@ -143,24 +157,34 @@ func (a *App) Start(ctx context.Context, flowsDir string) error {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := a.shutdown(shutdownCtx, activeTransports); err != nil {
-			return err
-		}
-		return ctx.Err()
+		shutdownErr := a.shutdown(shutdownCtx, activeTransports)
+		drained := drainTransportErrors(errChan, len(activeTransports))
+		return errors.Join(append([]error{ctx.Err(), shutdownErr}, drained...)...)
 	case err := <-errChan:
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if shutdownErr := a.shutdown(shutdownCtx, activeTransports); shutdownErr != nil {
-			if err != nil {
-				return fmt.Errorf("%w; shutdown: %v", err, shutdownErr)
-			}
-			return shutdownErr
-		}
-		if err != nil {
-			return err
-		}
+		shutdownErr := a.shutdown(shutdownCtx, activeTransports)
+		drained := drainTransportErrors(errChan, len(activeTransports)-1)
+		return errors.Join(append([]error{err, shutdownErr}, drained...)...)
+	}
+}
+
+func drainTransportErrors(ch <-chan error, remaining int) []error {
+	if remaining <= 0 {
 		return nil
 	}
+	out := make([]error, 0, remaining)
+	for i := 0; i < remaining; i++ {
+		select {
+		case err := <-ch:
+			if err != nil {
+				out = append(out, err)
+			}
+		default:
+			return out
+		}
+	}
+	return out
 }
 
 // loadFlows loads flow definitions from the specified directory using the configured FlowLoader.
@@ -294,6 +318,16 @@ func (a *App) InvokeSubflow(parent *Execution, target *Flow, args map[string]any
 	if target == nil {
 		return nil, &FlowError{Type: ErrorTypePermanent, Code: string(ErrorCodeRuntimeError), Message: "subflow target is nil"}
 	}
+
+	depth := subflowDepth(parent) + 1
+	if depth > maxSubflowDepth {
+		return nil, &FlowError{
+			Type:    ErrorTypePermanent,
+			Code:    string(ErrorCodeSubflowDepth),
+			Message: fmt.Sprintf("subflow %q exceeds maximum recursion depth of %d", target.ID, maxSubflowDepth),
+		}
+	}
+
 	normalized, err := validateSubflowArgs(target, args)
 	if err != nil {
 		return nil, err
@@ -309,10 +343,10 @@ func (a *App) InvokeSubflow(parent *Execution, target *Flow, args map[string]any
 		trace.WithAttributes(attribute.String("flow.call.target", target.ID)),
 	)
 	defer span.End()
-	subCtx := ctx
+	subCtx := context.WithValue(ctx, subflowDepthKey{}, depth)
 	cancel := func() {}
 	if target.Timeout > 0 {
-		subCtx, cancel = context.WithTimeout(ctx, time.Duration(target.Timeout)*time.Millisecond)
+		subCtx, cancel = context.WithTimeout(subCtx, time.Duration(target.Timeout)*time.Millisecond)
 	}
 	defer cancel()
 	sub = sub.WithContext(subCtx)

@@ -421,7 +421,7 @@ func runBuild(_ *cobra.Command, args []string) error {
 
 func validateEmbeddedFlows(flowsDir string) error {
 	loader := dslengine.NewFlowLoader()
-	flows := map[string]runtime.Flow{}
+	flows := map[string]core.Flow{}
 	for _, ext := range loader.Extensions() {
 		matches, err := filepath.Glob(filepath.Join(flowsDir, ext))
 		if err != nil {

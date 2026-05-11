@@ -19,10 +19,10 @@ import (
 //
 // Risor auto-wraps Go functions, so `http.request({url: "..."})` in DSL code
 // performs map attribute access on "http" then calls the "request" function.
-func BuildPluginGlobals(exec *runtime.Execution) map[string]any {
+func BuildPluginGlobals(exec *core.Execution) map[string]any {
 	grouped := make(map[string]map[string]any)
 
-	exec.Container.RangeTasks(func(taskName string, task runtime.Task) {
+	exec.Container.RangeTasks(func(taskName string, task core.Task) {
 		parts := strings.SplitN(taskName, ".", 2)
 		if len(parts) != 2 {
 			return
@@ -52,7 +52,7 @@ func BuildPluginGlobals(exec *runtime.Execution) map[string]any {
 // BuildResponseGlobals creates the "response" global module for Risor DSL code.
 // Both step bodies and return bodies use this; response.*() calls set a
 // descriptor for the active transport to dispatch.
-func BuildResponseGlobals(exec *runtime.Execution) map[string]any {
+func BuildResponseGlobals(exec *core.Execution) map[string]any {
 	responseMethods := make(map[string]any)
 
 	subtypes := exec.Flow.ResponseSubtypes
@@ -72,7 +72,7 @@ func BuildResponseGlobals(exec *runtime.Execution) map[string]any {
 			if err != nil {
 				return err
 			}
-			exec.State().SetResponse(&runtime.ResponseDescriptor{
+			exec.State().SetResponse(&core.ResponseDescriptor{
 				Subtype:     subtype,
 				HandlerName: handlerName,
 				Args:        argsMap,
@@ -86,7 +86,7 @@ func BuildResponseGlobals(exec *runtime.Execution) map[string]any {
 	}
 }
 
-func BuildFlowCallGlobals(invoker runtime.SubflowInvoker, exec *runtime.Execution) map[string]any {
+func BuildFlowCallGlobals(invoker core.SubflowInvoker, exec *core.Execution) map[string]any {
 	return map[string]any{
 		"flow": map[string]any{
 			"call": func(name string, args map[string]any) (map[string]any, error) {
@@ -95,16 +95,16 @@ func BuildFlowCallGlobals(invoker runtime.SubflowInvoker, exec *runtime.Executio
 				}
 				target, ok := invoker.LookupFlow(name)
 				if !ok {
-					return nil, &runtime.FlowError{
-						Type:    runtime.ErrorTypePermanent,
-						Code:    string(runtime.ErrorCodeRuntimeError),
+					return nil, &core.FlowError{
+						Type:    core.ErrorTypePermanent,
+						Code:    string(core.ErrorCodeRuntimeError),
 						Message: fmt.Sprintf("undefined subflow %q", name),
 					}
 				}
 				if target.Entrypoint.Type != "flow" {
-					return nil, &runtime.FlowError{
-						Type:    runtime.ErrorTypePermanent,
-						Code:    string(runtime.ErrorCodeRuntimeError),
+					return nil, &core.FlowError{
+						Type:    core.ErrorTypePermanent,
+						Code:    string(core.ErrorCodeRuntimeError),
 						Message: fmt.Sprintf("flow.call target %q must be entrypoint.flow, got %q", name, target.Entrypoint.Type),
 					}
 				}

@@ -1,6 +1,8 @@
-package runtime
+package core
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -191,5 +193,75 @@ func TestValueStore_Snapshot_DeepCopiesSlices(t *testing.T) {
 	}
 	if gotFirst["id"] != "a" {
 		t.Fatalf("store slice element was mutated through snapshot: got %v, want a", gotFirst["id"])
+	}
+}
+
+func TestValueStore_ConcurrentReadWrite(t *testing.T) {
+	t.Parallel()
+	const (
+		writers       = 16
+		readers       = 16
+		writesPerGoro = 200
+		readsPerGoro  = 200
+	)
+	s := NewValueStore()
+	s.SetNested("seed", map[string]any{"value": 0})
+
+	var wg sync.WaitGroup
+	wg.Add(writers + readers)
+
+	for w := 0; w < writers; w++ {
+		w := w
+		go func() {
+			defer wg.Done()
+			for i := 0; i < writesPerGoro; i++ {
+				key := fmt.Sprintf("worker.%d.step.%d", w, i)
+				s.SetNested(key, map[string]any{"i": i, "w": w})
+				s.Set(fmt.Sprintf("flat.%d.%d", w, i), i)
+			}
+		}()
+	}
+
+	for r := 0; r < readers; r++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < readsPerGoro; i++ {
+				_, _ = s.Get("seed.value")
+				_ = s.Snapshot()
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+func TestValueStore_ConcurrentNestedWrites(t *testing.T) {
+	t.Parallel()
+	const goroutines = 32
+	s := NewValueStore()
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := 0; g < goroutines; g++ {
+		g := g
+		go func() {
+			defer wg.Done()
+			s.SetNested("shared", map[string]any{
+				fmt.Sprintf("k%d", g): map[string]any{
+					"nested": g,
+					"list":   []any{g, g + 1},
+				},
+			})
+		}()
+	}
+	wg.Wait()
+
+	snap := s.Snapshot()
+	shared, ok := snap["shared"].(map[string]any)
+	if !ok {
+		t.Fatalf("shared key not a map: %T", snap["shared"])
+	}
+	if len(shared) == 0 {
+		t.Fatalf("shared map is empty after concurrent writes")
 	}
 }

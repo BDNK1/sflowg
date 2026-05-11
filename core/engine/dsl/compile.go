@@ -18,7 +18,7 @@ func NewCompiler() *Compiler {
 	return &Compiler{interpreter: &Interpreter{}}
 }
 
-func (c *Compiler) CompileFlow(ctx context.Context, flow *runtime.Flow, container *runtime.Container) error {
+func (c *Compiler) CompileFlow(ctx context.Context, flow *core.Flow, container *core.Container) error {
 	frameworkKeys, frameworkEnv := collectFrameworkInfo(container)
 	frameworkEnv["response"] = buildResponseTemplateModule(flow.ResponseSubtypes)
 	knownStoreKeys := collectKnownStoreKeys(flow)
@@ -89,7 +89,7 @@ func (c *Compiler) compileBody(
 	return storeKeys, code, nil
 }
 
-func collectKnownStoreKeys(flow *runtime.Flow) []string {
+func collectKnownStoreKeys(flow *core.Flow) []string {
 	keys := []string{"request", "input", "properties", "error", "compensation"}
 	seen := map[string]struct{}{
 		"request":      {},
@@ -111,7 +111,7 @@ func collectKnownStoreKeys(flow *runtime.Flow) []string {
 	return keys
 }
 
-func collectFrameworkInfo(container *runtime.Container) (map[string]struct{}, map[string]any) {
+func collectFrameworkInfo(container *core.Container) (map[string]struct{}, map[string]any) {
 	frameworkKeys := map[string]struct{}{
 		"response":      {},
 		"flow":          {},
@@ -164,9 +164,9 @@ func buildStepTemplateEnv(storeKeys []string, frameworkEnv map[string]any) map[s
 	return env
 }
 
-func buildPluginTemplateModules(container *runtime.Container) map[string]any {
+func buildPluginTemplateModules(container *core.Container) map[string]any {
 	grouped := make(map[string]map[string]any)
-	container.RangeTasks(func(taskName string, _ runtime.Task) {
+	container.RangeTasks(func(taskName string, _ core.Task) {
 		parts := strings.SplitN(taskName, ".", 2)
 		if len(parts) != 2 {
 			return
@@ -209,7 +209,7 @@ func buildLogTemplateModule() map[string]any {
 	}
 }
 
-func buildMetricTemplateModule(container *runtime.Container) map[string]any {
+func buildMetricTemplateModule(container *core.Container) map[string]any {
 	module := map[string]any{
 		"counter":       func(args ...any) error { return nil },
 		"updowncounter": func(args ...any) error { return nil },

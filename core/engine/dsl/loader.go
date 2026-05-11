@@ -20,15 +20,15 @@ func (l *FlowLoader) Extensions() []string {
 	return []string{"*.flow"}
 }
 
-func (l *FlowLoader) Load(filePath string) (runtime.Flow, error) {
+func (l *FlowLoader) Load(filePath string) (core.Flow, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return runtime.Flow{}, fmt.Errorf("error reading DSL file: %w", err)
+		return core.Flow{}, fmt.Errorf("error reading DSL file: %w", err)
 	}
 
 	flow, err := Parse(string(data))
 	if err != nil {
-		return runtime.Flow{}, fmt.Errorf("error parsing DSL file %s: %w", filePath, err)
+		return core.Flow{}, fmt.Errorf("error parsing DSL file %s: %w", filePath, err)
 	}
 
 	// Derive flow ID from filename (strip extension and path)
@@ -36,7 +36,7 @@ func (l *FlowLoader) Load(filePath string) (runtime.Flow, error) {
 
 	// Convert return body to a final step (return is just an unconditional step)
 	if flow.Return.Body != "" {
-		flow.Steps = append(flow.Steps, runtime.Step{
+		flow.Steps = append(flow.Steps, core.Step{
 			ID:   "__return",
 			Body: flow.Return.Body,
 		})

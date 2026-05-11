@@ -15,8 +15,8 @@ import (
 	flowtransport "github.com/BDNK1/sflowg/core/transport/flow"
 )
 
-type Container = runtime.Container
-type Transport = runtime.Transport
+type Container = core.Container
+type Transport = core.Transport
 type ObservabilityConfig = observability.Config
 type LoggingConfig = observability.LoggingConfig
 type LogExportConfig = observability.LogExportConfig
@@ -44,7 +44,7 @@ type Config struct {
 
 // Run assembles the standard runtime stack and starts the application.
 func Run(ctx context.Context, cfg Config) (err error) {
-	container := runtime.NewContainer(runtime.NewLogger(nil))
+	container := core.NewContainer(core.NewLogger(nil))
 	obs, err := observability.Init(cfg.Observability)
 	if err != nil {
 		return fmt.Errorf("initialize observability: %w", err)
@@ -77,9 +77,9 @@ func Run(ctx context.Context, cfg Config) (err error) {
 	stepExecutor := dslengine.NewStepExecutor()
 	stepRunner := dslengine.NewLocalStepRunner(stepExecutor)
 	compiler := dslengine.NewCompiler()
-	newValueStore := func() runtime.ValueStore { return runtime.NewValueStore() }
+	newValueStore := func() core.ValueStore { return core.NewValueStore() }
 
-	app := runtime.NewApp(container, loader, evaluator, stepExecutor, stepRunner, compiler, newValueStore)
+	app := core.NewApp(container, loader, evaluator, stepExecutor, stepRunner, compiler, newValueStore)
 	stepExecutor.SetSubflowInvoker(app)
 	if cfg.ValidateFlows {
 		app.SetFlowValidator(dslengine.NewFlowValidator())
@@ -111,7 +111,7 @@ func Run(ctx context.Context, cfg Config) (err error) {
 }
 
 func InitializeConfig(config any, rawValues map[string]any) error {
-	return runtime.InitializeConfig(config, rawValues)
+	return core.InitializeConfig(config, rawValues)
 }
 
 func DefaultObservabilityConfig() ObservabilityConfig {

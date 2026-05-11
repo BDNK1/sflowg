@@ -1,4 +1,4 @@
-package runtime
+package core
 
 import (
 	"context"
@@ -12,6 +12,11 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+)
+
+const (
+	defaultCompensationTimeout = 30 * time.Second
+	defaultOnErrorTimeout      = 30 * time.Second
 )
 
 // Executor orchestrates flow step execution.
@@ -356,17 +361,15 @@ func (e *Executor) computeDelay(retry *RetryConfig, attempt int) time.Duration {
 	return delay
 }
 
-// runCompensations iterates the CompensationStack in LIFO order and executes
-// each compensation body. Failures are logged but do not stop remaining compensations.
-// Uses a detached context so compensation DB/HTTP calls complete even if the flow
-// context was already cancelled (e.g. by a timeout).
 func (e *Executor) runCompensations(execution *Execution) {
 	oee, ok := e.stepExecutor.(OnErrorExecutor)
 	if !ok {
 		return
 	}
 
-	safeExec := execution.WithContext(context.WithoutCancel(execution))
+	safeCtx, cancel := context.WithTimeout(context.WithoutCancel(execution), defaultCompensationTimeout)
+	defer cancel()
+	safeExec := execution.WithContext(safeCtx)
 	log := safeExec.Logger()
 	stack := execution.State().CompensationSnapshot()
 	for i := len(stack) - 1; i >= 0; i-- {
@@ -374,15 +377,11 @@ func (e *Executor) runCompensations(execution *Execution) {
 		log.Info(fmt.Sprintf("Running compensation for step %s (path: %s)", entry.StepID, entry.Path))
 		if err := e.runIsolatedCompensation(safeExec, oee, entry); err != nil {
 			log.Error(fmt.Sprintf("Compensation failed for step %s", entry.StepID), "error", err)
-			// Continue remaining compensations even on failure.
 			continue
 		}
 	}
 }
 
-// runOnErrorHandler executes the flow-level on_error body if one is defined.
-// Uses a detached context so the handler can complete (set response, update DB, etc.)
-// even when the original flow context has already been cancelled by a timeout.
 func (e *Executor) runOnErrorHandler(execution *Execution, fe *FlowError) (handled bool, handlerErr *FlowError) {
 	if execution.Flow.OnErrorBody == "" {
 		return false, nil
@@ -391,7 +390,8 @@ func (e *Executor) runOnErrorHandler(execution *Execution, fe *FlowError) (handl
 		return false, nil
 	}
 
-	safeCtx := context.WithoutCancel(execution)
+	safeCtx, cancel := context.WithTimeout(context.WithoutCancel(execution), defaultOnErrorTimeout)
+	defer cancel()
 	log := execution.Logger()
 	log.Info("Running flow-level on_error handler", "error_code", fe.Code)
 	safeExec := execution.WithContext(safeCtx)

@@ -38,7 +38,7 @@ type FlowValidator struct{}
 
 func NewFlowValidator() *FlowValidator { return &FlowValidator{} }
 
-func (v *FlowValidator) ValidateFlows(flows map[string]runtime.Flow) error {
+func (v *FlowValidator) ValidateFlows(flows map[string]core.Flow) error {
 	edges := make(map[string][]string)
 	for flowID, flow := range flows {
 		refs, err := extractFlowCallsFromFlow(flow)
@@ -172,7 +172,7 @@ func simpleLiteral(node ast.Expr) (LiteralValue, bool) {
 	}
 }
 
-func extractFlowCallsFromFlow(flow runtime.Flow) ([]FlowCallRef, error) {
+func extractFlowCallsFromFlow(flow core.Flow) ([]FlowCallRef, error) {
 	var refs []FlowCallRef
 	add := func(body string) error {
 		bodyRefs, err := ExtractLiteralFlowCalls(body)

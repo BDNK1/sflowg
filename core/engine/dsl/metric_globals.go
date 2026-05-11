@@ -8,7 +8,7 @@ import (
 
 // BuildMetricGlobals creates the `metric` module globals for DSL step evaluation.
 // Follows the same pattern as BuildLogGlobals.
-func BuildMetricGlobals(exec *runtime.Execution) map[string]any {
+func BuildMetricGlobals(exec *core.Execution) map[string]any {
 	metrics := exec.Metrics()
 	logger := exec.Logger().ForUser()
 
@@ -30,7 +30,7 @@ func BuildMetricGlobals(exec *runtime.Execution) map[string]any {
 }
 
 // metric.counter(name, value?, labels?)
-func makeCounterFn(exec *runtime.Execution, metrics *runtime.Metrics, logger runtime.Logger) func(args ...any) error {
+func makeCounterFn(exec *core.Execution, metrics *core.Metrics, logger core.Logger) func(args ...any) error {
 	return func(args ...any) error {
 		if len(args) == 0 {
 			logger.Warn("metric.counter called with no arguments")
@@ -54,7 +54,7 @@ func makeCounterFn(exec *runtime.Execution, metrics *runtime.Metrics, logger run
 }
 
 // metric.updowncounter(name, value, labels?)
-func makeUpDownCounterFn(exec *runtime.Execution, metrics *runtime.Metrics, logger runtime.Logger) func(args ...any) error {
+func makeUpDownCounterFn(exec *core.Execution, metrics *core.Metrics, logger core.Logger) func(args ...any) error {
 	return func(args ...any) error {
 		if len(args) < 2 {
 			logger.Warn("metric.updowncounter requires name and value arguments")
@@ -78,7 +78,7 @@ func makeUpDownCounterFn(exec *runtime.Execution, metrics *runtime.Metrics, logg
 }
 
 // metric.histogram(name, value, labels?)
-func makeHistogramFn(exec *runtime.Execution, metrics *runtime.Metrics, logger runtime.Logger) func(args ...any) error {
+func makeHistogramFn(exec *core.Execution, metrics *core.Metrics, logger core.Logger) func(args ...any) error {
 	return func(args ...any) error {
 		if len(args) < 2 {
 			logger.Warn("metric.histogram requires name and value arguments")
@@ -102,7 +102,7 @@ func makeHistogramFn(exec *runtime.Execution, metrics *runtime.Metrics, logger r
 }
 
 // metric.gauge(name, value, labels?)
-func makeGaugeFn(exec *runtime.Execution, metrics *runtime.Metrics, logger runtime.Logger) func(args ...any) error {
+func makeGaugeFn(exec *core.Execution, metrics *core.Metrics, logger core.Logger) func(args ...any) error {
 	return func(args ...any) error {
 		if len(args) < 2 {
 			logger.Warn("metric.gauge requires name and value arguments")
@@ -128,7 +128,7 @@ func makeGaugeFn(exec *runtime.Execution, metrics *runtime.Metrics, logger runti
 // buildPredeclaredHandle builds a named handle map with the appropriate method
 // for the metric type. These are nested maps containing Go functions, which
 // will be recursively converted to Risor modules by mapToModule.
-func buildPredeclaredHandle(exec *runtime.Execution, metrics *runtime.Metrics, name string, decl runtime.UserMetricDecl, logger runtime.Logger) map[string]any {
+func buildPredeclaredHandle(exec *core.Execution, metrics *core.Metrics, name string, decl core.UserMetricDecl, logger core.Logger) map[string]any {
 	switch decl.Type {
 	case "counter":
 		return map[string]any{
@@ -246,7 +246,7 @@ func asLabels(v any) map[string]any {
 	return nil
 }
 
-func parseCounterArgs(name string, args []any, logger runtime.Logger) (float64, map[string]any, bool) {
+func parseCounterArgs(name string, args []any, logger core.Logger) (float64, map[string]any, bool) {
 	value := 1.0
 	remaining := args
 	if len(remaining) > 0 {
@@ -263,7 +263,7 @@ func parseCounterArgs(name string, args []any, logger runtime.Logger) (float64, 
 	return value, labels, true
 }
 
-func parseMetricValueArgs(method, name string, args []any, logger runtime.Logger) (float64, map[string]any, bool) {
+func parseMetricValueArgs(method, name string, args []any, logger core.Logger) (float64, map[string]any, bool) {
 	if len(args) == 0 {
 		logger.Warn(method+": value must be numeric", "metric", name)
 		return 0, nil, false
@@ -282,7 +282,7 @@ func parseMetricValueArgs(method, name string, args []any, logger runtime.Logger
 	return value, labels, true
 }
 
-func parseMetricTailArgs(method, name string, args []any, logger runtime.Logger) (map[string]any, bool) {
+func parseMetricTailArgs(method, name string, args []any, logger core.Logger) (map[string]any, bool) {
 	var labels map[string]any
 
 	for _, arg := range args {

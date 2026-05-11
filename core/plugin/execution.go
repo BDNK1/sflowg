@@ -81,7 +81,7 @@ import "github.com/BDNK1/sflowg/core"
 //
 //	    return plugin.Output{"status": 200, "body": data}, nil
 //	}
-type Execution = runtime.Execution
+type Execution = core.Execution
 
 // Note: This is a type alias. The actual Execution struct is defined in
 // the parent runtime package. This allows plugins to reference the type

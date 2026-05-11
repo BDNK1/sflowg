@@ -20,7 +20,7 @@ import (
 //	  compensate { risor code }        // optional suffix block
 //	on_error { risor code }            // flow-level error handler
 //	return response.json({ ... })
-func Parse(source string) (runtime.Flow, error) {
+func Parse(source string) (core.Flow, error) {
 	p := &parser{source: source, pos: 0}
 	return p.parse()
 }
@@ -30,8 +30,8 @@ type parser struct {
 	pos    int
 }
 
-func (p *parser) parse() (runtime.Flow, error) {
-	var flow runtime.Flow
+func (p *parser) parse() (core.Flow, error) {
+	var flow core.Flow
 
 	p.skipWhitespaceAndComments()
 	for p.pos < len(p.source) {
@@ -111,27 +111,27 @@ func (p *parser) readWord() string {
 
 // parseEntrypoint parses: entrypoint.http { ... }
 // Returns the Entrypoint, the flow-level timeout (extracted from "timeout" key), and any error.
-func (p *parser) parseEntrypoint() (runtime.Entrypoint, int, error) {
+func (p *parser) parseEntrypoint() (core.Entrypoint, int, error) {
 	word := p.readWord() // "entrypoint.http"
 	parts := strings.SplitN(word, ".", 2)
 	if len(parts) != 2 {
-		return runtime.Entrypoint{}, 0, fmt.Errorf("expected entrypoint.TYPE, got %q", word)
+		return core.Entrypoint{}, 0, fmt.Errorf("expected entrypoint.TYPE, got %q", word)
 	}
 	epType := parts[1]
 
 	p.skipWhitespace()
 	body, err := p.readBracedBlock()
 	if err != nil {
-		return runtime.Entrypoint{}, 0, err
+		return core.Entrypoint{}, 0, err
 	}
 
 	config, err := parseSimpleMap(body)
 	if err != nil {
-		return runtime.Entrypoint{}, 0, fmt.Errorf("parsing entrypoint config: %w", err)
+		return core.Entrypoint{}, 0, fmt.Errorf("parsing entrypoint config: %w", err)
 	}
 	input, err := parseEntrypointInput(epType, config)
 	if err != nil {
-		return runtime.Entrypoint{}, 0, fmt.Errorf("parsing entrypoint input contract: %w", err)
+		return core.Entrypoint{}, 0, fmt.Errorf("parsing entrypoint input contract: %w", err)
 	}
 
 	// Extract flow-level timeout from entrypoint config.
@@ -141,14 +141,14 @@ func (p *parser) parseEntrypoint() (runtime.Entrypoint, int, error) {
 		delete(config, "timeout")
 	}
 
-	return runtime.Entrypoint{
+	return core.Entrypoint{
 		Type:   epType,
 		Config: config,
 		Input:  input,
 	}, timeout, nil
 }
 
-func parseEntrypointInput(epType string, config map[string]any) (*runtime.InputContract, error) {
+func parseEntrypointInput(epType string, config map[string]any) (*core.InputContract, error) {
 	switch epType {
 	case "http", "":
 		return httpinput.ParseBinding(config)
@@ -189,17 +189,17 @@ func (p *parser) parseProperties() (map[string]any, error) {
 //	step NAME(condition: ..., timeout: N, retry: {...}) { body }
 //	  fallback { body }    // optional
 //	  compensate { body }  // optional
-func (p *parser) parseStep() (runtime.Step, error) {
+func (p *parser) parseStep() (core.Step, error) {
 	p.readWord() // consume "step"
 	p.skipWhitespace()
 
 	// Read step name
 	name := p.readStepName()
 	if name == "" {
-		return runtime.Step{}, fmt.Errorf("expected step name")
+		return core.Step{}, fmt.Errorf("expected step name")
 	}
 
-	var step runtime.Step
+	var step core.Step
 	step.ID = name
 
 	p.skipWhitespace()
@@ -265,7 +265,7 @@ func (p *parser) parseOnError() (string, error) {
 
 // parseReturn parses: return <expression>
 // Everything after "return " until end of meaningful content is the return body.
-func (p *parser) parseReturn() (runtime.Return, error) {
+func (p *parser) parseReturn() (core.Return, error) {
 	p.readWord() // consume "return"
 	p.skipWhitespace()
 
@@ -324,7 +324,7 @@ func (p *parser) parseReturn() (runtime.Return, error) {
 	}
 
 	body := strings.TrimSpace(p.source[start:p.pos])
-	return runtime.Return{Body: body}, nil
+	return core.Return{Body: body}, nil
 }
 
 // readBracedBlock reads content between { and }, handling nested braces and strings.
@@ -713,7 +713,7 @@ func resolveEnvCall(s string) string {
 
 // applyStepOptions parses the parenthesized options string and applies to step.
 // Supports fields: max_attempts, delay, backoff, max_delay, jitter, when, non_retryable, timeout.
-func applyStepOptions(step *runtime.Step, opts string) error {
+func applyStepOptions(step *core.Step, opts string) error {
 	m, err := parseSimpleMap(opts)
 	if err != nil {
 		return fmt.Errorf("parsing step options: %w", err)
@@ -739,7 +739,7 @@ func applyStepOptions(step *runtime.Step, opts string) error {
 		if _, ok := retryMap["condition"]; ok {
 			return fmt.Errorf("unsupported retry field: condition (use when)")
 		}
-		step.Retry = &runtime.RetryConfig{}
+		step.Retry = &core.RetryConfig{}
 
 		if v, ok := retryMap["max_attempts"]; ok {
 			step.Retry.MaxAttempts = toInt(v)
