@@ -2,6 +2,7 @@ package http
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/BDNK1/sflowg/core/plugin"
@@ -77,7 +78,11 @@ func (h *HTTPPlugin) Request(exec *plugin.Execution, input RequestInput) (Reques
 		formData := flattenToFormData(input.Body, "")
 		req.SetFormData(formData)
 	} else {
-		// Default to JSON
+		// Honor explicit JSON encoding without overriding a caller-supplied header.
+		// SFlowG HTTP entrypoints parse request.body as JSON only when this is present.
+		if input.ContentType == "json" && input.Body != nil && !hasHeader(input.Headers, "Content-Type") {
+			req.SetHeader("Content-Type", "application/json")
+		}
 		req.SetBody(input.Body)
 	}
 
@@ -113,6 +118,15 @@ func (h *HTTPPlugin) Request(exec *plugin.Execution, input RequestInput) (Reques
 	}
 
 	return output, nil
+}
+
+func hasHeader(headers map[string]string, name string) bool {
+	for key := range headers {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // flattenToFormData converts a nested map to form-encoded format with bracket notation

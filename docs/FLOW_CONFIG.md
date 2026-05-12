@@ -16,6 +16,7 @@ runtime:
     runtime_max_in_flight: 256
   parallel:
     block_default_max_in_flight: 8
+    foreach_default_max_in_flight: 8
     default_on_failure: wait_all
 
 observability:
@@ -58,6 +59,7 @@ runtime:
     runtime_max_in_flight: 256
   parallel:
     block_default_max_in_flight: 8
+    foreach_default_max_in_flight: 8
     default_on_failure: wait_all
 ```
 
@@ -68,6 +70,9 @@ runtime:
   parallel branches all use this shared budget (default: `256`).
 - `parallel.block_default_max_in_flight` - Default per-block concurrency limit
   for `parallel {}` blocks when `max_in_flight` is omitted (default: `8`).
+- `parallel.foreach_default_max_in_flight` - Default per-loop concurrency limit
+  for `parallel() foreach` when `max_in_flight` is omitted (default: `8`).
+  `0` uses the default; values below `0` are invalid.
 - `parallel.default_on_failure` - Default `parallel {}` failure mode when
   `on_failure` is omitted. Allowed values are `wait_all` and `fail_fast`
   (default: `wait_all`).

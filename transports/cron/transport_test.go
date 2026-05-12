@@ -19,11 +19,7 @@ func (r *captureRunner) RunStep(_ context.Context, _ *runtime.Execution, input r
 
 type noopEvaluator struct{}
 
-func (noopEvaluator) Eval(*runtime.Execution, string) (any, error) {
-	return nil, nil
-}
-
-func (noopEvaluator) EvalWithEnv(*runtime.Execution, string, map[string]any) (any, error) {
+func (noopEvaluator) EvalExpression(*runtime.Execution, string, runtime.ExpressionProgram, []string, map[string]any) (any, error) {
 	return nil, nil
 }
 

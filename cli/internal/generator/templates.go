@@ -330,6 +330,7 @@ func main() {
 		},
 		Parallel: bootstrap.ParallelConfig{
 			BlockDefaultMaxInFlight: {{.Parallel.BlockDefaultMaxInFlight}},
+			ForeachDefaultMaxInFlight: {{.Parallel.ForeachDefaultMaxInFlight}},
 			DefaultOnFailure: {{printf "%q" .Parallel.DefaultOnFailure}},
 		},
 		ValidateFlows:   {{if .EmbedFlows}}false{{else}}true{{end}},

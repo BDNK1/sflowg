@@ -1,0 +1,13 @@
+name: foreach-example
+version: "1.0.0"
+
+runtime:
+  port: 18081
+  engine: dsl
+  parallel:
+    foreach_default_max_in_flight: 2
+
+observability:
+  logging:
+    level: info
+    format: json

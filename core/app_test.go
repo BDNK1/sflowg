@@ -65,8 +65,7 @@ func (onErrorLoader) Load(filePath string) (Flow, error) {
 
 type fakeEvaluator struct{}
 
-func (fakeEvaluator) Eval(*Execution, string) (any, error) { return nil, nil }
-func (fakeEvaluator) EvalWithEnv(*Execution, string, map[string]any) (any, error) {
+func (fakeEvaluator) EvalExpression(*Execution, string, ExpressionProgram, []string, map[string]any) (any, error) {
 	return nil, nil
 }
 

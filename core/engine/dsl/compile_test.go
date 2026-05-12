@@ -80,6 +80,31 @@ func TestCompileFlow_CompilesAllBodies(t *testing.T) {
 	}
 }
 
+func TestCompileFlow_CompensateCanReadCompensatedStepResult(t *testing.T) {
+	flow, err := Parse(`
+step insert_payment {
+	{row: {id: 123}}
+} compensate {
+	postgres.get({
+		query: "delete from payments where id = $1",
+		params: [insert_payment.row.id]
+	})
+}
+`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	flow.ID = "payments"
+
+	compiler := NewCompiler()
+	if err := compiler.CompileFlow(context.Background(), &flow, newCompileTestContainer(t)); err != nil {
+		t.Fatalf("CompileFlow() error = %v", err)
+	}
+	if _, ok := flow.Steps[0].CompensateCompiled.(*bytecode.Code); !ok {
+		t.Fatalf("compensation body was not compiled: %#v", flow.Steps[0].CompensateCompiled)
+	}
+}
+
 func TestCompileFlow_AcceptsHeaderCallPluginSugar(t *testing.T) {
 	flow, err := Parse(`step fetch_order as postgres.get {
 	query: "select 1"
@@ -254,6 +279,434 @@ func TestCompileFlow_RejectsForwardAsyncReference(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "before it is spawned") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompileFlow_RejectsForeachForwardParentAsyncReference(t *testing.T) {
+	tests := []struct {
+		name    string
+		foreach runtime.ForeachBlock
+	}{
+		{
+			name: "source",
+			foreach: runtime.ForeachBlock{
+				Expr:    `prefetch.body`,
+				ItemVar: "row",
+			},
+		},
+		{
+			name: "body",
+			foreach: runtime.ForeachBlock{
+				Expr:    `[]`,
+				ItemVar: "row",
+				Steps: []runtime.Step{{
+					ID:   "use_prefetch",
+					Body: `{body: prefetch.body}`,
+				}},
+			},
+		},
+		{
+			name: "condition",
+			foreach: runtime.ForeachBlock{
+				Expr:    `[]`,
+				ItemVar: "row",
+				Steps: []runtime.Step{{
+					ID:        "use_prefetch",
+					Condition: `prefetch.body != nil`,
+					Body:      `{ok: true}`,
+				}},
+			},
+		},
+		{
+			name: "retry",
+			foreach: runtime.ForeachBlock{
+				Expr:    `[]`,
+				ItemVar: "row",
+				Steps: []runtime.Step{{
+					ID:    "use_prefetch",
+					Body:  `{ok: true}`,
+					Retry: &runtime.RetryConfig{MaxAttempts: 2, When: `prefetch.body != nil`},
+				}},
+			},
+		},
+		{
+			name: "collect",
+			foreach: runtime.ForeachBlock{
+				Expr:    `[]`,
+				ItemVar: "row",
+				Collects: []runtime.ForeachCollect{{
+					Expr:  `prefetch.body`,
+					Alias: "collected",
+				}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flow := &runtime.Flow{
+				ID: "payments",
+				Nodes: []runtime.FlowNode{
+					{ID: "__foreach_1", Kind: runtime.FlowNodeForeach, Foreach: &tt.foreach},
+					{ID: "prefetch", Kind: runtime.FlowNodeStep, Step: &runtime.Step{ID: "prefetch", Async: true, Body: `{ok: true}`}},
+				},
+			}
+
+			err := NewCompiler().CompileFlow(context.Background(), flow, newCompileTestContainer(t))
+			if err == nil {
+				t.Fatal("expected forward async reference error")
+			}
+			if !strings.Contains(err.Error(), "before it is spawned") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestCompileFlow_AllowsForeachLocalAsyncReferenceWithSameFutureParentName(t *testing.T) {
+	flow := &runtime.Flow{
+		ID: "payments",
+		Nodes: []runtime.FlowNode{
+			{
+				ID:   "__foreach_1",
+				Kind: runtime.FlowNodeForeach,
+				Foreach: &runtime.ForeachBlock{
+					Expr:    `[]`,
+					ItemVar: "row",
+					Steps: []runtime.Step{
+						{ID: "prefetch", Async: true, Body: `{ok: true}`},
+						{ID: "use_prefetch", Body: `{body: prefetch.body}`},
+					},
+				},
+			},
+			{ID: "prefetch", Kind: runtime.FlowNodeStep, Step: &runtime.Step{ID: "prefetch", Async: true, Body: `{ok: true}`}},
+		},
+	}
+
+	if err := NewCompiler().CompileFlow(context.Background(), flow, newCompileTestContainer(t)); err != nil {
+		t.Fatalf("CompileFlow() error = %v", err)
+	}
+}
+
+func TestCompileFlow_RejectsForeachCompensation(t *testing.T) {
+	flow := &runtime.Flow{
+		ID: "payments",
+		Nodes: []runtime.FlowNode{{
+			ID:   "__foreach_1",
+			Kind: runtime.FlowNodeForeach,
+			Foreach: &runtime.ForeachBlock{
+				Expr:    `[]`,
+				ItemVar: "row",
+				Steps: []runtime.Step{{
+					ID:             "charge",
+					Body:           `{ok: true}`,
+					CompensateBody: `{ok: true}`,
+				}},
+			},
+		}},
+	}
+
+	err := NewCompiler().CompileFlow(context.Background(), flow, newCompileTestContainer(t))
+	if err == nil {
+		t.Fatal("expected foreach compensation rejection")
+	}
+	if !strings.Contains(err.Error(), "cannot have compensate block") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCompileFlow_ForeachCollectAliasVisibility(t *testing.T) {
+	flow, err := Parse(`
+foreach request.body.items as item {
+  collect item.id as ids
+}
+step after { {ids: ids} }
+on_error { response.json({status: 500, body: {ids: ids}}) }
+return response.json({status: 200, body: {ids: ids}})
+`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if err := NewCompiler().CompileFlow(context.Background(), &flow, newCompileTestContainer(t)); err != nil {
+		t.Fatalf("CompileFlow() error = %v", err)
+	}
+	after := flow.Nodes[1].Step
+	if len(after.StoreKeys) != 1 || after.StoreKeys[0] != "ids" {
+		t.Fatalf("after StoreKeys = %#v, want [ids]", after.StoreKeys)
+	}
+}
+
+func TestCompileFlow_ForeachRejectsInvalidVisibility(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		wantErr string
+	}{
+		{
+			name: "upstream step reads later collect alias",
+			source: `
+step before { {ids: ids} }
+foreach request.body.items as item {
+  collect item.id as ids
+}
+`,
+			wantErr: "outside lexical scope",
+		},
+		{
+			name: "downstream step reads body step",
+			source: `
+foreach request.body.items as item {
+  step normalize { {id: item.id} }
+  collect normalize.id as ids
+}
+step after { {id: normalize.id} }
+`,
+			wantErr: "outside lexical scope",
+		},
+		{
+			name: "return reads body step",
+			source: `
+foreach request.body.items as item {
+  step normalize { {id: item.id} }
+}
+return response.json({status: 200, body: {id: normalize.id}})
+`,
+			wantErr: "outside lexical scope",
+		},
+		{
+			name: "on_error reads body step",
+			source: `
+foreach request.body.items as item {
+  step normalize { {id: item.id} }
+}
+on_error { response.json({status: 500, body: {id: normalize.id}}) }
+`,
+			wantErr: "outside lexical scope",
+		},
+		{
+			name: "collect reads same foreach collect alias",
+			source: `
+foreach request.body.items as item {
+  collect item.id as ids
+  collect ids as duplicate
+}
+`,
+			wantErr: "outside lexical scope",
+		},
+		{
+			name: "source reads downstream step",
+			source: `
+foreach after.items as item {
+  collect item.id as ids
+}
+step after { {items: []} }
+`,
+			wantErr: "outside lexical scope",
+		},
+		{
+			name: "body reads downstream step",
+			source: `
+foreach request.body.items as item {
+  step use_after { {value: after.value} }
+}
+step after { {value: true} }
+`,
+			wantErr: "outside lexical scope",
+		},
+		{
+			name: "collect reads downstream step",
+			source: `
+foreach request.body.items as item {
+  collect after.value as values
+}
+step after { {value: true} }
+`,
+			wantErr: "outside lexical scope",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flow, err := Parse(tt.source)
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			err = NewCompiler().CompileFlow(context.Background(), &flow, newCompileTestContainer(t))
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestCompileFlow_ForeachLocalAsyncDependencies(t *testing.T) {
+	flow, err := Parse(`
+async step parent_prefetch { {body: "parent"} }
+foreach request.body.items as item {
+  async step enrich { {body: item.id} }
+  step use_local { {body: enrich.body, parent: parent_prefetch.body} }
+  collect enrich.body as enriched
+}
+`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if err := NewCompiler().CompileFlow(context.Background(), &flow, newCompileTestContainer(t)); err != nil {
+		t.Fatalf("CompileFlow() error = %v", err)
+	}
+	steps := flow.Nodes[1].Foreach.Steps
+	if len(steps[1].AsyncDeps) != 2 || steps[1].AsyncDeps[0] != "enrich" || steps[1].AsyncDeps[1] != "parent_prefetch" {
+		t.Fatalf("use_local AsyncDeps = %#v, want [enrich parent_prefetch]", steps[1].AsyncDeps)
+	}
+	collect := flow.Nodes[1].Foreach.Collects[0]
+	if len(collect.StoreKeys) != 1 || collect.StoreKeys[0] != "enrich" {
+		t.Fatalf("collect StoreKeys = %#v, want [enrich]", collect.StoreKeys)
+	}
+}
+
+func TestCompileFlow_ForeachRejectsLocalForwardAsyncReference(t *testing.T) {
+	flow, err := Parse(`
+foreach request.body.items as item {
+  step use_later { {body: enrich.body} }
+  async step enrich { {body: item.id} }
+}
+`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	err = NewCompiler().CompileFlow(context.Background(), &flow, newCompileTestContainer(t))
+	if err == nil || !strings.Contains(err.Error(), "before it is spawned") {
+		t.Fatalf("expected forward async error, got %v", err)
+	}
+}
+
+func TestCompileFlow_ForeachRejectsShadowingAndReservedIDs(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+	}{
+		{
+			name: "local async shadows prior parent async",
+			source: `
+async step prefetch { {ok: true} }
+foreach request.body.items as item {
+  async step prefetch { {ok: true} }
+}
+`,
+		},
+		{
+			name: "body step shadows prior parent",
+			source: `
+step existing { {ok: true} }
+foreach request.body.items as item {
+  step existing { {ok: true} }
+}
+`,
+		},
+		{
+			name: "loop variable shadows framework",
+			source: `
+foreach request.body.items as request {
+  collect request.id as ids
+}
+`,
+		},
+		{
+			name: "collect alias shadows framework",
+			source: `
+foreach request.body.items as item {
+  collect item.id as request
+}
+`,
+		},
+		{
+			name: "body step reserved prefix",
+			source: `
+foreach request.body.items as item {
+  step __foreach_body { {ok: true} }
+}
+`,
+		},
+		{
+			name: "loop variable reserved prefix",
+			source: `
+foreach request.body.items as __foreach_item {
+  collect __foreach_item.id as ids
+}
+`,
+		},
+		{
+			name: "collect alias reserved prefix",
+			source: `
+foreach request.body.items as item {
+  collect item.id as __foreach_ids
+}
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flow, err := Parse(tt.source)
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			if err := NewCompiler().CompileFlow(context.Background(), &flow, newCompileTestContainer(t)); err == nil {
+				t.Fatal("expected CompileFlow() error")
+			}
+		})
+	}
+}
+
+func TestCompileFlow_ForeachRejectsResponseAndUserNext(t *testing.T) {
+	tests := []string{
+		`foreach request.body.items as item { step respond { response.json({status: 200}) } }`,
+		`foreach request.body.items as item { step route { {__next: "done"} } } step done { nil }`,
+	}
+	for _, source := range tests {
+		flow, err := Parse(source)
+		if err != nil {
+			t.Fatalf("Parse(%q) error = %v", source, err)
+		}
+		err = NewCompiler().CompileFlow(context.Background(), &flow, newCompileTestContainer(t))
+		if err == nil {
+			t.Fatalf("CompileFlow(%q) succeeded, want error", source)
+		}
+		if !strings.Contains(err.Error(), "response") && !strings.Contains(err.Error(), "__next") {
+			t.Fatalf("unexpected error for %q: %v", source, err)
+		}
+	}
+}
+
+func TestCompileFlow_ForeachStoresCompiledExpressions(t *testing.T) {
+	flow, err := Parse(`
+step before { {items: request.body.items} }
+foreach before.items as item {
+  step normalize { {id: item.id} }
+  collect normalize.id as ids
+}
+`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if err := NewCompiler().CompileFlow(context.Background(), &flow, newCompileTestContainer(t)); err != nil {
+		t.Fatalf("CompileFlow() error = %v", err)
+	}
+	block := flow.Nodes[1].Foreach
+	if _, ok := block.ExprProgram.(*bytecode.Code); !ok {
+		t.Fatalf("ExprProgram = %#v, want bytecode", block.ExprProgram)
+	}
+	if len(block.ExprStoreKeys) != 1 || block.ExprStoreKeys[0] != "before" {
+		t.Fatalf("ExprStoreKeys = %#v, want [before]", block.ExprStoreKeys)
+	}
+	if _, ok := block.Collects[0].ExprProgram.(*bytecode.Code); !ok {
+		t.Fatalf("Collect ExprProgram = %#v, want bytecode", block.Collects[0].ExprProgram)
+	}
+	if len(block.Collects[0].StoreKeys) != 1 || block.Collects[0].StoreKeys[0] != "normalize" {
+		t.Fatalf("Collect StoreKeys = %#v, want [normalize]", block.Collects[0].StoreKeys)
+	}
+	if len(block.ParentStoreKeys) != 1 || block.ParentStoreKeys[0] != "before" {
+		t.Fatalf("ParentStoreKeys = %#v, want [before]", block.ParentStoreKeys)
 	}
 }
 

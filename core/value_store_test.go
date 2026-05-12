@@ -163,6 +163,45 @@ func TestValueStore_Snapshot_DeepCopiesNestedMaps(t *testing.T) {
 	}
 }
 
+func TestValueStore_SetNested_DeepCopiesInputMaps(t *testing.T) {
+	s := NewValueStore()
+	input := map[string]any{
+		"body": map[string]any{
+			"id": "original",
+		},
+	}
+
+	s.SetNested("response", input)
+	input["body"].(map[string]any)["id"] = "mutated"
+
+	v, ok := s.Get("response.body.id")
+	if !ok || v != "original" {
+		t.Fatalf("store was mutated through input map: got %v, %v; want original, true", v, ok)
+	}
+}
+
+func TestCloneRunStateSnapshot_IsolatesNestedMaps(t *testing.T) {
+	snapshot := map[string]any{
+		"request": map[string]any{
+			"body": map[string]any{"id": "original"},
+		},
+	}
+
+	left := cloneRunStateSnapshot(snapshot)
+	right := cloneRunStateSnapshot(snapshot)
+
+	left.Store().Set("request.body.id", "left")
+
+	gotRight, ok := right.Store().Get("request.body.id")
+	if !ok || gotRight != "original" {
+		t.Fatalf("right clone was mutated through left clone: got %v, %v; want original, true", gotRight, ok)
+	}
+	gotSnapshot := snapshot["request"].(map[string]any)["body"].(map[string]any)["id"]
+	if gotSnapshot != "original" {
+		t.Fatalf("source snapshot was mutated: got %v, want original", gotSnapshot)
+	}
+}
+
 func TestValueStore_Snapshot_DeepCopiesSlices(t *testing.T) {
 	s := NewValueStore()
 
@@ -191,5 +230,92 @@ func TestValueStore_Snapshot_DeepCopiesSlices(t *testing.T) {
 	}
 	if gotFirst["id"] != "a" {
 		t.Fatalf("store slice element was mutated through snapshot: got %v, want a", gotFirst["id"])
+	}
+}
+
+func TestValueStore_SnapshotKeys(t *testing.T) {
+	s := NewValueStore()
+	s.SetNested("response", map[string]any{"body": map[string]any{"id": "a"}})
+	s.Set("unused", "x")
+
+	snapshot := s.SnapshotKeys([]string{"response.body.id", "missing"})
+	if len(snapshot) != 1 {
+		t.Fatalf("SnapshotKeys len = %d, want 1: %#v", len(snapshot), snapshot)
+	}
+	if snapshot["response.body.id"] != "a" {
+		t.Fatalf("response.body.id = %v, want a", snapshot["response.body.id"])
+	}
+}
+
+func TestScopedValueStore_ReadsFrozenParentAndWritesLocalOnly(t *testing.T) {
+	parent := NewValueStore()
+	parent.Set("prior", "before")
+	view := NewReadOnlyValueView(parent, []string{"prior"})
+	parent.Set("prior", "after")
+
+	scoped := NewScopedValueStore(view)
+	if got, ok := scoped.Get("prior"); !ok || got != "before" {
+		t.Fatalf("scoped prior = %v, %v; want before, true", got, ok)
+	}
+
+	scoped.Set("local", "value")
+	if _, ok := parent.Get("local"); ok {
+		t.Fatal("local write leaked to parent")
+	}
+	if got, ok := scoped.Get("local"); !ok || got != "value" {
+		t.Fatalf("scoped local = %v, %v; want value, true", got, ok)
+	}
+}
+
+func TestScopedValueStore_SnapshotMergesParentAndLocalNestedMaps(t *testing.T) {
+	parent := NewValueStore()
+	parent.SetNested("request", map[string]any{
+		"body": map[string]any{"id": "parent-id"},
+		"headers": map[string]any{
+			"trace": "parent-trace",
+			"keep":  "parent-keep",
+		},
+	})
+	view := NewReadOnlyValueView(parent, nil)
+	scoped := NewScopedValueStore(view)
+	scoped.SetNested("request.headers", map[string]any{"trace": "local-trace"})
+
+	snapshot := scoped.Snapshot()
+	request := snapshot["request"].(map[string]any)
+	body := request["body"].(map[string]any)
+	headers := request["headers"].(map[string]any)
+
+	if body["id"] != "parent-id" {
+		t.Fatalf("parent body was not preserved: %#v", body)
+	}
+	if headers["trace"] != "local-trace" {
+		t.Fatalf("local header did not take precedence: %#v", headers)
+	}
+	if headers["keep"] != "parent-keep" {
+		t.Fatalf("parent sibling header was not preserved: %#v", headers)
+	}
+}
+
+func TestReadOnlyValueView_PreservesDottedKeys(t *testing.T) {
+	parent := NewValueStore()
+	parent.SetNested("response", map[string]any{
+		"body": map[string]any{
+			"id": "abc",
+		},
+	})
+
+	view := NewReadOnlyValueView(parent, []string{"response.body.id"})
+	if got, ok := view.Get("response.body.id"); !ok || got != "abc" {
+		t.Fatalf("view response.body.id = %v, %v; want abc, true", got, ok)
+	}
+
+	snapshot := view.SnapshotKeys([]string{"response.body.id"})
+	if snapshot["response.body.id"] != "abc" {
+		t.Fatalf("snapshot response.body.id = %v, want abc", snapshot["response.body.id"])
+	}
+
+	scoped := NewScopedValueStore(view)
+	if got, ok := scoped.Get("response.body.id"); !ok || got != "abc" {
+		t.Fatalf("scoped response.body.id = %v, %v; want abc, true", got, ok)
 	}
 }

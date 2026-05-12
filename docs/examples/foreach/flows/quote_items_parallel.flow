@@ -1,0 +1,49 @@
+// Quote line items concurrently while preserving collect order.
+
+entrypoint.http {
+    method: POST
+    path: /foreach/quotes
+    body: {
+        type: json
+        schema: {
+            items: {
+                type: array
+                required: true
+                items: {
+                    type: object
+                    properties: {
+                        position: { type: integer, required: true, minimum: 1 }
+                        sku: { type: string, required: true }
+                        quantity: { type: integer, required: true, minimum: 1 }
+                        unit_price_cents: { type: integer, required: true, minimum: 0 }
+                    }
+                }
+            }
+        }
+    }
+}
+
+parallel(max_in_flight: 2, on_failure: "wait_all") foreach request.body.items as item {
+    step quote {
+        {
+            position: item.position,
+            sku: item.sku,
+            quote_cents: item.quantity * item.unit_price_cents
+        }
+    }
+
+    collect quote as quotes
+    collect quote.quote_cents as quote_totals
+}
+
+return response.json({
+    status: 200,
+    body: {
+        quotes: quotes,
+        quote_totals: quote_totals,
+        parallel: {
+            max_in_flight: 2,
+            on_failure: "wait_all"
+        }
+    }
+})

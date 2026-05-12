@@ -33,6 +33,7 @@ type parser struct {
 	source        string
 	pos           int
 	parallelCount int
+	foreachCount  int
 }
 
 func (p *parser) parse() (runtime.Flow, error) {
@@ -83,6 +84,13 @@ func (p *parser) parse() (runtime.Flow, error) {
 			node, err := p.parseParallel()
 			if err != nil {
 				return flow, fmt.Errorf("parsing parallel: %w", err)
+			}
+			flow.Nodes = append(flow.Nodes, node)
+
+		case keyword == "foreach":
+			node, err := p.parseForeach(false, runtime.ParallelOptions{})
+			if err != nil {
+				return flow, fmt.Errorf("parsing foreach: %w", err)
 			}
 			flow.Nodes = append(flow.Nodes, node)
 
@@ -309,8 +317,10 @@ func (p *parser) parseStep(async bool, inParallel ...bool) (runtime.Step, error)
 func (p *parser) parseParallel() (runtime.FlowNode, error) {
 	p.readWord() // consume "parallel"
 	options := runtime.ParallelOptions{}
+	hadOptions := false
 	p.skipWhitespace()
 	if p.pos < len(p.source) && p.source[p.pos] == '(' {
+		hadOptions = true
 		opts, err := p.readParenBlock()
 		if err != nil {
 			return runtime.FlowNode{}, fmt.Errorf("parsing parallel options: %w", err)
@@ -323,6 +333,13 @@ func (p *parser) parseParallel() (runtime.FlowNode, error) {
 	}
 
 	p.skipWhitespace()
+	if p.peekKeyword() == "foreach" {
+		if !hadOptions {
+			return runtime.FlowNode{}, fmt.Errorf("parallel foreach requires parentheses; use parallel() foreach")
+		}
+		return p.parseForeach(true, options)
+	}
+
 	body, err := p.readBracedBlock()
 	if err != nil {
 		return runtime.FlowNode{}, fmt.Errorf("parsing parallel body: %w", err)
@@ -341,6 +358,155 @@ func (p *parser) parseParallel() (runtime.FlowNode, error) {
 		Kind:     runtime.FlowNodeParallel,
 		Parallel: block,
 	}, nil
+}
+
+func (p *parser) parseForeach(parallel bool, options runtime.ParallelOptions) (runtime.FlowNode, error) {
+	p.readWord() // consume "foreach"
+	p.skipWhitespace()
+
+	expr, delimiter, err := p.readExpressionUntilTopLevelKeywords("as", "batch")
+	if err != nil {
+		return runtime.FlowNode{}, err
+	}
+	if strings.TrimSpace(expr) == "" {
+		return runtime.FlowNode{}, fmt.Errorf("foreach source expression is required")
+	}
+	if delimiter == "" {
+		return runtime.FlowNode{}, fmt.Errorf("foreach must include as <item>")
+	}
+
+	batchSize := 0
+	if delimiter == "batch" {
+		p.readWord() // consume "batch"
+		p.skipWhitespace()
+		literal := p.readWord()
+		if !isPositiveIntegerLiteral(literal) {
+			return runtime.FlowNode{}, fmt.Errorf("foreach batch size must be a positive integer literal")
+		}
+		batchSize = toInt(literal)
+		p.skipWhitespace()
+		if p.peekKeyword() != "as" {
+			return runtime.FlowNode{}, fmt.Errorf("foreach batch must include as <item>")
+		}
+	}
+
+	if p.peekKeyword() != "as" {
+		return runtime.FlowNode{}, fmt.Errorf("foreach must include as <item>")
+	}
+	p.readWord() // consume "as"
+	p.skipWhitespace()
+	itemVar := p.readWord()
+	if err := validateSimpleIdentifier("foreach loop variable", itemVar); err != nil {
+		return runtime.FlowNode{}, err
+	}
+
+	p.skipWhitespace()
+	body, err := p.readBracedBlock()
+	if err != nil {
+		return runtime.FlowNode{}, fmt.Errorf("parsing foreach body: %w", err)
+	}
+	steps, collects, err := parseForeachBody(body)
+	if err != nil {
+		return runtime.FlowNode{}, err
+	}
+
+	p.foreachCount++
+	id := fmt.Sprintf("%s%d", runtime.InternalForeachNodePrefix, p.foreachCount)
+	block := &runtime.ForeachBlock{
+		Expr:      strings.TrimSpace(expr),
+		ItemVar:   itemVar,
+		BatchSize: batchSize,
+		Parallel:  parallel,
+		Options:   options,
+		Steps:     steps,
+		Collects:  collects,
+	}
+	return runtime.FlowNode{ID: id, Kind: runtime.FlowNodeForeach, Foreach: block}, nil
+}
+
+func parseForeachBody(body string) ([]runtime.Step, []runtime.ForeachCollect, error) {
+	bodyParser := &parser{source: body}
+	steps := []runtime.Step{}
+	collects := []runtime.ForeachCollect{}
+	seenSteps := map[string]struct{}{}
+	seenCollects := map[string]struct{}{}
+
+	bodyParser.skipWhitespaceAndComments()
+	for bodyParser.pos < len(bodyParser.source) {
+		keyword := bodyParser.peekKeyword()
+		switch keyword {
+		case "step":
+			step, err := bodyParser.parseStep(false, true)
+			if err != nil {
+				return nil, nil, err
+			}
+			if _, exists := seenSteps[step.ID]; exists {
+				return nil, nil, fmt.Errorf("duplicate foreach body step %q", step.ID)
+			}
+			seenSteps[step.ID] = struct{}{}
+			steps = append(steps, step)
+		case "async":
+			bodyParser.readWord()
+			bodyParser.skipWhitespace()
+			if bodyParser.peekKeyword() != "step" {
+				return nil, nil, fmt.Errorf("expected step after async")
+			}
+			step, err := bodyParser.parseStep(true, true)
+			if err != nil {
+				return nil, nil, err
+			}
+			if _, exists := seenSteps[step.ID]; exists {
+				return nil, nil, fmt.Errorf("duplicate foreach body step %q", step.ID)
+			}
+			seenSteps[step.ID] = struct{}{}
+			steps = append(steps, step)
+		case "collect":
+			collect, err := bodyParser.parseForeachCollect()
+			if err != nil {
+				return nil, nil, err
+			}
+			if _, exists := seenCollects[collect.Alias]; exists {
+				return nil, nil, fmt.Errorf("duplicate foreach collect alias %q", collect.Alias)
+			}
+			seenCollects[collect.Alias] = struct{}{}
+			collects = append(collects, collect)
+		case "parallel":
+			return nil, nil, fmt.Errorf("nested parallel blocks are not supported in foreach")
+		case "foreach":
+			return nil, nil, fmt.Errorf("nested foreach blocks are not supported")
+		case "return":
+			return nil, nil, fmt.Errorf("return is not allowed inside foreach")
+		default:
+			if bodyParser.pos < len(bodyParser.source) {
+				return nil, nil, fmt.Errorf("unexpected foreach body token at position %d: %q", bodyParser.pos, bodyParser.source[bodyParser.pos:min(bodyParser.pos+20, len(bodyParser.source))])
+			}
+		}
+		bodyParser.skipWhitespaceAndComments()
+	}
+
+	return steps, collects, nil
+}
+
+func (p *parser) parseForeachCollect() (runtime.ForeachCollect, error) {
+	p.readWord() // consume "collect"
+	p.skipWhitespace()
+	expr, delimiter, err := p.readExpressionUntilTopLevelKeywords("as")
+	if err != nil {
+		return runtime.ForeachCollect{}, err
+	}
+	if strings.TrimSpace(expr) == "" {
+		return runtime.ForeachCollect{}, fmt.Errorf("collect expression is required")
+	}
+	if delimiter != "as" {
+		return runtime.ForeachCollect{}, fmt.Errorf("collect must include as <alias>")
+	}
+	p.readWord() // consume "as"
+	p.skipWhitespace()
+	alias := p.readWord()
+	if err := validateSimpleIdentifier("collect alias", alias); err != nil {
+		return runtime.ForeachCollect{}, err
+	}
+	return runtime.ForeachCollect{Expr: strings.TrimSpace(expr), Alias: alias}, nil
 }
 
 func parseParallelOptions(opts string) (runtime.ParallelOptions, error) {
@@ -624,7 +790,7 @@ func (p *parser) parseReturn() (runtime.Return, error) {
 				break
 			}
 			next := p.peekKeyword()
-			if next == "step" || next == "async" || next == "parallel" || next == "return" || next == "properties" || next == "on_error" || strings.HasPrefix(next, "entrypoint") {
+			if next == "step" || next == "async" || next == "parallel" || next == "foreach" || next == "return" || next == "properties" || next == "on_error" || strings.HasPrefix(next, "entrypoint") {
 				p.pos = saved
 				break
 			}
@@ -738,6 +904,69 @@ func (p *parser) readParenBlock() (string, error) {
 	return "", fmt.Errorf("unclosed paren block starting at position %d", start)
 }
 
+func (p *parser) readExpressionUntilTopLevelKeywords(keywords ...string) (string, string, error) {
+	start := p.pos
+	depth := 0
+	inString := false
+	stringChar := byte(0)
+
+	for p.pos < len(p.source) {
+		ch := p.source[p.pos]
+
+		if inString {
+			if ch == '\\' {
+				p.pos += 2
+				continue
+			}
+			if ch == stringChar {
+				inString = false
+			}
+			p.pos++
+			continue
+		}
+
+		switch ch {
+		case '"', '\'', '`':
+			inString = true
+			stringChar = ch
+			p.pos++
+			continue
+		case '(', '{', '[':
+			depth++
+		case ')', '}', ']':
+			if depth == 0 {
+				return strings.TrimSpace(p.source[start:p.pos]), "", nil
+			}
+			depth--
+		}
+
+		if depth == 0 {
+			for _, keyword := range keywords {
+				if p.matchesKeywordAt(keyword, p.pos) {
+					return strings.TrimSpace(p.source[start:p.pos]), keyword, nil
+				}
+			}
+		}
+		p.pos++
+	}
+
+	return strings.TrimSpace(p.source[start:p.pos]), "", nil
+}
+
+func (p *parser) matchesKeywordAt(keyword string, pos int) bool {
+	if pos < 0 || pos+len(keyword) > len(p.source) || p.source[pos:pos+len(keyword)] != keyword {
+		return false
+	}
+	if pos > 0 && (isWordChar(p.source[pos-1]) || p.source[pos-1] == '.') {
+		return false
+	}
+	after := pos + len(keyword)
+	if after < len(p.source) && (isWordChar(p.source[after]) || p.source[after] == '.') {
+		return false
+	}
+	return true
+}
+
 func (p *parser) readStepName() string {
 	start := p.pos
 	for p.pos < len(p.source) && (isWordChar(p.source[p.pos]) || p.source[p.pos] == '_') {
@@ -768,6 +997,30 @@ func (p *parser) skipWhitespaceAndComments() {
 
 func isWordChar(ch byte) bool {
 	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_'
+}
+
+func validateSimpleIdentifier(label string, id string) error {
+	if id == "" {
+		return fmt.Errorf("%s is required", label)
+	}
+	for i := 0; i < len(id); i++ {
+		if !isWordChar(id[i]) {
+			return fmt.Errorf("%s %q must be a simple identifier", label, id)
+		}
+	}
+	return nil
+}
+
+func isPositiveIntegerLiteral(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return toInt(value) > 0
 }
 
 // parseSimpleMap parses a simple key: value map from block contents.

@@ -7,14 +7,16 @@ import (
 
 const DefaultAsyncRuntimeMaxInFlight = 256
 const DefaultParallelBlockMaxInFlight = 8
+const DefaultParallelForeachMaxInFlight = 8
 
 type AsyncConfig struct {
 	RuntimeMaxInFlight int
 }
 
 type ParallelConfig struct {
-	BlockDefaultMaxInFlight int
-	DefaultOnFailure        OnFailureMode
+	BlockDefaultMaxInFlight   int
+	ForeachDefaultMaxInFlight int
+	DefaultOnFailure          OnFailureMode
 }
 
 type RuntimeConfig struct {
@@ -25,6 +27,9 @@ type RuntimeConfig struct {
 func NormalizeParallelConfig(cfg ParallelConfig) ParallelConfig {
 	if cfg.BlockDefaultMaxInFlight <= 0 {
 		cfg.BlockDefaultMaxInFlight = DefaultParallelBlockMaxInFlight
+	}
+	if cfg.ForeachDefaultMaxInFlight <= 0 {
+		cfg.ForeachDefaultMaxInFlight = DefaultParallelForeachMaxInFlight
 	}
 	if cfg.DefaultOnFailure == "" {
 		cfg.DefaultOnFailure = OnFailureWaitAll

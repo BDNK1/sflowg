@@ -32,8 +32,26 @@ func TestFlowConfigApplyDefaults_UsesRuntimeObservabilityDefaults(t *testing.T) 
 	if cfg.Runtime.Parallel.BlockDefaultMaxInFlight != 8 {
 		t.Fatalf("expected default parallel max in flight 8, got %d", cfg.Runtime.Parallel.BlockDefaultMaxInFlight)
 	}
+	if cfg.Runtime.Parallel.ForeachDefaultMaxInFlight != 8 {
+		t.Fatalf("expected default foreach max in flight 8, got %d", cfg.Runtime.Parallel.ForeachDefaultMaxInFlight)
+	}
 	if cfg.Runtime.Parallel.DefaultOnFailure != "wait_all" {
 		t.Fatalf("expected default parallel on failure wait_all, got %q", cfg.Runtime.Parallel.DefaultOnFailure)
+	}
+}
+
+func TestFlowConfigValidate_RejectsInvalidForeachParallelConfig(t *testing.T) {
+	cfg := FlowConfig{
+		Runtime: RuntimeConfig{
+			Parallel: ParallelRuntimeConfig{ForeachDefaultMaxInFlight: -1},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected foreach parallel validation error")
+	}
+	if !strings.Contains(err.Error(), "runtime.parallel.foreach_default_max_in_flight") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

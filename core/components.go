@@ -47,8 +47,10 @@ type FlowNodeKind string
 const (
 	FlowNodeStep     FlowNodeKind = "step"
 	FlowNodeParallel FlowNodeKind = "parallel"
+	FlowNodeForeach  FlowNodeKind = "foreach"
 
 	InternalParallelNodePrefix = "__parallel_"
+	InternalForeachNodePrefix  = "__foreach_"
 )
 
 type FlowNode struct {
@@ -56,11 +58,32 @@ type FlowNode struct {
 	Kind     FlowNodeKind   `yaml:"-" json:"-"`
 	Step     *Step          `yaml:"-" json:"-"`
 	Parallel *ParallelBlock `yaml:"-" json:"-"`
+	Foreach  *ForeachBlock  `yaml:"-" json:"-"`
 }
 
 type ParallelBlock struct {
 	Options  ParallelOptions `yaml:"-" json:"-"`
 	Branches []Step          `yaml:"-" json:"-"`
+}
+
+type ForeachBlock struct {
+	Expr            string            `yaml:"-" json:"-"`
+	ExprStoreKeys   []string          `yaml:"-" json:"-"`
+	ExprProgram     ExpressionProgram `yaml:"-" json:"-"`
+	ParentStoreKeys []string          `yaml:"-" json:"-"`
+	ItemVar         string            `yaml:"-" json:"-"`
+	BatchSize       int               `yaml:"-" json:"-"`
+	Parallel        bool              `yaml:"-" json:"-"`
+	Options         ParallelOptions   `yaml:"-" json:"-"`
+	Steps           []Step            `yaml:"-" json:"-"`
+	Collects        []ForeachCollect  `yaml:"-" json:"-"`
+}
+
+type ForeachCollect struct {
+	Expr        string            `yaml:"-" json:"-"`
+	Alias       string            `yaml:"-" json:"-"`
+	StoreKeys   []string          `yaml:"-" json:"-"`
+	ExprProgram ExpressionProgram `yaml:"-" json:"-"`
 }
 
 type ParallelOptions struct {

@@ -122,3 +122,4 @@ See [docs/examples](docs/examples/) for complete working projects:
 - [E-commerce API](docs/examples/ecom/) - Orders, payments, subflows, async work, and Postgres
 - [Stripe Integration](docs/examples/stripe-integration/) - Webhooks, checkout flows, and custom plugins
 - [Kafka Consumer](docs/examples/kafka-consumer/) - Kafka entrypoint example
+- [Foreach](docs/examples/foreach/) - Sequential and parallel foreach over request arrays

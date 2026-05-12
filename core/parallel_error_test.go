@@ -36,3 +36,37 @@ func TestFlowErrorToMapIncludesParallelFailuresWithoutRecursiveShape(t *testing.
 		t.Fatalf("detail did not preserve fields: %#v", detail)
 	}
 }
+
+func TestFlowErrorToMapIncludesIteration(t *testing.T) {
+	iteration := 0
+	fe := NewGroupedFailure("__foreach_1", "multiple foreach iterations failed", []FlowFailure{{
+		Iteration: &iteration,
+		Step:      "charge",
+		Error: FlowErrorDetail{
+			Type:    ErrorTypePermanent,
+			Code:    "FAIL",
+			Message: "boom",
+			Step:    "charge",
+		},
+	}})
+
+	failures := fe.ToMap()["failures"].([]map[string]any)
+	if failures[0]["iteration"] != 0 {
+		t.Fatalf("iteration = %#v, want 0", failures[0]["iteration"])
+	}
+}
+
+func TestStampForeachErrorClonesMeta(t *testing.T) {
+	original := &FlowError{Meta: map[string]any{"existing": "value"}}
+	stamped := stampForeachError(original, "__foreach_1", 3)
+
+	if stamped == original {
+		t.Fatal("stampForeachError returned original pointer")
+	}
+	if original.Meta["foreach"] != nil || original.Meta["iteration"] != nil {
+		t.Fatalf("original meta mutated: %#v", original.Meta)
+	}
+	if stamped.Meta["foreach"] != "__foreach_1" || stamped.Meta["iteration"] != 3 {
+		t.Fatalf("stamped meta = %#v", stamped.Meta)
+	}
+}

@@ -53,6 +53,18 @@ func NewRunState(store ValueStore) *RunState {
 	return &RunState{store: store}
 }
 
+func cloneRunStateSnapshot(snapshot map[string]any) *RunState {
+	store := NewValueStore()
+	mergeStoreSnapshot(store, snapshot)
+	return NewRunState(store)
+}
+
+func mergeStoreSnapshot(store ValueStore, snapshot map[string]any) {
+	for key, value := range snapshot {
+		store.SetNested(key, value)
+	}
+}
+
 // Store returns the underlying ValueStore.
 func (s *RunState) Store() ValueStore {
 	return s.store
@@ -104,7 +116,7 @@ type Execution struct {
 	activePath   SuccessPath
 	activePlugin string
 	state        *RunState // shared across all derived copies within one request
-	asyncTasks   *AsyncTaskRegistry
+	asyncTasks   *AsyncScope
 }
 
 // context.Context implementation — delegates to the embedded ctx so that real
@@ -143,9 +155,9 @@ func (e *Execution) State() *RunState {
 	return e.state
 }
 
-func (e *Execution) AsyncTasks() *AsyncTaskRegistry {
+func (e *Execution) AsyncTasks() *AsyncScope {
 	if e.asyncTasks == nil {
-		e.asyncTasks = NewAsyncTaskRegistry()
+		e.asyncTasks = NewAsyncScope(nil)
 	}
 	return e.asyncTasks
 }
@@ -188,6 +200,18 @@ func (e *Execution) WithActivePlugin(pluginName string) *Execution {
 func (e *Execution) WithIsolatedState(state *RunState) *Execution {
 	copy := *e
 	copy.state = state
+	return &copy
+}
+
+func (e *Execution) WithValueStore(store ValueStore) *Execution {
+	copy := *e
+	copy.state = NewRunState(store)
+	return &copy
+}
+
+func (e *Execution) WithAsyncScope(scope *AsyncScope) *Execution {
+	copy := *e
+	copy.asyncTasks = scope
 	return &copy
 }
 
@@ -276,7 +300,7 @@ func NewExecution(flow *Flow, container *Container, globalProperties map[string]
 		Container:  container,
 		ctx:        context.Background(),
 		state:      NewRunState(store),
-		asyncTasks: NewAsyncTaskRegistry(),
+		asyncTasks: NewAsyncScope(nil),
 	}
 
 	// Merge properties: global properties first, then flow properties (flow overrides).

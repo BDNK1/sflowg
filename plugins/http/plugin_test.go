@@ -1,8 +1,87 @@
 package http
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	core "github.com/BDNK1/sflowg/core"
+	"github.com/BDNK1/sflowg/core/plugin"
 )
+
+func TestRequestSetsJSONContentTypeWhenExplicit(t *testing.T) {
+	var gotContentType string
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("Decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	p := &HTTPPlugin{Config: Config{Timeout: 5_000_000_000}}
+	if err := p.Initialize(core.NewLogger(nil)); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	out, err := p.Request(newPluginExecution(), RequestInput{
+		URL:         server.URL,
+		Method:      "POST",
+		ContentType: "json",
+		Body: map[string]any{
+			"metadata": map[string]any{"order_id": "123"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Request() error = %v", err)
+	}
+	if out.StatusCode != http.StatusOK {
+		t.Fatalf("StatusCode = %d, want 200", out.StatusCode)
+	}
+	if gotContentType != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", gotContentType)
+	}
+	metadata, ok := gotBody["metadata"].(map[string]any)
+	if !ok || metadata["order_id"] != "123" {
+		t.Fatalf("metadata = %#v, want order_id 123", gotBody["metadata"])
+	}
+}
+
+func TestRequestDoesNotOverrideExplicitContentType(t *testing.T) {
+	var gotContentType string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	p := &HTTPPlugin{Config: Config{Timeout: 5_000_000_000}}
+	if err := p.Initialize(core.NewLogger(nil)); err != nil {
+		t.Fatalf("Initialize() error = %v", err)
+	}
+
+	_, err := p.Request(newPluginExecution(), RequestInput{
+		URL:     server.URL,
+		Method:  "POST",
+		Headers: map[string]string{"content-type": "application/vnd.api+json"},
+		Body:    map[string]any{"ok": true},
+	})
+	if err != nil {
+		t.Fatalf("Request() error = %v", err)
+	}
+	if gotContentType != "application/vnd.api+json" {
+		t.Fatalf("Content-Type = %q, want explicit value", gotContentType)
+	}
+}
+
+func newPluginExecution() *plugin.Execution {
+	return core.NewExecution(&core.Flow{ID: "test"}, core.NewContainer(core.NewLogger(nil)), nil, core.NewValueStore())
+}
 
 func TestFlattenToFormData(t *testing.T) {
 	tests := []struct {

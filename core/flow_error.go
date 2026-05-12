@@ -45,9 +45,10 @@ type FlowError struct {
 }
 
 type FlowFailure struct {
-	Branch string          `json:"branch,omitempty"`
-	Step   string          `json:"step,omitempty"`
-	Error  FlowErrorDetail `json:"error"`
+	Branch    string          `json:"branch,omitempty"`
+	Iteration *int            `json:"iteration,omitempty"`
+	Step      string          `json:"step,omitempty"`
+	Error     FlowErrorDetail `json:"error"`
 }
 
 type FlowErrorDetail struct {
@@ -88,6 +89,9 @@ func (e *FlowError) ToMap() map[string]any {
 			if failure.Branch != "" {
 				item["branch"] = failure.Branch
 			}
+			if failure.Iteration != nil {
+				item["iteration"] = *failure.Iteration
+			}
 			if failure.Step != "" {
 				item["step"] = failure.Step
 			}
@@ -108,7 +112,7 @@ func FlowErrorDetailFrom(fe *FlowError) FlowErrorDetail {
 		Message:     fe.Message,
 		Step:        fe.Step,
 		Retries:     fe.Retries,
-		Meta:        fe.Meta,
+		Meta:        cloneMeta(fe.Meta),
 		AwaitedFrom: fe.AwaitedFrom,
 	}
 }
@@ -131,16 +135,45 @@ func flowErrorDetailToMap(detail FlowErrorDetail) map[string]any {
 }
 
 func NewParallelFailure(stepID string, failures []FlowFailure) *FlowError {
+	return NewGroupedFailure(stepID, "multiple parallel branches failed", failures)
+}
+
+func NewGroupedFailure(stepID string, message string, failures []FlowFailure) *FlowError {
 	if len(failures) == 0 {
 		return nil
 	}
 	return &FlowError{
 		Type:     ErrorTypePermanent,
 		Code:     string(ErrorCodeParallelFailure),
-		Message:  "multiple parallel branches failed",
+		Message:  message,
 		Step:     stepID,
 		Failures: failures,
 	}
+}
+
+func stampForeachError(fe *FlowError, foreachID string, iteration int) *FlowError {
+	if fe == nil {
+		return nil
+	}
+	clone := *fe
+	clone.Meta = cloneMeta(fe.Meta)
+	if clone.Meta == nil {
+		clone.Meta = make(map[string]any, 2)
+	}
+	clone.Meta["foreach"] = foreachID
+	clone.Meta["iteration"] = iteration
+	return &clone
+}
+
+func cloneMeta(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	out := make(map[string]any, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 func cloneFlowErrorForAwait(origin *FlowError, asyncStepID string, consumerStepID string) *FlowError {
@@ -148,6 +181,7 @@ func cloneFlowErrorForAwait(origin *FlowError, asyncStepID string, consumerStepI
 		return nil
 	}
 	clone := *origin
+	clone.Meta = cloneMeta(origin.Meta)
 	clone.AwaitedFrom = asyncStepID
 	clone.Step = consumerStepID
 	return &clone

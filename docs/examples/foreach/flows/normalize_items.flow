@@ -1,0 +1,45 @@
+// Normalize line items with sequential foreach.
+
+entrypoint.http {
+    method: POST
+    path: /foreach/normalize
+    body: {
+        type: json
+        schema: {
+            items: {
+                type: array
+                required: true
+                items: {
+                    type: object
+                    properties: {
+                        sku: { type: string, required: true }
+                        quantity: { type: integer, required: true, minimum: 1 }
+                        unit_price_cents: { type: integer, required: true, minimum: 0 }
+                    }
+                }
+            }
+        }
+    }
+}
+
+foreach request.body.items as item {
+    step normalize {
+        {
+            sku: item.sku,
+            quantity: item.quantity,
+            unit_price_cents: item.unit_price_cents,
+            line_total_cents: item.quantity * item.unit_price_cents
+        }
+    }
+
+    collect normalize as lines
+    collect normalize.line_total_cents as line_totals
+}
+
+return response.json({
+    status: 200,
+    body: {
+        lines: lines,
+        line_totals: line_totals
+    }
+})

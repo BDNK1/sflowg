@@ -24,14 +24,20 @@ type FlowCompiler interface {
 	CompileFlow(ctx context.Context, flow *Flow, container *Container) error
 }
 
-// ExpressionEvaluator evaluates expressions within a given execution.
+// ExpressionProgram is an opaque expression program owned by the DSL engine.
+// Core runtime stores and passes it through without depending on the concrete
+// bytecode or interpreter representation.
+type ExpressionProgram interface{}
+
+// ExpressionRunner evaluates expressions within a given execution.
 // The *Execution carries both the variable namespace (via Values()) and the
 // deadline/cancellation signal (it implements context.Context), so a single
 // parameter covers both concerns.
-type ExpressionEvaluator interface {
-	Eval(execution *Execution, expression string) (any, error)
-	EvalWithEnv(execution *Execution, expression string, extraVars map[string]any) (any, error)
+type ExpressionRunner interface {
+	EvalExpression(execution *Execution, expr string, program ExpressionProgram, storeKeys []string, extra map[string]any) (any, error)
 }
+
+type ExpressionEvaluator = ExpressionRunner
 
 // ValueStore manages execution state storage and retrieval.
 type ValueStore interface {
@@ -39,6 +45,7 @@ type ValueStore interface {
 	Get(key string) (any, bool)
 	SetNested(prefix string, value any)
 	Snapshot() map[string]any // safe copy for external consumers
+	SnapshotKeys(keys []string) map[string]any
 }
 
 // StepExecutor executes a single flow step.
@@ -109,10 +116,5 @@ func BuildStepInputWithExtra(execution *Execution, step Step, path SuccessPath, 
 }
 
 func boundedSnapshot(store ValueStore, keys []string) map[string]any {
-	full := store.Snapshot()
-	result := make(map[string]any, len(keys))
-	for _, key := range keys {
-		result[key] = full[key]
-	}
-	return result
+	return store.SnapshotKeys(keys)
 }

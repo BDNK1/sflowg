@@ -46,10 +46,6 @@ var NewValueStore = runtime.NewValueStore
 
 type noopEvaluator struct{}
 
-func (noopEvaluator) Eval(execution *Execution, expression string) (any, error) {
-	return nil, nil
-}
-
 type isolatedTestStepRunner struct {
 	executor StepExecutor
 }
@@ -94,7 +90,7 @@ func mustParseHTTPBinding(t *testing.T, config map[string]any) *InputContract {
 	return binding
 }
 
-func (noopEvaluator) EvalWithEnv(execution *Execution, expression string, extraVars map[string]any) (any, error) {
+func (noopEvaluator) EvalExpression(execution *Execution, expr string, program runtime.ExpressionProgram, storeKeys []string, extra map[string]any) (any, error) {
 	return nil, nil
 }
 
@@ -173,6 +169,16 @@ func (s *testValueStore) Snapshot() map[string]any {
 	out := make(map[string]any, len(s.values))
 	for k, v := range s.values {
 		out[k] = v
+	}
+	return out
+}
+
+func (s *testValueStore) SnapshotKeys(keys []string) map[string]any {
+	out := make(map[string]any, len(keys))
+	for _, key := range keys {
+		if value, ok := s.values[key]; ok {
+			out[key] = value
+		}
 	}
 	return out
 }

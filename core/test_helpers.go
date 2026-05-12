@@ -37,6 +37,16 @@ func (s *flatValueStore) Snapshot() map[string]any {
 	return out
 }
 
+func (s *flatValueStore) SnapshotKeys(keys []string) map[string]any {
+	out := make(map[string]any, len(keys))
+	for _, key := range keys {
+		if value, ok := s.values[key]; ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 // NewTestMetricsWithReader creates a Metrics instance backed by a ManualReader
 // for use in external test packages. It initializes predeclared user metrics
 // from the provided declarations.

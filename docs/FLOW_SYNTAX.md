@@ -201,6 +201,107 @@ Failure shape:
   `failures[]` entries ordered by branch declaration order. Successful branch
   outputs are still merged for `wait_all`.
 
+## Foreach Blocks
+
+Use `foreach` to run the same body for every item in an array or slice. Each
+iteration has local state, so body step IDs do not leak into the parent flow.
+Use `collect` to publish ordered arrays back to the parent flow after the loop
+completes.
+
+```sflowg
+foreach request.body.items as item {
+    step normalize {
+        {
+            sku: item.sku,
+            quantity: item.quantity,
+            line_total_cents: item.quantity * item.unit_price_cents
+        }
+    }
+
+    collect normalize as lines
+    collect normalize.line_total_cents as line_totals
+}
+
+return response.json({
+    status: 200,
+    body: {
+        lines: lines,
+        line_totals: line_totals
+    }
+})
+```
+
+The source expression must evaluate to an array or slice. The loop variable and
+body step IDs are visible only inside one iteration. Collect aliases are normal
+top-level result IDs, visible only after the foreach node completes.
+
+Body rules:
+
+- A body may contain `step`, `async step`, and `collect` only.
+- Nested `foreach`, nested `parallel`, `return`, and `compensate` are not
+  supported inside the body.
+- Body step IDs and async task IDs are iteration-local and may be reused by
+  every iteration.
+- A collect expression can read the loop variable, prior parent values, and
+  same-iteration step or async results.
+- A collect expression cannot read another collect alias from the same
+  foreach.
+- A no-collect foreach is valid and writes no parent result.
+
+Batch mode passes fixed-size slices to each iteration:
+
+```sflowg
+foreach request.body.items batch 100 as batch {
+    step summarize_batch {
+        { count: len(batch) }
+    }
+
+    collect summarize_batch.count as batch_counts
+}
+```
+
+Use `parallel(...) foreach` to run iterations concurrently. Parentheses are
+required even when using runtime defaults.
+
+```sflowg
+parallel(max_in_flight: 4, on_failure: "wait_all") foreach request.body.items as item {
+    step enrich_item as http.request {
+        method: "GET"
+        url: properties.catalog_url + "/items/" + item.sku
+    }
+
+    step quote {
+        {
+            sku: item.sku,
+            name: enrich_item.body.name,
+            quantity: item.quantity,
+            quote_cents: item.quantity * enrich_item.body.price_cents
+        }
+    }
+
+    collect quote as quotes
+    collect quote.quote_cents as quote_totals
+}
+```
+
+Options:
+
+- `max_in_flight`: maximum active iterations at once. Defaults to
+  `runtime.parallel.foreach_default_max_in_flight` or `8`.
+- `on_failure`: `"wait_all"` runs every iteration and keeps successful collect
+  slots; `"fail_fast"` cancels not-yet-started or in-flight iteration work
+  when the first iteration fails. Defaults to `wait_all`.
+
+Failure shape:
+
+- Sequential foreach stops on the first failed iteration.
+- A single failed iteration returns the original `FlowError` with
+  `error.meta.foreach` and `error.meta.iteration`.
+- Multiple failed iterations under `wait_all` return permanent
+  `PARALLEL_FAILURE` with `failures[]` entries ordered by input iteration.
+- Collect arrays are committed before `on_error` for reached foreach nodes.
+  Failed, cancelled, or not-run slots are `nil`.
+
 ### Multi-Line Strings and Query Parameters
 
 Use backtick template strings for long strings such as SQL. Backtick strings may
@@ -678,6 +779,7 @@ See:
 - [Ecommerce example](./examples/ecom/README.md)
 - [Stripe integration example](./examples/stripe-integration/README.md)
 - [Kafka consumer example](./examples/kafka-consumer/README.md)
+- [Foreach example](./examples/foreach/README.md)
 
 ## Related Documentation
 

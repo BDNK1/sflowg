@@ -342,6 +342,10 @@ func flowStepsForValidation(flow runtime.Flow) []runtime.Step {
 			if node.Parallel != nil {
 				steps = append(steps, node.Parallel.Branches...)
 			}
+		case runtime.FlowNodeForeach:
+			if node.Foreach != nil {
+				steps = append(steps, node.Foreach.Steps...)
+			}
 		}
 	}
 	return steps

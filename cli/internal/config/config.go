@@ -35,8 +35,9 @@ type AsyncRuntimeConfig struct {
 }
 
 type ParallelRuntimeConfig struct {
-	BlockDefaultMaxInFlight int    `yaml:"block_default_max_in_flight,omitempty"`
-	DefaultOnFailure        string `yaml:"default_on_failure,omitempty"`
+	BlockDefaultMaxInFlight   int    `yaml:"block_default_max_in_flight,omitempty"`
+	ForeachDefaultMaxInFlight int    `yaml:"foreach_default_max_in_flight,omitempty"`
+	DefaultOnFailure          string `yaml:"default_on_failure,omitempty"`
 }
 
 type KafkaRuntimeConfig struct {
@@ -133,7 +134,10 @@ func (c *FlowConfig) Validate() error {
 		return fmt.Errorf("runtime.async.runtime_max_in_flight must be greater than 0")
 	}
 	if c.Runtime.Parallel.BlockDefaultMaxInFlight < 0 {
-		return fmt.Errorf("runtime.parallel.block_default_max_in_flight must be greater than 0")
+		return fmt.Errorf("runtime.parallel.block_default_max_in_flight must be greater than or equal to 0")
+	}
+	if c.Runtime.Parallel.ForeachDefaultMaxInFlight < 0 {
+		return fmt.Errorf("runtime.parallel.foreach_default_max_in_flight must be greater than or equal to 0")
 	}
 	if c.Runtime.Parallel.DefaultOnFailure != "" &&
 		c.Runtime.Parallel.DefaultOnFailure != "wait_all" &&
@@ -176,6 +180,9 @@ func (c *FlowConfig) ApplyDefaults(projectDir string) error {
 	}
 	if c.Runtime.Parallel.BlockDefaultMaxInFlight == 0 {
 		c.Runtime.Parallel.BlockDefaultMaxInFlight = 8
+	}
+	if c.Runtime.Parallel.ForeachDefaultMaxInFlight == 0 {
+		c.Runtime.Parallel.ForeachDefaultMaxInFlight = 8
 	}
 	if c.Runtime.Parallel.DefaultOnFailure == "" {
 		c.Runtime.Parallel.DefaultOnFailure = "wait_all"
