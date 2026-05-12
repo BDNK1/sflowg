@@ -4,7 +4,7 @@ go 1.24.1
 
 require (
 	github.com/lib/pq v1.10.9
-	github.com/BDNK1/sflowg/core v0.1.4
+	github.com/BDNK1/sflowg/core v0.1.5
 )
 
 require (

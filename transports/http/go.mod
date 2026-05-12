@@ -3,7 +3,7 @@ module github.com/BDNK1/sflowg/transports/http
 go 1.25.0
 
 require (
-	github.com/BDNK1/sflowg/core v0.1.4
+	github.com/BDNK1/sflowg/core v0.1.5
 	github.com/gin-gonic/gin v1.10.0
 	go.opentelemetry.io/otel v1.42.0
 	go.opentelemetry.io/otel/sdk v1.42.0

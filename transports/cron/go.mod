@@ -3,7 +3,7 @@ module github.com/BDNK1/sflowg/transports/cron
 go 1.25.0
 
 require (
-	github.com/BDNK1/sflowg/core v0.1.4
+	github.com/BDNK1/sflowg/core v0.1.5
 	github.com/robfig/cron/v3 v3.0.1
 )
 

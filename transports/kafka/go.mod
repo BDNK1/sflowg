@@ -3,7 +3,7 @@ module github.com/BDNK1/sflowg/transports/kafka
 go 1.25.0
 
 require (
-	github.com/BDNK1/sflowg/core v0.1.4
+	github.com/BDNK1/sflowg/core v0.1.5
 	github.com/IBM/sarama v1.46.3
 	github.com/ThreeDotsLabs/watermill v1.5.1
 	github.com/ThreeDotsLabs/watermill-kafka/v3 v3.1.2
