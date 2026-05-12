@@ -16,6 +16,7 @@ const defaultTimezone = "UTC"
 
 type Transport struct {
 	clock clock
+	wg    sync.WaitGroup
 }
 
 type flowConfig struct {
@@ -78,7 +79,9 @@ func (t *Transport) Start(ctx context.Context, rt runtime.TransportRuntime) erro
 			return fmt.Errorf("flow %q: %w", flow.ID, err)
 		}
 		rt.Container.Logger().Info("Cron scheduler registered", "flow_id", flow.ID, "schedule", flow.Entrypoint.Config["schedule"], "timezone", cfg.Timezone)
+		t.wg.Add(1)
 		go func() {
+			defer t.wg.Done()
 			errCh <- t.runFlowLoop(ctx, rt, &flow, cfg)
 		}()
 	}
@@ -91,7 +94,19 @@ func (t *Transport) Start(ctx context.Context, rt runtime.TransportRuntime) erro
 	}
 }
 
-func (t *Transport) Shutdown(context.Context) error { return nil }
+func (t *Transport) Shutdown(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		t.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("cron shutdown timeout: %w", ctx.Err())
+	}
+}
 
 func (t *Transport) runFlowLoop(ctx context.Context, rt runtime.TransportRuntime, flow *runtime.Flow, cfg flowConfig) error {
 	cursor := t.clock.Now().In(cfg.Location)
@@ -132,7 +147,9 @@ func (t *Transport) runFlowLoop(ctx context.Context, rt runtime.TransportRuntime
 		count := fireCount
 		mu.Unlock()
 
+		t.wg.Add(1)
 		go func(scheduledAt time.Time, count int) {
+			defer t.wg.Done()
 			defer func() {
 				mu.Lock()
 				running = false

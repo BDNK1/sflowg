@@ -103,25 +103,49 @@ func mapToModule(name string, m map[string]any) *object.Module {
 	return object.NewBuiltinsModule(name, contents)
 }
 
-// wrapGoFunc wraps a Go function as a Risor *object.Builtin.
-// Uses v2's (Object, error) return signature — errors propagate natively.
 func wrapGoFunc(name string, fn any) *object.Builtin {
 	fnVal := reflect.ValueOf(fn)
 	fnType := fnVal.Type()
 	errType := reflect.TypeOf((*error)(nil)).Elem()
+	isVariadic := fnType.IsVariadic()
+	numIn := fnType.NumIn()
 
-	return object.NewBuiltin(name, func(ctx context.Context, args ...object.Object) (object.Object, error) {
+	return object.NewBuiltin(name, func(ctx context.Context, args ...object.Object) (result object.Object, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				result = nil
+				err = fmt.Errorf("dsl builtin %q panicked: %v", name, r)
+			}
+		}()
+
+		if isVariadic {
+			if len(args) < numIn-1 {
+				return nil, fmt.Errorf("dsl builtin %q: expected at least %d arguments, got %d", name, numIn-1, len(args))
+			}
+		} else if len(args) != numIn {
+			return nil, fmt.Errorf("dsl builtin %q: expected %d arguments, got %d", name, numIn, len(args))
+		}
+
 		goArgs := make([]reflect.Value, len(args))
 		for i, arg := range args {
 			goVal := arg.Interface()
-			if i < fnType.NumIn() {
-				goArgs[i] = convertArg(goVal, fnType.In(i))
-			} else {
-				goArgs[i] = reflect.ValueOf(goVal)
+			expected := fnType.In(min(i, numIn-1))
+			if isVariadic && i >= numIn-1 {
+				expected = fnType.In(numIn - 1).Elem()
 			}
+			converted, convErr := convertArg(goVal, expected)
+			if convErr != nil {
+				return nil, fmt.Errorf("dsl builtin %q: arg %d: %w", name, i, convErr)
+			}
+			goArgs[i] = converted
 		}
 
-		results := fnVal.Call(goArgs)
+		var results []reflect.Value
+		if isVariadic {
+			results = fnVal.CallSlice(buildVariadicArgs(goArgs, numIn, fnType.In(numIn-1)))
+		} else {
+			results = fnVal.Call(goArgs)
+		}
 		if len(results) == 0 {
 			return object.Nil, nil
 		}
@@ -129,7 +153,10 @@ func wrapGoFunc(name string, fn any) *object.Builtin {
 		lastIdx := len(results) - 1
 		if fnType.NumOut() > 0 && fnType.Out(lastIdx).Implements(errType) {
 			if !results[lastIdx].IsNil() {
-				return nil, results[lastIdx].Interface().(error)
+				if taskErr, ok := results[lastIdx].Interface().(error); ok {
+					return nil, taskErr
+				}
+				return nil, fmt.Errorf("dsl builtin %q: last return is not an error", name)
 			}
 			if len(results) > 1 {
 				return anyToObject(results[0].Interface()), nil
@@ -140,18 +167,32 @@ func wrapGoFunc(name string, fn any) *object.Builtin {
 	})
 }
 
-func convertArg(val any, expected reflect.Type) reflect.Value {
+func buildVariadicArgs(goArgs []reflect.Value, numIn int, variadicType reflect.Type) []reflect.Value {
+	fixed := numIn - 1
+	out := make([]reflect.Value, fixed+1)
+	for i := 0; i < fixed; i++ {
+		out[i] = goArgs[i]
+	}
+	slice := reflect.MakeSlice(variadicType, len(goArgs)-fixed, len(goArgs)-fixed)
+	for i := fixed; i < len(goArgs); i++ {
+		slice.Index(i - fixed).Set(goArgs[i])
+	}
+	out[fixed] = slice
+	return out
+}
+
+func convertArg(val any, expected reflect.Type) (reflect.Value, error) {
 	if val == nil {
-		return reflect.Zero(expected)
+		return reflect.Zero(expected), nil
 	}
 	actual := reflect.ValueOf(val)
 	if actual.Type().AssignableTo(expected) {
-		return actual
+		return actual, nil
 	}
 	if actual.Type().ConvertibleTo(expected) {
-		return actual.Convert(expected)
+		return actual.Convert(expected), nil
 	}
-	return actual
+	return reflect.Value{}, fmt.Errorf("cannot convert %s to %s", actual.Type(), expected)
 }
 
 // anyToObject converts a Go value to a Risor Object.

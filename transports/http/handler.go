@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -23,8 +24,13 @@ import (
 
 func registerFlowRoute(flow *runtime.Flow, container *runtime.Container, executor *runtime.Executor, globalProperties map[string]any, newValueStore func() runtime.ValueStore, g *gin.Engine) {
 	config := flow.Entrypoint.Config
-	method := strings.ToLower(config["method"].(string))
-	path := config["path"].(string)
+	methodRaw, _ := config["method"].(string)
+	path, _ := config["path"].(string)
+	if methodRaw == "" || path == "" {
+		container.Logger().Error("HTTP entrypoint missing method or path", "flow_id", flow.ID)
+		return
+	}
+	method := strings.ToLower(methodRaw)
 
 	container.Logger().Info("Registering HTTP entrypoint", "method", method, "path", path, "flow_id", flow.ID)
 
@@ -270,6 +276,11 @@ func writeRedirect(c *gin.Context, execution *runtime.Execution, args map[string
 		return fmt.Errorf("redirect response requires a 'location' argument")
 	}
 
+	if err := validateRedirectLocation(location); err != nil {
+		execution.Logger().Error("Rejected redirect location", "location", location, "error", err)
+		return err
+	}
+
 	statusCode := http.StatusFound
 	if status, ok := toStatusCode(args["status"]); ok {
 		if status < 300 || status >= 400 {
@@ -280,6 +291,26 @@ func writeRedirect(c *gin.Context, execution *runtime.Execution, args map[string
 	}
 
 	c.Redirect(statusCode, location)
+	return nil
+}
+
+func validateRedirectLocation(location string) error {
+	if strings.HasPrefix(location, "//") || strings.HasPrefix(location, "\\\\") {
+		return fmt.Errorf("redirect location must not be protocol-relative")
+	}
+	if strings.HasPrefix(location, "/") {
+		return nil
+	}
+	u, err := url.Parse(location)
+	if err != nil {
+		return fmt.Errorf("redirect location is not a valid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("redirect location must use http or https scheme")
+	}
+	if u.Host == "" {
+		return fmt.Errorf("redirect location must include a host")
+	}
 	return nil
 }
 
@@ -372,13 +403,20 @@ func extractBody(c *gin.Context, f *runtime.Flow, e *runtime.Execution) *runtime
 
 var wrongBodyFormatRes = gin.H{"message": "Wrong request body format"}
 
+const maxRequestBodyBytes = 1 << 20
+
 func extractJsonBody(c *gin.Context, e *runtime.Execution) *runtime.FlowError {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodyBytes)
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		constraint := "read"
+		if _, ok := err.(*http.MaxBytesError); ok {
+			constraint = "size"
+		}
 		return schemaViolation([]validationschema.FieldError{{
 			Path:       "body",
 			Pointer:    "#/body",
-			Constraint: "read",
+			Constraint: constraint,
 			Message:    wrongBodyFormatRes["message"].(string),
 		}})
 	}

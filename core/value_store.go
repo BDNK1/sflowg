@@ -5,6 +5,8 @@ import (
 	"sync"
 )
 
+const maxValueStoreDepth = 64
+
 // MapValueStore stores execution state as nested maps.
 // It preserves hierarchy so DSL engines can expose native dot-access over values.
 type MapValueStore struct {
@@ -25,7 +27,7 @@ func (s *MapValueStore) Set(key string, value any) {
 
 	parts := strings.Split(key, ".")
 	if len(parts) == 1 {
-		s.values[key] = cloneValue(value)
+		s.values[key] = cloneValue(value, maxValueStoreDepth)
 		return
 	}
 
@@ -46,7 +48,7 @@ func (s *MapValueStore) Set(key string, value any) {
 			current = m
 		}
 	}
-	current[parts[len(parts)-1]] = cloneValue(value)
+	current[parts[len(parts)-1]] = cloneValue(value, maxValueStoreDepth)
 }
 
 // Get retrieves a value at a dot-separated key path by traversing nested maps.
@@ -82,21 +84,21 @@ func (s *MapValueStore) Get(key string) (any, bool) {
 func (s *MapValueStore) SetNested(prefix string, value any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.setNestedLocked(prefix, cloneValue(value))
+	s.setNestedLocked(prefix, cloneValue(value, maxValueStoreDepth), maxValueStoreDepth)
 }
 
-func (s *MapValueStore) setNestedLocked(prefix string, value any) {
+func (s *MapValueStore) setNestedLocked(prefix string, value any, depth int) {
 	s.setLocked(prefix, value)
+	if depth <= 0 {
+		return
+	}
 
 	switch v := value.(type) {
 	case map[string]any:
 		for k, val := range v {
-			s.setNestedLocked(prefix+"."+k, val)
+			s.setNestedLocked(prefix+"."+k, val, depth-1)
 		}
 	case []any:
-		// Arrays are stored as the slice value at the prefix key.
-		// Individual elements are not expanded to numbered keys
-		// since Risor supports native list indexing.
 	default:
 	}
 }
@@ -132,7 +134,7 @@ func (s *MapValueStore) setLocked(key string, value any) {
 func (s *MapValueStore) Snapshot() map[string]any {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return cloneMap(s.values)
+	return cloneMap(s.values, maxValueStoreDepth)
 }
 
 func (s *MapValueStore) SnapshotKeys(keys []string) map[string]any {
@@ -141,7 +143,7 @@ func (s *MapValueStore) SnapshotKeys(keys []string) map[string]any {
 	out := make(map[string]any, len(keys))
 	for _, key := range keys {
 		if value, ok := getFromMap(s.values, key); ok {
-			out[key] = cloneValue(value)
+			out[key] = cloneValue(value, maxValueStoreDepth)
 		}
 	}
 	return out
@@ -179,21 +181,21 @@ func (v *readOnlyValueView) Get(key string) (any, bool) {
 	if !ok {
 		return nil, false
 	}
-	return cloneValue(value), true
+	return cloneValue(value, maxValueStoreDepth), true
 }
 
 func (v *readOnlyValueView) SnapshotKeys(keys []string) map[string]any {
 	out := make(map[string]any, len(keys))
 	for _, key := range keys {
 		if value, ok := getFromMap(v.values, key); ok {
-			out[key] = cloneValue(value)
+			out[key] = cloneValue(value, maxValueStoreDepth)
 		}
 	}
 	return out
 }
 
 func (v *readOnlyValueView) snapshot() map[string]any {
-	return cloneMap(v.values)
+	return cloneMap(v.values, maxValueStoreDepth)
 }
 
 type ScopedValueStore struct {
@@ -285,38 +287,47 @@ func mergeSnapshot(dst map[string]any, src map[string]any) {
 			mergeSnapshot(dstMap, srcMap)
 			continue
 		}
-		dst[key] = cloneValue(value)
+		dst[key] = cloneValue(value, maxValueStoreDepth)
 	}
 }
 
-func cloneMap(src map[string]any) map[string]any {
+func cloneMap(src map[string]any, depth int) map[string]any {
 	if src == nil {
 		return nil
+	}
+	if depth <= 0 {
+		return map[string]any{}
 	}
 	out := make(map[string]any, len(src))
 	for k, v := range src {
-		out[k] = cloneValue(v)
+		out[k] = cloneValue(v, depth-1)
 	}
 	return out
 }
 
-func cloneSlice(src []any) []any {
+func cloneSlice(src []any, depth int) []any {
 	if src == nil {
 		return nil
 	}
+	if depth <= 0 {
+		return []any{}
+	}
 	out := make([]any, len(src))
 	for i, v := range src {
-		out[i] = cloneValue(v)
+		out[i] = cloneValue(v, depth-1)
 	}
 	return out
 }
 
-func cloneValue(v any) any {
+func cloneValue(v any, depth int) any {
+	if depth <= 0 {
+		return nil
+	}
 	switch x := v.(type) {
 	case map[string]any:
-		return cloneMap(x)
+		return cloneMap(x, depth)
 	case []any:
-		return cloneSlice(x)
+		return cloneSlice(x, depth)
 	default:
 		return x
 	}
