@@ -7,14 +7,22 @@ import (
 	"github.com/BDNK1/sflowg/core/internal/configutil"
 )
 
-func extractError(v reflect.Value) error {
-	if !v.IsNil() {
-		return v.Interface().(error)
+func extractError(v reflect.Value) (error, bool) {
+	if v.IsNil() {
+		return nil, true
 	}
-	return nil
+	err, ok := v.Interface().(error)
+	return err, ok
 }
 
-func CallTask(binding TaskBinding, exec any, args map[string]any) (map[string]any, error) {
+func CallTask(binding TaskBinding, exec any, args map[string]any) (out map[string]any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			out = nil
+			err = fmt.Errorf("plugin %s.%s panicked: %v", binding.PluginName, binding.MethodName, r)
+		}
+	}()
+
 	input, err := prepareInput(binding, args)
 	if err != nil {
 		return nil, err
@@ -26,11 +34,19 @@ func CallTask(binding TaskBinding, exec any, args map[string]any) (map[string]an
 		input,
 	})
 
-	output := results[0].Interface()
-	if err := extractError(results[1]); err != nil {
-		return nil, err
+	if len(results) < 2 {
+		return nil, fmt.Errorf("plugin %s.%s returned %d values, expected 2", binding.PluginName, binding.MethodName, len(results))
 	}
 
+	taskErr, ok := extractError(results[1])
+	if !ok {
+		return nil, fmt.Errorf("plugin %s.%s second return value is not an error", binding.PluginName, binding.MethodName)
+	}
+	if taskErr != nil {
+		return nil, taskErr
+	}
+
+	output := results[0].Interface()
 	return convertOutput(binding, output)
 }
 
@@ -51,7 +67,11 @@ func prepareInput(binding TaskBinding, args map[string]any) (reflect.Value, erro
 
 func convertOutput(binding TaskBinding, output any) (map[string]any, error) {
 	if binding.OutputType.Kind() != reflect.Struct {
-		return output.(map[string]any), nil
+		m, ok := output.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("task %s output is %T, expected map[string]any", binding.MethodName, output)
+		}
+		return m, nil
 	}
 
 	resultMap, err := configutil.StructToMap(output)

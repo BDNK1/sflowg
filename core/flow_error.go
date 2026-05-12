@@ -25,6 +25,7 @@ const (
 	ErrorCodeDeadlineExceeded FlowErrorCode = "DEADLINE_EXCEEDED"
 	ErrorCodeSchemaViolation  FlowErrorCode = "SCHEMA_VIOLATION"
 	ErrorCodeParallelFailure  FlowErrorCode = "PARALLEL_FAILURE"
+	ErrorCodeSubflowDepth     FlowErrorCode = "SUBFLOW_DEPTH_EXCEEDED"
 
 	// Default code used when DSL raise() is called without arguments.
 	ErrorCodeRaise FlowErrorCode = "RAISE"

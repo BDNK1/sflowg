@@ -2,17 +2,18 @@ package runtime
 
 import (
 	"context"
+	"sync"
 
 	"go.opentelemetry.io/otel/trace"
 )
 
-// Interface type constants for plugin capabilities
 const (
 	InterfaceInitializer = "Initializer"
 	InterfaceShutdowner  = "Shutdowner"
 )
 
 type Container struct {
+	mu           sync.RWMutex
 	tasks        map[string]Task
 	plugins      *pluginRegistry
 	logger       Logger
@@ -22,13 +23,15 @@ type Container struct {
 	runtimeCfg   RuntimeConfig
 }
 
-// Logger returns the container's logger for framework-level (non-execution) logs.
-// Use execution.Logger() instead when an *Execution is available.
 func (c *Container) Logger() Logger {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.logger
 }
 
 func (c *Container) Tracer() trace.Tracer {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.tracer == nil {
 		return newNoopTracer()
 	}
@@ -36,6 +39,8 @@ func (c *Container) Tracer() trace.Tracer {
 }
 
 func (c *Container) Metrics() *Metrics {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	if c.metrics == nil {
 		return NewNoopMetrics()
 	}
@@ -54,6 +59,8 @@ func NewContainer(logger Logger) *Container {
 }
 
 func (c *Container) SetObservabilityServices(logger Logger, tracer trace.Tracer, metrics *Metrics) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.logger = logger
 	if c.logger.base == nil {
 		c.logger = NewLogger(nil)
@@ -71,6 +78,8 @@ func (c *Container) SetObservabilityServices(logger Logger, tracer trace.Tracer,
 }
 
 func (c *Container) SetTracer(tracer trace.Tracer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if tracer == nil {
 		c.tracer = newNoopTracer()
 		return
@@ -79,6 +88,8 @@ func (c *Container) SetTracer(tracer trace.Tracer) {
 }
 
 func (c *Container) SetMetrics(metrics *Metrics) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if metrics == nil {
 		c.metrics = NewNoopMetrics()
 		return
@@ -87,6 +98,14 @@ func (c *Container) SetMetrics(metrics *Metrics) {
 }
 
 func (c *Container) AsyncRuntime() *AsyncRuntime {
+	c.mu.RLock()
+	rt := c.asyncRuntime
+	c.mu.RUnlock()
+	if rt != nil {
+		return rt
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.asyncRuntime == nil {
 		c.asyncRuntime = NewAsyncRuntime(AsyncConfig{})
 	}
@@ -94,6 +113,8 @@ func (c *Container) AsyncRuntime() *AsyncRuntime {
 }
 
 func (c *Container) SetAsyncRuntime(runtime *AsyncRuntime) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if runtime == nil {
 		runtime = NewAsyncRuntime(AsyncConfig{})
 	}
@@ -104,24 +125,31 @@ func (c *Container) RuntimeConfig() RuntimeConfig {
 	if c == nil {
 		return RuntimeConfig{Parallel: NormalizeParallelConfig(ParallelConfig{})}
 	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	cfg := c.runtimeCfg
 	cfg.Parallel = NormalizeParallelConfig(cfg.Parallel)
 	return cfg
 }
 
 func (c *Container) SetRuntimeConfig(cfg RuntimeConfig) {
+	c.mu.Lock()
 	c.runtimeCfg = cfg
 	c.runtimeCfg.Parallel = NormalizeParallelConfig(c.runtimeCfg.Parallel)
+	c.mu.Unlock()
 	c.SetAsyncRuntime(NewAsyncRuntime(cfg.Async))
 }
 
 func (c *Container) Initialize(ctx context.Context) error {
-	return c.plugins.Initialize(ctx, c.logger)
+	return c.plugins.Initialize(ctx, c.Logger())
 }
 
 func (c *Container) Shutdown(ctx context.Context) error {
-	if c.asyncRuntime != nil {
-		c.asyncRuntime.Shutdown()
+	c.mu.RLock()
+	rt := c.asyncRuntime
+	c.mu.RUnlock()
+	if rt != nil {
+		rt.Shutdown()
 	}
-	return c.plugins.Shutdown(ctx, c.logger)
+	return c.plugins.Shutdown(ctx, c.Logger())
 }

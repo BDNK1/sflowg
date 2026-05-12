@@ -42,6 +42,11 @@ type HTTPPlugin struct {
 	client *resty.Client
 }
 
+var (
+	_ plugin.Initializer = (*HTTPPlugin)(nil)
+	_ plugin.Shutdowner  = (*HTTPPlugin)(nil)
+)
+
 // Initialize implements the plugin.Initializer interface
 // Config is already validated by the framework before this is called
 func (h *HTTPPlugin) Initialize(log plugin.Logger) error {
@@ -68,14 +73,17 @@ func (h *HTTPPlugin) Request(exec *plugin.Execution, input RequestInput) (Reques
 	errorResponse := map[string]any{}
 
 	req := h.client.R().
+		SetContext(exec).
 		SetHeaders(input.Headers).
 		SetQueryParams(input.QueryParams).
 		SetResult(&response).
 		SetError(&errorResponse)
 
-	// Set body based on content type
 	if input.ContentType == "form" {
-		formData := flattenToFormData(input.Body, "")
+		formData, ferr := flattenToFormData(input.Body, "", maxFormDataDepth)
+		if ferr != nil {
+			return RequestOutput{}, fmt.Errorf("HTTP request: %w", ferr)
+		}
 		req.SetFormData(formData)
 	} else {
 		// Honor explicit JSON encoding without overriding a caller-supplied header.
@@ -129,9 +137,12 @@ func hasHeader(headers map[string]string, name string) bool {
 	return false
 }
 
-// flattenToFormData converts a nested map to form-encoded format with bracket notation
-// Example: {"metadata": {"key": "value"}} -> {"metadata[key]": "value"}
-func flattenToFormData(data map[string]any, prefix string) map[string]string {
+const maxFormDataDepth = 10
+
+func flattenToFormData(data map[string]any, prefix string, depth int) (map[string]string, error) {
+	if depth <= 0 {
+		return nil, fmt.Errorf("form data exceeds maximum nesting depth of %d", maxFormDataDepth)
+	}
 	result := make(map[string]string)
 
 	for key, value := range data {
@@ -142,16 +153,22 @@ func flattenToFormData(data map[string]any, prefix string) map[string]string {
 
 		switch v := value.(type) {
 		case map[string]any:
-			// Recursively flatten nested maps
-			for k, val := range flattenToFormData(v, fullKey) {
+			nested, err := flattenToFormData(v, fullKey, depth-1)
+			if err != nil {
+				return nil, err
+			}
+			for k, val := range nested {
 				result[k] = val
 			}
 		case []any:
-			// Handle arrays: key[0], key[1], etc.
 			for i, item := range v {
 				arrayKey := fmt.Sprintf("%s[%d]", fullKey, i)
-				if nested, ok := item.(map[string]any); ok {
-					for k, val := range flattenToFormData(nested, arrayKey) {
+				if nestedMap, ok := item.(map[string]any); ok {
+					nested, err := flattenToFormData(nestedMap, arrayKey, depth-1)
+					if err != nil {
+						return nil, err
+					}
+					for k, val := range nested {
 						result[k] = val
 					}
 				} else {
@@ -163,12 +180,10 @@ func flattenToFormData(data map[string]any, prefix string) map[string]string {
 		}
 	}
 
-	return result
+	return result, nil
 }
 
-// Shutdown implements the plugin.Shutdowner interface
-func (h *HTTPPlugin) Shutdown() error {
-	// Resty doesn't require explicit cleanup, but we can nil the client
+func (h *HTTPPlugin) Shutdown(_ plugin.Logger) error {
 	h.client = nil
 	return nil
 }

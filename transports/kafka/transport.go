@@ -3,6 +3,7 @@ package kafkatransport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -18,6 +19,8 @@ import (
 	"github.com/ThreeDotsLabs/watermill/message"
 )
 
+const defaultKafkaFlowTimeout = 5 * time.Minute
+
 type Config struct {
 	Brokers map[string]BrokerConfig
 }
@@ -32,6 +35,7 @@ type Transport struct {
 	cfg           Config
 	mu            sync.Mutex
 	subscribers   []subscriber
+	consumers     sync.WaitGroup
 	newSubscriber func(BrokerConfig, kafkaFlowConfig) (subscriber, error)
 }
 
@@ -121,7 +125,9 @@ func (t *Transport) Start(ctx context.Context, rt runtime.TransportRuntime) erro
 			return fmt.Errorf("flow %q subscribe topic %q: %w", flow.ID, cfg.Topic, err)
 		}
 		rt.Container.Logger().Info("Kafka consumer subscribed", "flow_id", flow.ID, "topic", cfg.Topic, "group_id", cfg.GroupID)
+		t.consumers.Add(1)
 		go func() {
+			defer t.consumers.Done()
 			errCh <- t.consume(ctx, rt, &flow, messages)
 		}()
 	}
@@ -130,24 +136,55 @@ func (t *Transport) Start(ctx context.Context, rt runtime.TransportRuntime) erro
 	case <-ctx.Done():
 		return nil
 	case err := <-errCh:
-		return err
+		remaining := len(rt.Flows) - 1
+		drained := drainErrors(errCh, remaining)
+		return errors.Join(append([]error{err}, drained...)...)
 	}
 }
 
-func (t *Transport) Shutdown(context.Context) error {
+func (t *Transport) Shutdown(ctx context.Context) error {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	subs := t.subscribers
+	t.subscribers = nil
+	t.mu.Unlock()
+
 	var errs []error
-	for _, sub := range t.subscribers {
+	for _, sub := range subs {
 		if err := sub.Close(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	t.subscribers = nil
-	if len(errs) > 0 {
-		return fmt.Errorf("closing Kafka subscribers: %v", errs)
+
+	done := make(chan struct{})
+	go func() {
+		t.consumers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		errs = append(errs, fmt.Errorf("kafka shutdown timeout: %w", ctx.Err()))
 	}
-	return nil
+
+	return errors.Join(errs...)
+}
+
+func drainErrors(ch <-chan error, remaining int) []error {
+	if remaining <= 0 {
+		return nil
+	}
+	out := make([]error, 0, remaining)
+	for i := 0; i < remaining; i++ {
+		select {
+		case err := <-ch:
+			if err != nil {
+				out = append(out, err)
+			}
+		default:
+			return out
+		}
+	}
+	return out
 }
 
 func (t *Transport) createSubscriber(broker BrokerConfig, flow kafkaFlowConfig) (subscriber, error) {
@@ -185,13 +222,28 @@ func (t *Transport) consume(ctx context.Context, rt runtime.TransportRuntime, fl
 			if !ok {
 				return nil
 			}
-			t.handleMessage(rt, flow, msg)
+			t.handleMessage(ctx, rt, flow, msg)
 		}
 	}
 }
 
-func (t *Transport) handleMessage(rt runtime.TransportRuntime, flow *runtime.Flow, msg *message.Message) {
+func (t *Transport) handleMessage(ctx context.Context, rt runtime.TransportRuntime, flow *runtime.Flow, msg *message.Message) {
 	execution := runtime.NewExecution(flow, rt.Container, rt.GlobalProperties, rt.NewValueStore())
+	timeout := time.Duration(flow.Timeout) * time.Millisecond
+	if timeout <= 0 {
+		timeout = defaultKafkaFlowTimeout
+	}
+	msgCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	execution = execution.WithContext(msgCtx)
+
+	defer func() {
+		if r := recover(); r != nil {
+			execution.Logger().Error("Kafka message handler panicked", "error", r, "flow_id", flow.ID)
+			msg.Nack()
+		}
+	}()
+
 	boundaryErr := populateMessage(execution, flow, msg)
 	if boundaryErr != nil {
 		handled, handlerErr := rt.Executor.HandleBoundaryError(execution, boundaryErr)

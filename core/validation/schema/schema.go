@@ -1,6 +1,9 @@
 package schema
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+)
 
 type Type string
 
@@ -14,18 +17,20 @@ const (
 )
 
 type Schema struct {
-	Type       Type
-	Required   bool
-	Default    any
-	Enum       []any
-	Minimum    *float64
-	Maximum    *float64
-	MinLength  *int
-	MaxLength  *int
-	Pattern    string
-	Format     string
-	Properties map[string]*Schema
-	Items      *Schema
+	Type            Type
+	Required        bool
+	Default         any
+	Enum            []any
+	enumStringSet   map[string]struct{}
+	Minimum         *float64
+	Maximum         *float64
+	MinLength       *int
+	MaxLength       *int
+	Pattern         string
+	compiledPattern *regexp.Regexp
+	Format          string
+	Properties      map[string]*Schema
+	Items           *Schema
 }
 
 func ParseRoot(raw any) (*Schema, error) {
