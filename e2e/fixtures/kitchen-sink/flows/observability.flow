@@ -1,0 +1,31 @@
+entrypoint.http {
+    method: POST
+    path: /api/observability
+    headers: {
+        Authorization: { type: string, required: true, minLength: 1 }
+    }
+    body: {
+        type: json
+        schema: {
+            password: { type: string, required: true, minLength: 1 }
+            route: { type: string, default: observability }
+        }
+    }
+}
+
+step emit {
+    log.info("observability sample", {
+        authorization: request.headers["Authorization"],
+        password: request.body.password,
+        route: request.body.route
+    })
+    metric.counter("e2e_observability_requests", 1, {"route": request.body.route})
+    {
+        ok: true
+    }
+}
+
+return response.json({
+    status: 200,
+    body: emit
+})

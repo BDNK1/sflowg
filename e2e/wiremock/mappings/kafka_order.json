@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "POST",
+    "urlPathPattern": "/kafka/orders/.*"
+  },
+  "response": {
+    "status": 200,
+    "jsonBody": {
+      "recorded": true
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

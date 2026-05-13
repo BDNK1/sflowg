@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "/cron/tick"
+  },
+  "response": {
+    "status": 200,
+    "jsonBody": {
+      "recorded": true
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

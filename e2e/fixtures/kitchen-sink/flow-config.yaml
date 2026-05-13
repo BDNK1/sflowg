@@ -1,0 +1,44 @@
+name: kitchen-sink
+version: "e2e"
+
+runtime:
+  engine: dsl
+  port: "18080"
+  async:
+    runtime_max_in_flight: 8
+  parallel:
+    block_default_max_in_flight: 4
+    foreach_default_max_in_flight: 4
+    default_on_failure: wait_all
+  kafka:
+    brokers:
+      default:
+        brokers: ["localhost:29092"]
+        client_id: "sflowg-e2e"
+        nack_redelivery_delay_ms: 100
+
+observability:
+  logging:
+    level: info
+    format: json
+    max_payload_bytes: 8192
+    masking:
+      fields: [authorization, password]
+      placeholder: "***"
+
+plugins:
+  - source: http
+    config:
+      max_retries: 0
+      retry_wait_ms: 50
+
+  - source: postgres
+    config:
+      connection_string: ${POSTGRES_DSN:postgres://sflowg:sflowg@localhost:54329/sflowg_e2e?sslmode=disable}
+      max_open_conns: 5
+      max_idle_conns: 2
+
+  - source: ./plugins/fixture
+    name: fixture
+    config:
+      prefix: ${FIXTURE_PREFIX:e2e}

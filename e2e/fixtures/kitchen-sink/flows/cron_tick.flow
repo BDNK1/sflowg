@@ -1,0 +1,20 @@
+entrypoint.cron {
+    schedule: "* * * * *"
+    timezone: UTC
+}
+
+properties {
+    wiremock_url: env("WIREMOCK_URL", "http://localhost:8089")
+}
+
+step tick {
+    http.request({
+        method: "POST",
+        url: properties.wiremock_url + "/cron/tick",
+        content_type: "json",
+        body: {
+            fired: true,
+            fire_count: trigger.fire_count
+        }
+    })
+}

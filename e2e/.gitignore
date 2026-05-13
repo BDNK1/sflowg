@@ -1,0 +1,5 @@
+bin/sflowg
+.app-*.log
+.app-*.pid
+.build-*.log
+fixtures/kitchen-sink/kitchen-sink

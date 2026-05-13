@@ -1,0 +1,15 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "/fallback"
+  },
+  "response": {
+    "status": 200,
+    "jsonBody": {
+      "fallback": true
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

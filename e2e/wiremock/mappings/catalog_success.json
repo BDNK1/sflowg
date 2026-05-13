@@ -1,0 +1,17 @@
+{
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/catalog/.*"
+  },
+  "response": {
+    "status": 200,
+    "jsonBody": {
+      "sku": "{{request.pathSegments.[1]}}",
+      "name": "E2E Item {{request.pathSegments.[1]}}",
+      "price_cents": 500
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

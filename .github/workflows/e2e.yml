@@ -1,0 +1,86 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.3"
+
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+          modules="
+          cli
+          core
+          plugins/http
+          plugins/postgres
+          transports/cron
+          transports/http
+          transports/kafka
+          "
+
+          go work init $modules
+
+          while IFS= read -r module; do
+            [ -n "$module" ] || continue
+            echo "==> go test $module"
+            (cd "$module" && go test ./...)
+          done <<< "$modules"
+
+  smoke-e2e:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: unit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.3"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          curl -sSL https://github.com/bats-core/bats-core/archive/refs/tags/v1.11.1.tar.gz | tar xz
+          sudo ./bats-core-1.11.1/install.sh /usr/local
+          curl --location --remote-name https://github.com/Orange-OpenSource/hurl/releases/download/6.1.1/hurl_6.1.1_amd64.deb
+          sudo apt install -y ./hurl_6.1.1_amd64.deb
+
+      - name: Run smoke e2e
+        run: make -C e2e test-smoke
+
+  full-e2e:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: unit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.3"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+          curl -sSL https://github.com/bats-core/bats-core/archive/refs/tags/v1.11.1.tar.gz | tar xz
+          sudo ./bats-core-1.11.1/install.sh /usr/local
+          curl --location --remote-name https://github.com/Orange-OpenSource/hurl/releases/download/6.1.1/hurl_6.1.1_amd64.deb
+          sudo apt install -y ./hurl_6.1.1_amd64.deb
+
+      - name: Run full e2e
+        run: make -C e2e test-all

@@ -1,0 +1,48 @@
+entrypoint.http {
+    method: POST
+    path: /api/postgres/orders
+    body: {
+        type: json
+        schema: {
+            id: { type: string, required: true, minLength: 1 }
+            customer_email: { type: string, required: true, format: email }
+            amount_cents: { type: integer, required: true, minimum: 1 }
+        }
+    }
+}
+
+step insert_order as postgres.get {
+    query: `
+        INSERT INTO e2e_orders (id, customer_email, amount_cents, status)
+        VALUES ($1, $2, $3, 'new')
+        RETURNING id, customer_email, amount_cents, status
+    `
+    params: [request.body.id, request.body.customer_email, request.body.amount_cents]
+}
+
+step mark_paid as postgres.exec {
+    query: `
+        UPDATE e2e_orders
+        SET status = $1
+        WHERE id = $2
+    `
+    params: ["paid", insert_order.row.id]
+}
+
+step fetch_order as postgres.get {
+    query: `
+        SELECT id, customer_email, amount_cents, status
+        FROM e2e_orders
+        WHERE id = $1
+    `
+    params: [insert_order.row.id]
+}
+
+return response.json({
+    status: 201,
+    body: {
+        inserted_status: insert_order.row.status,
+        affected_rows: mark_paid.affected_rows,
+        order: fetch_order.row
+    }
+})

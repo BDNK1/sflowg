@@ -1,0 +1,18 @@
+entrypoint.http {
+    method: GET
+    path: /api/plugin/hello
+    queryParameters: {
+        name: { type: string, required: true, minLength: 1 }
+    }
+}
+
+step greeting as fixture.hello {
+    name: request.queryParameters.name
+}
+
+return response.json({
+    status: 200,
+    body: {
+        message: greeting.message
+    }
+})

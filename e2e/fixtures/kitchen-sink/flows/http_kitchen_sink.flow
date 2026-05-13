@@ -1,0 +1,93 @@
+entrypoint.http {
+    method: POST
+    path: /api/kitchen/:id
+    pathVariables: {
+        id: { type: integer, required: true, minimum: 1 }
+    }
+    queryParameters: {
+        include: { type: string }
+    }
+    headers: {
+        X-Request-ID: { type: string, required: true, minLength: 1 }
+    }
+    body: {
+        type: json
+        schema: {
+            customer_email: { type: string, required: true, format: email }
+            amount_cents: { type: integer, required: true, minimum: 1 }
+            currency: { type: string, enum: [usd, eur], default: usd }
+            items: {
+                type: array
+                required: true
+                minItems: 1
+                items: {
+                    type: object
+                    properties: {
+                        sku: { type: string, required: true, minLength: 1 }
+                        quantity: { type: integer, required: true, minimum: 1 }
+                    }
+                }
+            }
+        }
+    }
+}
+
+properties {
+    catalog_url: env("WIREMOCK_URL", "http://localhost:8089")
+    default_currency: "usd"
+}
+
+step resolve_currency as subflow.resolve_currency {
+    requested_currency: request.body.currency
+    default_currency: properties.default_currency
+}
+
+parallel(max_in_flight: 2, on_failure: "wait_all") {
+    step request_summary {
+        {
+            path_id: request.pathVariables.id,
+            include: request.queryParameters.include,
+            request_id: request.headers["X-Request-ID"],
+            customer_email: request.body.customer_email,
+            amount_cents: request.body.amount_cents
+        }
+    }
+
+    step plugin_message as fixture.hello {
+        name: request.body.customer_email
+    }
+}
+
+parallel(max_in_flight: 2, on_failure: "wait_all") foreach request.body.items as item {
+    step catalog as http.request {
+        method: "GET"
+        url: properties.catalog_url + "/catalog/" + item.sku
+    }
+
+    step quote {
+        {
+            sku: item.sku,
+            quantity: item.quantity,
+            catalog_name: catalog.body.name,
+            unit_price_cents: catalog.body.price_cents,
+            line_total_cents: item.quantity * catalog.body.price_cents
+        }
+    }
+
+    collect quote as quoted_items
+    collect quote.line_total_cents as line_totals
+}
+
+return response.json({
+    status: 200,
+    body: {
+        ok: true,
+        path_id: request_summary.path_id,
+        include: request_summary.include,
+        request_id: request_summary.request_id,
+        currency: resolve_currency.currency,
+        plugin_message: plugin_message.message,
+        items: quoted_items,
+        line_totals: line_totals
+    }
+})

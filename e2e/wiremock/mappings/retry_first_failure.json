@@ -1,0 +1,18 @@
+{
+  "scenarioName": "retry-then-success",
+  "requiredScenarioState": "Started",
+  "newScenarioState": "second-attempt",
+  "request": {
+    "method": "GET",
+    "url": "/unstable"
+  },
+  "response": {
+    "status": 500,
+    "jsonBody": {
+      "error": "temporary"
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    }
+  }
+}

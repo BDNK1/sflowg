@@ -1,0 +1,40 @@
+entrypoint.kafka {
+    topic: orders.invalid
+    group_id: sflowg-e2e-kitchen-sink-invalid
+    auto_offset_reset: earliest
+    value: {
+        type: json
+        schema: {
+            order_id: { type: string, required: true }
+        }
+    }
+}
+
+properties {
+    wiremock_url: env("WIREMOCK_URL", "http://localhost:8089")
+}
+
+step should_not_run {
+    http.request({
+        method: "POST",
+        url: properties.wiremock_url + "/kafka/invalid/should-not-run",
+        content_type: "json",
+        body: {
+            raw_value: message.rawValue
+        }
+    })
+}
+
+on_error {
+    http.request({
+        method: "POST",
+        url: properties.wiremock_url + "/kafka/invalid/error",
+        content_type: "json",
+        body: {
+            code: error.code
+        }
+    })
+    response.ack()
+}
+
+return response.ack()

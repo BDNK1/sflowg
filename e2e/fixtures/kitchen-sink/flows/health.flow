@@ -1,0 +1,9 @@
+entrypoint.http {
+    method: GET
+    path: /health
+}
+
+return response.json({
+    status: 200,
+    body: { ok: true }
+})

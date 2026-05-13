@@ -1,0 +1,16 @@
+entrypoint.http {
+    method: GET
+    path: /api/response/text
+}
+
+step render {
+    "plain e2e response"
+}
+
+return response.text({
+    status: 200,
+    headers: {
+        "X-E2E-Response": "text"
+    },
+    body: render
+})

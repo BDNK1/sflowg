@@ -513,6 +513,9 @@ func (h *observabilityHandler) sanitizeValue(key string, value slog.Value) (slog
 }
 
 func (h *observabilityHandler) sanitizeAnyValue(key string, value any) (any, bool) {
+	if h.shouldMask(key) {
+		return h.maskPlaceholder, true
+	}
 	if value == nil {
 		return nil, false
 	}

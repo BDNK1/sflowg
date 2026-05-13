@@ -1,0 +1,37 @@
+entrypoint.kafka {
+    topic: orders.events
+    group_id: sflowg-e2e-kitchen-sink
+    auto_offset_reset: earliest
+    value: {
+        type: json
+        schema: {
+            order_id: { type: string, required: true }
+            amount_cents: { type: integer, required: true, minimum: 1 }
+            currency: { type: string, default: usd, enum: [usd, eur] }
+        }
+    }
+}
+
+properties {
+    wiremock_url: env("WIREMOCK_URL", "http://localhost:8089")
+}
+
+step notify_order {
+    http.request({
+        method: "POST",
+        url: properties.wiremock_url + "/kafka/orders/" + message.value.order_id,
+        content_type: "json",
+        body: {
+            order_id: message.value.order_id,
+            amount_cents: message.value.amount_cents,
+            currency: message.value.currency
+        }
+    })
+}
+
+on_error {
+    log.error("kafka order failed", error)
+    response.nack()
+}
+
+return response.ack()

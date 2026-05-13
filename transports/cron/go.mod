@@ -38,5 +38,3 @@ require (
 	google.golang.org/grpc v1.81.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace github.com/BDNK1/sflowg/core => ../../core

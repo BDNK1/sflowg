@@ -1,0 +1,51 @@
+entrypoint.http {
+    method: POST
+    path: /api/error-compensation
+    body: {
+        type: json
+        schema: {
+            mode: { type: string, required: true, enum: [fail] }
+        }
+    }
+}
+
+properties {
+    wiremock_url: env("WIREMOCK_URL", "http://localhost:8089")
+}
+
+step reserve {
+    {
+        reservation_id: "res-e2e"
+    }
+} compensate {
+    http.request({
+        method: "POST",
+        url: properties.wiremock_url + "/compensation/res-e2e",
+        content_type: "json",
+        body: {
+            reservation_id: reserve.reservation_id,
+            compensation_step: compensation.step,
+            compensation_path: compensation.path
+        }
+    })
+}
+
+step fail_after_reserve {
+    raise("transient", "FORCED_COMPENSATION", "forced compensation path")
+}
+
+on_error {
+    response.json({
+        status: 503,
+        body: {
+            code: error.code,
+            step: error.step,
+            compensated: true
+        }
+    })
+}
+
+return response.json({
+    status: 200,
+    body: { ok: true }
+})

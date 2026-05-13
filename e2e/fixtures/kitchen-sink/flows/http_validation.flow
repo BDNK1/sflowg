@@ -1,0 +1,19 @@
+entrypoint.http {
+    method: POST
+    path: /api/validation/:id
+    pathVariables: {
+        id: { type: integer, required: true, minimum: 1 }
+    }
+    body: {
+        type: json
+        schema: {
+            customer_email: { type: string, required: true, format: email }
+            amount_cents: { type: integer, required: true, minimum: 1 }
+        }
+    }
+}
+
+return response.json({
+    status: 200,
+    body: { ok: true }
+})

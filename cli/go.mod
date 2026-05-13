@@ -9,8 +9,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-replace github.com/BDNK1/sflowg/core => ../core
-
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

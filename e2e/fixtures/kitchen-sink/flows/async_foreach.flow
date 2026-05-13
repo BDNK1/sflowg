@@ -1,0 +1,79 @@
+entrypoint.http {
+    method: POST
+    path: /api/async-foreach
+    body: {
+        type: json
+        schema: {
+            items: {
+                type: array
+                required: true
+                items: {
+                    type: object
+                    properties: {
+                        sku: { type: string, required: true, minLength: 1 }
+                        quantity: { type: integer, required: true, minimum: 1 }
+                    }
+                }
+            }
+        }
+    }
+}
+
+async step rate {
+    {
+        multiplier: 2
+    }
+}
+
+parallel(max_in_flight: 2, on_failure: "wait_all") {
+    async step branch_async {
+        {
+            label: "async-branch"
+        }
+    }
+
+    step branch_sync {
+        {
+            first_sku: request.body.items[0].sku
+        }
+    }
+}
+
+foreach request.body.items as item {
+    step normalize {
+        {
+            sku: item.sku,
+            quantity: item.quantity,
+            total: item.quantity * rate.multiplier
+        }
+    }
+
+    collect normalize as normalized_items
+}
+
+foreach request.body.items batch 2 as batch {
+    step summarize_batch {
+        {
+            first_sku: batch[0].sku
+        }
+    }
+
+    collect summarize_batch.first_sku as batch_first_skus
+}
+
+foreach request.body.items as item {
+    step touch {
+        nil
+    }
+}
+
+return response.json({
+    status: 200,
+    body: {
+        multiplier: rate.multiplier,
+        async_label: branch_async.label,
+        first_sku: branch_sync.first_sku,
+        normalized_items: normalized_items,
+        batch_first_skus: batch_first_skus
+    }
+})

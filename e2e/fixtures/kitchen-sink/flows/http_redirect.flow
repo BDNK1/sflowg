@@ -1,0 +1,9 @@
+entrypoint.http {
+    method: GET
+    path: /api/response/redirect
+}
+
+return response.redirect({
+    status: 302,
+    location: "/api/response/text"
+})

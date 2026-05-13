@@ -1,0 +1,25 @@
+entrypoint.cron {
+    schedule: "* * * * *"
+    timezone: UTC
+}
+
+properties {
+    wiremock_url: env("WIREMOCK_URL", "http://localhost:8089")
+}
+
+step fail_tick {
+    raise("CRON_FORCED_ERROR", "forced cron error")
+}
+
+on_error {
+    http.request({
+        method: "POST",
+        url: properties.wiremock_url + "/cron/error-handled",
+        content_type: "json",
+        body: {
+            code: error.code,
+            scheduled_at: trigger.scheduled_at,
+            fire_count: trigger.fire_count
+        }
+    })
+}

@@ -70,6 +70,31 @@ func TestObservabilityHandler_AppliesMaskingAndTruncation(t *testing.T) {
 	}
 }
 
+func TestObservabilityHandler_AppliesMaskingInsideMapAttrs(t *testing.T) {
+	var buf bytes.Buffer
+	handler := newObservabilityHandler(&buf, LoggingConfig{
+		Level: "debug",
+		Masking: MaskingConfig{
+			Fields:      []string{"authorization", "password"},
+			Placeholder: "***",
+		},
+	}, "user")
+	logger := slog.New(handler)
+
+	logger.Info("test log",
+		"data", map[string]any{
+			"authorization": "Bearer secret-token",
+			"password":      "secret-value",
+		})
+
+	output := buf.String()
+	for _, want := range []string{`"authorization":"***"`, `"password":"***"`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected nested masked field %s in log output, got %s", want, output)
+		}
+	}
+}
+
 func TestObservabilityHandler_AppliesSourceLevelFiltering(t *testing.T) {
 	var buf bytes.Buffer
 	baseHandler := newObservabilityHandler(&buf, LoggingConfig{

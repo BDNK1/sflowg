@@ -1,0 +1,62 @@
+entrypoint.http {
+    method: POST
+    path: /api/retry-fallback
+    body: {
+        type: json
+        schema: {
+            mode: { type: string, required: true, enum: [retry, fallback] }
+        }
+    }
+}
+
+properties {
+    wiremock_url: env("WIREMOCK_URL", "http://localhost:8089")
+}
+
+step call_unstable(retry: { max_attempts: 2, delay: 50, when: error.type == "transient" }) {
+    if (request.body.mode != "retry") {
+        {
+            status_code: 0,
+            body: { ok: false }
+        }
+    } else {
+        let result = http.request({
+            method: "GET",
+            url: properties.wiremock_url + "/unstable"
+        })
+        if (result.status_code >= 500) {
+            raise("transient", "UPSTREAM_UNAVAILABLE", "unstable upstream failed")
+        }
+        result
+    }
+} fallback {
+    http.request({
+        method: "GET",
+        url: properties.wiremock_url + "/fallback"
+    })
+}
+
+step reject_primary(retry: { max_attempts: 2, delay: 50, when: error.type == "transient" }) {
+    if (request.body.mode != "fallback") {
+        {
+            status_code: 0,
+            body: { fallback: false }
+        }
+    } else {
+        raise("transient", "FORCED_RETRY", "forced fallback path")
+    }
+} fallback {
+    http.request({
+        method: "GET",
+        url: properties.wiremock_url + "/fallback"
+    })
+}
+
+return response.json({
+    status: 200,
+    body: {
+        mode: request.body.mode,
+        used_retry: request.body.mode == "retry" && call_unstable.body.ok == true,
+        used_fallback: request.body.mode == "fallback" && reject_primary.body.fallback == true
+    }
+})

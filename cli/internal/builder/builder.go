@@ -24,18 +24,27 @@ func NewBuilder(workspacePath, outputDir, binaryName string) *Builder {
 	}
 }
 
-// DownloadDependencies runs go mod tidy to resolve and download all dependencies
+// DownloadDependencies syncs go.mod/go.sum and downloads the resolved graph.
 func (b *Builder) DownloadDependencies() error {
-	cmd := exec.Command("go", "mod", "tidy")
+	if err := b.runGoMod("tidy"); err != nil {
+		return fmt.Errorf("go mod tidy failed in workspace %q: %w", b.WorkspacePath, err)
+	}
+
+	if err := b.runGoMod("download", "all"); err != nil {
+		return fmt.Errorf("go mod download all failed in workspace %q: %w", b.WorkspacePath, err)
+	}
+
+	return nil
+}
+
+func (b *Builder) runGoMod(args ...string) error {
+	cmdArgs := append([]string{"mod"}, args...)
+	cmd := exec.Command("go", cmdArgs...)
 	cmd.Dir = b.WorkspacePath
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("go mod tidy failed in workspace %q: %w", b.WorkspacePath, err)
-	}
-
-	return nil
+	return cmd.Run()
 }
 
 // Build compiles the binary
